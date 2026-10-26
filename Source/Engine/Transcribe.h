@@ -18,16 +18,16 @@ namespace enochsolo
 static constexpr double kPiT = 3.14159265358979323846;
 struct TranscribeOptions
 {
-    double bpm = 120.0; // project tempo
-    bool detectTempo = false; // guess the tempo from the recording instead
-    int tidy = 1; // 0 as played, 1 tidy (75 percent towards the 1/16 grid), 2 snap to 1/16, 3 snap to 1/8
+    double bpm = 120.0;           // project tempo
+    bool detectTempo = false;     // guess the tempo from the recording instead
+    int tidy = 1;                 // 0 as played, 1 tidy (75 percent towards the 1/16 grid), 2 snap to 1/16, 3 snap to 1/8
     bool firstNoteIsBarOne = false;
     double maxSeconds = 900.0;
 };
 
 struct TNote
 {
-    double t0 = 0, t1 = 0; // seconds in the recording
+    double t0 = 0, t1 = 0;        // seconds in the recording
     double beat = 0, lenBeats = 0;// after tempo + tidy
     int pitch = 40, vel = 90, art = A_Sustain;
     float conf = 1.f;
@@ -64,7 +64,7 @@ inline std::vector<float> decimate (const std::vector<float>& x, int D)
     if (D <= 1) return x;
     const int half = 6 * D;
     std::vector<double> h ((size_t) (2 * half + 1));
-    const double fc = 0.42 / (double) D; // cycles per input sample
+    const double fc = 0.42 / (double) D;                      // cycles per input sample
     double sum = 0;
     for (int i = -half; i <= half; ++i)
     {
@@ -190,7 +190,7 @@ inline TranscribeResult transcribeBass (const std::vector<float>& monoIn, double
     }
     std::vector<double> dbSorted (F.db);
     const double top = percentile (dbSorted, 0.97);
-    const double gate = top - 42.0; // quieter than this is silence
+    const double gate = top - 42.0;            // quieter than this is silence
     if (top < -60.0) { R.error = "That recording is too quiet to transcribe."; return R; }
 
     // ---- note starts from the loudness
@@ -237,9 +237,9 @@ inline TranscribeResult transcribeBass (const std::vector<float>& monoIn, double
     struct Region
     {
         int a = 0, b = 0; double onsetT = 0, endT = 0; std::vector<Seg> segs; double peakDb = -120; bool ghost = false;
-        std::vector<double> ft, fm, fc; // pitch frames of this note only: time, MIDI (float), confidence
-        double audible = 0; // seconds until the note is 20 dB below its peak
-        double periodicity = 0; // how tonal it is (0 noise .. 1 pure tone)
+        std::vector<double> ft, fm, fc;        // pitch frames of this note only: time, MIDI (float), confidence
+        double audible = 0;                    // seconds until the note is 20 dB below its peak
+        double periodicity = 0;                // how tonal it is (0 noise .. 1 pure tone)
     };
     std::vector<Region> regions;
     for (size_t i = 0; i < onsets.size(); ++i)
@@ -320,7 +320,7 @@ inline TranscribeResult transcribeBass (const std::vector<float>& monoIn, double
             const double Rlen = std::sqrt (sx * sx + sy * sy) / wsum;
             if (Rlen > 0.55) tuning = std::atan2 (sy, sx) / (2.0 * kPiT);
         }
-        if (std::abs (tuning) < 0.05) tuning = 0; // within 5 cents: leave it
+        if (std::abs (tuning) < 0.05) tuning = 0;     // within 5 cents: leave it
     }
     R.tuningCents = tuning * 100.0;
 
@@ -330,7 +330,7 @@ inline TranscribeResult transcribeBass (const std::vector<float>& monoIn, double
         const int nfr = (int) g.fm.size();
         std::vector<int> q ((size_t) nfr, INT32_MIN);
         for (int i = 0; i < nfr; ++i) if (g.fc[(size_t) i] >= 0.62 && g.fm[(size_t) i] > 0) q[(size_t) i] = (int) std::lround (g.fm[(size_t) i] - tuning);
-        std::vector<int> qm = q; // median of 5 removes single-frame glitches
+        std::vector<int> qm = q;                                  // median of 5 removes single-frame glitches
         for (int i = 0; i < nfr; ++i)
         {
             if (q[(size_t) i] == INT32_MIN) continue;
@@ -391,4 +391,182 @@ inline TranscribeResult transcribeBass (const std::vector<float>& monoIn, double
             const Seg& sg = g.segs[si];
             Raw n; n.pitch = sg.pitch; n.art = A_Sustain; n.peakDb = g.peakDb; n.fromOnset = (si == 0); n.region = (int) ri;
             double cs = 0; int cc = 0; for (int k = sg.k0; k <= sg.k1; ++k) { cs += g.fc[(size_t) k]; ++cc; }
-            n.conf = cc ?
+            n.conf = cc ? cs / cc : 0.5;
+            if (si == 0) n.t0 = g.onsetT;
+            else
+            {
+                const Seg& pv = g.segs[si - 1];
+                const int ramp = sg.k0 - pv.k1 - 1;
+                const int interval = sg.pitch - pv.pitch;
+                // a slide moves through the notes in between without a break in the sound
+                int voicedRamp = 0; double lo = 1e9, hi = -1e9;
+                for (int k = pv.k1 + 1; k < sg.k0; ++k) if (g.fc[(size_t) k] >= 0.5 && g.fm[(size_t) k] > 0) { ++voicedRamp; lo = std::min (lo, g.fm[(size_t) k] - tuning); hi = std::max (hi, g.fm[(size_t) k] - tuning); }
+                const bool between = ramp >= 3 && voicedRamp >= (ramp * 3 + 3) / 5 && lo > std::min (pv.pitch, sg.pitch) - 1.2 && hi < std::max (pv.pitch, sg.pitch) + 1.2;
+                const bool moving = (std::abs (interval) >= 2) ? (hi - lo > 0.8) : (hi - lo > 0.35);
+                if (between && moving && ramp <= 70)
+                {
+                    n.art = A_Slide; n.t0 = g.ft[(size_t) (pv.k1 + 1)] - 0.01;
+                    ++R.slides;
+                }
+                else if (si + 1 == g.segs.size() && sg.k1 - sg.k0 < 12
+                         && [&] { // still moving when the note ends: a slide into the next note, so lean the target the way it is going
+                                  const int nf = (int) g.fm.size(); if (nf < 6 || sg.k1 < nf - 2) return false;
+                                  const double last = g.fm[(size_t) (nf - 1)] - tuning, prev = g.fm[(size_t) (nf - 5)] - tuning;
+                                  if (g.fc[(size_t) (nf - 1)] < 0.5 || g.fc[(size_t) (nf - 5)] < 0.5) return false;
+                                  const double drift = last - prev;
+                                  if (std::abs (drift) < 0.5 || drift * interval <= 0 || std::abs (last - pv.pitch) < 0.9) return false;
+                                  const double target = last + std::clamp (drift * 1.5, -2.0, 2.0);
+                                  n.pitch = (int) std::lround (target); return true; }())
+                {
+                    n.art = A_Slide; n.t0 = g.ft[(size_t) (pv.k1 + 1)] - 0.01; ++R.slides;
+                }
+                else
+                {
+                    n.art = interval > 0 ? A_HammerOn : A_PullOff; n.t0 = 0.5 * (g.ft[(size_t) pv.k1] + g.ft[(size_t) sg.k0]);
+                    ++R.legatos;
+                }
+                raw.back().t1 = n.t0;               // legato: the previous note ends where this one starts
+            }
+            if (si + 1 < g.segs.size()) n.t1 = g.ft[(size_t) g.segs[si + 1].k0];
+            else
+            {
+                // until the sound dies away (30 dB below its peak) or the next note starts
+                const double floorDb = std::max (gate + 3.0, g.peakDb - 30.0);
+                double e = endLimit;
+                for (int k = g.a; k < g.b; ++k) if (F.t[(size_t) k] > n.t0 + 0.05 && F.db[(size_t) k] < floorDb) { e = F.t[(size_t) k]; break; }
+                n.t1 = std::min (e, endLimit);
+            }
+            if (n.t1 < n.t0 + 0.03) n.t1 = n.t0 + 0.03;
+            raw.push_back (n);
+        }
+    }
+
+    // ---- octave check on every pitched note: strong energy half an octave... an octave below means the real note is lower
+    for (auto& n : raw)
+    {
+        if (n.pitch < 0) continue;
+        const long i0 = (long) ((n.t0 + 0.03) * fs), i1 = (long) (std::min (n.t1, n.t0 + 0.4) * fs);
+        if (i1 - i0 < 400) continue;
+        const double f = midiToHz ((double) n.pitch + tuning);
+        if (n.pitch - 12 >= 23)
+        {
+            const double lo = bestMag (x, i0, std::min (i1, N2), fs, f * 0.5), hi = bestMag (x, i0, std::min (i1, N2), fs, f);
+            if (lo > 0.7 * hi && lo > 1e-4) { n.pitch -= 12; ++R.octaveFixes; }
+        }
+    }
+
+    // ---- ghost notes take the pitch of their neighbour; very short voiced blips with a weak pitch become ghosts too
+    for (size_t i = 0; i < raw.size(); ++i)
+    {
+        auto& n = raw[i];
+        if (n.pitch >= 0 && n.conf < 0.72 && (n.t1 - n.t0) < 0.12 && n.fromOnset) { n.art = A_Ghost; }
+        if (n.art == A_Ghost && n.pitch < 0)
+        {
+            int p = -1;
+            for (long j = (long) i - 1; j >= 0 && p < 0; --j) if (raw[(size_t) j].pitch >= 0 && raw[(size_t) j].art != A_Ghost) p = raw[(size_t) j].pitch;
+            for (size_t j = i + 1; j < raw.size() && p < 0; ++j) if (raw[j].pitch >= 0) p = raw[j].pitch;
+            n.pitch = p >= 0 ? p : 40;
+        }
+        if (n.art == A_Ghost) ++R.ghosts;
+    }
+    // drop crumbs: pitched notes shorter than 35 ms that are not onsets
+    raw.erase (std::remove_if (raw.begin(), raw.end(), [] (const Raw& n) { return n.pitch < 0 || (! n.fromOnset && n.t1 - n.t0 < 0.035); }), raw.end());
+    if (raw.empty()) { R.error = "I could not find any bass notes in that recording."; return R; }
+    std::stable_sort (raw.begin(), raw.end(), [] (const Raw& a, const Raw& b) { return a.t0 < b.t0; });
+    for (size_t i = 0; i + 1 < raw.size(); ++i) if (raw[i].t1 > raw[i + 1].t0) raw[i].t1 = std::max (raw[i].t0 + 0.03, raw[i + 1].t0 - 0.002);
+
+    // ---- velocity from the attack loudness
+    {
+        std::vector<double> pk; for (auto& n : raw) pk.push_back (n.peakDb);
+        const double ref = percentile (pk, 0.9);
+        for (auto& n : raw)
+        {
+            const double rel = n.peakDb - ref;
+            int v = (int) std::lround (104.0 + 2.1 * rel);
+            if (! n.fromOnset) v = std::max (40, v - 8);
+            if (n.art == A_Ghost) v = std::min (v, 52);
+            TNote t; t.t0 = n.t0; t.t1 = n.t1; t.pitch = std::clamp (n.pitch, 12, 100); t.vel = std::clamp (v, 20, 127); t.art = n.art; t.conf = (float) n.conf;
+            R.notes.push_back (t);
+        }
+    }
+    // pitched notes shorter than a 32nd that follow closely look like staccato: mark short plucks
+    for (size_t i = 0; i < R.notes.size(); ++i)
+    {
+        auto& n = R.notes[i];
+        if (n.art != A_Sustain) continue;
+        const double nextT = (i + 1 < R.notes.size()) ? R.notes[i + 1].t0 : n.t1 + 1.0;
+        if (nextT - n.t0 > 0.2 && n.t1 - n.t0 < 0.45 * (nextT - n.t0) && n.t1 - n.t0 < 0.25) n.art = A_Staccato;
+    }
+
+    // ---- tempo and grid
+    std::vector<double> ons; for (auto& n : R.notes) ons.push_back (n.t0);
+    auto gridFit = [&] (double bpm, double& phase)
+    {
+        const double g = 60.0 / bpm / 4.0; double sx = 0, sy = 0;
+        for (double t : ons) { const double a = 2.0 * kPiT * t / g; sx += std::cos (a); sy += std::sin (a); }
+        const double len = std::sqrt (sx * sx + sy * sy) / (double) std::max<size_t> (1, ons.size());
+        phase = std::atan2 (sy, sx) / (2.0 * kPiT) * g;       // seconds: onsets sit at phase + k * g
+        return len;
+    };
+    double bpm = std::clamp (opt.bpm, 40.0, 240.0);
+    if (opt.detectTempo && ons.size() >= 6)
+    {
+        double bestScore = -1, bestB = bpm;
+        for (double b = 70.0; b <= 170.0; b += 0.25)
+        {
+            double ph; const double s = gridFit (b, ph);
+            const double score = s - 0.0004 * std::abs (b - 110.0);      // gentle preference for common tempi when two fit equally well
+            if (score > bestScore) { bestScore = score; bestB = b; }
+        }
+        bpm = bestB;
+    }
+    double phase = 0; const double fit = gridFit (bpm, phase);
+    R.gridFit = fit; R.bpm = bpm;
+    const double g16 = 60.0 / bpm / 4.0;
+    // keep bar 1 at the start of the recording, but let the grid sit where the notes actually are (within half a sixteenth)
+    double shift = phase; while (shift > g16 * 0.5) shift -= g16; while (shift < -g16 * 0.5) shift += g16;
+    double t0 = (fit >= 0.55 && ! opt.firstNoteIsBarOne) ? shift : 0.0;
+    if (opt.firstNoteIsBarOne) t0 = R.notes.front().t0;
+    int tidy = opt.tidy;
+    if (tidy > 0 && fit < 0.5) tidy = 0;           // swing / triplets / wrong tempo: do not force a straight grid
+    R.tidyApplied = tidy > 0;
+    const double grid = (tidy == 3) ? 0.5 : 0.25;
+    const double strength = (tidy == 1) ? 0.75 : (tidy >= 2 ? 1.0 : 0.0);
+    auto toBeat = [&] (double t) { return (t - t0) * bpm / 60.0; };
+    auto snap = [&] (double b) { return std::round (b / grid) * grid; };
+    for (auto& n : R.notes)
+    {
+        const double b0 = toBeat (n.t0), b1 = toBeat (n.t1);
+        n.beat = b0 + strength * (snap (b0) - b0);
+        n.lenBeats = std::max (0.0625, b1 - b0);
+        n.lenBeats = (strength > 0) ? std::max (grid * 0.5, (b1 + strength * (snap (b1) - b1)) - n.beat) : n.lenBeats;
+        n.beat = std::max (0.0, n.beat);
+    }
+    // legato joins stay joined; notes never overlap
+    for (size_t i = 0; i + 1 < R.notes.size(); ++i)
+    {
+        auto& a = R.notes[i]; auto& b = R.notes[i + 1];
+        const bool joined = std::abs (R.notes[i].t1 - R.notes[i + 1].t0) < 0.02;
+        if (joined) a.lenBeats = std::max (0.0625, b.beat - a.beat);
+        if (a.beat + a.lenBeats > b.beat) a.lenBeats = std::max (0.0625, b.beat - a.beat - 0.01);
+        if (b.beat < a.beat) b.beat = a.beat;
+    }
+    double endB = 0; for (auto& n : R.notes) endB = std::max (endB, n.beat + n.lenBeats);
+    R.lengthBeats = endB;
+    double qs = 0; for (auto& n : R.notes) qs += n.conf; R.quality = qs / (double) R.notes.size();
+    R.ok = true;
+    return R;
+}
+
+/** one line for the user */
+inline std::string describeTranscription (const TranscribeResult& r)
+{
+    char b[400];
+    std::snprintf (b, sizeof (b), "%d notes (%d ghost, %d slides, %d hammer-ons / pull-offs) at %.0f BPM. %s%s",
+                   (int) r.notes.size(), r.ghosts, r.slides, r.legatos, r.bpm,
+                   r.tuningCents != 0 ? ("Tuning corrected by " + std::to_string ((int) std::lround (-r.tuningCents)) + " cents. ").c_str() : "",
+                   r.gridFit >= 0.7 ? (r.tidyApplied ? "Timing sits well on a 1/16 grid." : "Timing sits on a 1/16 grid.")
+                                    : (r.gridFit >= 0.5 ? "Timing is loose against the grid." : "Timing does not sit on a straight grid (swing, or the tempo is off): left as played."));
+    return b;
+}
+} // namespace enochsolo
