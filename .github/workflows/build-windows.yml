@@ -1,0 +1,25 @@
+name: Build Enoch Bass (Windows VST3)
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -A x64
+      - name: Build
+        run: cmake --build build --config Release --target EnochBass_VST3 -j 4
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Recurse "build/EnochBass_artefacts/Release/VST3/Enoch Bass.vst3" "dist/Enoch Bass.vst3"
+          Copy-Item installer/Install-EnochBass.bat dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath EnochBass-Windows-VST3.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EnochBass-Windows-VST3
+          path: EnochBass-Windows-VST3.zip
