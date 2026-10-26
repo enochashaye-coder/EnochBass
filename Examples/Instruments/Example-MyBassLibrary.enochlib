@@ -1,0 +1,20 @@
+# Copy this file to:  C:\Users\<you>\AppData\Roaming\Enoch Bass\Instruments\
+# Rename it, edit it, restart your DAW (or reopen Enoch Bass) and it appears in "Instrument of choice".
+# Use the key-switch NOTE NUMBERS from your library's manual. Enoch Bass names notes with middle C = C4 = note 60
+# (so C-1 = 0, C0 = 12, C1 = 24, E1 = 28 = the lowest bass note). If your library's manual uses C3 = 60, add 12 to its note numbers.
+name = My Bass Library
+maker = Whoever made it
+instrument = bass
+expression_cc = 11            # CC your library uses for dynamics
+vibrato_cc = 1                # CC your library uses for vibrato
+# no_keyswitches = 1          # use this line instead of the ks lines if the library has no key-switches
+ks = Sustain: 12@100
+ks = Staccato: 13@100
+ks = PalmMute: 14@100 hold oneshot        # hold = key held while the note starts, oneshot = sent before each such note
+ks = Ghost: 15@100 hold oneshot
+ks = Slide: 16@100 hold oneshot
+ks = HammerOn: 17@100 hold oneshot
+ks = PullOff: 17@100 hold oneshot
+ks = Harmonic: 18@100 hold oneshot
+ks = Slap: 19@100 hold oneshot
+note = Key-switches C0 to G0 (from the manual, page 12)
