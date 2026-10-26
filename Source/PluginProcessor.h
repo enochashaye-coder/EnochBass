@@ -109,6 +109,9 @@ public:
 
     /** bass audio to MIDI: listens to a recording of a bass (one note at a time works best), writes the notes, key and chords into the piano roll. Message thread. */
     bool transcribeAudio (const juce::File& f, juce::String& message);
+    bool installTranscription (juce::String& message);      // (re)writes the notes of the last transcription at the current CLEANUP setting
+    bool hasTranscription() const { return lastTr != nullptr; }
+    juce::String lastTrMessage; int trVersion = 0;
     int trTempoMode = 0;       // 0 project tempo, 1 detect from the recording
     int trTidy = 1;            // 0 as played, 1 tidy, 2 snap 1/16, 3 snap 1/8
     int trAnchor = 0;          // 0 start of the audio is bar 1, 1 the first note is bar 1
@@ -164,7 +167,9 @@ public:
     juce::String suggestedFileName() const;
 
     // hearing a single note while editing (message thread) and jumping the test player to a position
-    void audition (int pitch, int velocity);
+    void audition (int pitch, int velocity, bool hold = false);   // hold = keeps sounding until auditionRelease() (mouse button held)
+    void auditionRelease();
+    int uiRollGrow = 0;                    // how far the person pulled the piano roll up (pixels), remembered with the project
     void seekInternal (double beat) { seekBeat = beat; }
 
     // transport / test player
@@ -211,6 +216,7 @@ private:
 
     juce::String chordText, chordStatus;
     juce::String soundFontPath, bassSamplePath;
+    std::shared_ptr<enochsolo::TranscribeResult> lastTr; float lastTrClean = 0.5f; bool lastTrGhosts = false;
     std::vector<std::shared_ptr<const enochsolo::Library>> libLists[enochsolo::I_Count];
     juce::String libReport;
     void loadLibraries();
@@ -226,7 +232,7 @@ private:
     std::atomic<double> playBeat { -1.0 };
     std::atomic<double> seekBeat { -1.0 };
     juce::MidiKeyboardState auditionState;
-    int auditionNote = -1; juce::uint32 auditionOffAt = 0;
+    int auditionNote = -1; juce::uint32 auditionOffAt = 0, auditionStart = 0; bool auditionHeld = false;
     double lastBpmUsed = 120.0;
     int lastTsNum = 4, lastTsDen = 4;
     bool loadingState = false;

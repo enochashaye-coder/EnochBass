@@ -116,6 +116,28 @@ private:
 //==============================================================================
 /** Piano roll: chord cell above every bar (click to select bars + choose the chord), note tools (select / draw / erase / split / mute),
     zoom + scrollbars, and an editable lane below (velocity, pitch bend, modulation, aftertouch, expression, sustain pedal). */
+
+/** thin handle on the top edge of the piano roll: drag it up to give the roll more height (the rows above slide out of the way), down to bring them back */
+class RollGrip : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    RollGrip() { setMouseCursor (juce::MouseCursor::UpDownResizeCursor); setRepaintsOnMouseActivity (true); }
+    std::function<int()> getGrow; std::function<void (int)> setGrow;
+    void paint (juce::Graphics& g) override
+    {
+        const bool on = isMouseOverOrDragging();
+        const auto c = getLocalBounds().toFloat().getCentre();
+        g.setColour (juce::Colour (0xffff8a3d).withAlpha (on ? 0.95f : 0.35f));
+        for (int i = -2; i <= 2; ++i) g.fillEllipse (c.x + (float) i * 9.f - 1.5f, c.y - 1.5f, 3.f, 3.f);
+        if (on) g.fillRect (getLocalBounds().toFloat().withSizeKeepingCentre ((float) getWidth() - 4.f, 1.f));
+    }
+    void mouseDown (const juce::MouseEvent& e) override { startY = e.getScreenY(); startGrow = getGrow ? getGrow() : 0; }
+    void mouseDrag (const juce::MouseEvent& e) override { if (setGrow) setGrow (startGrow + (startY - e.getScreenY())); }
+    void mouseDoubleClick (const juce::MouseEvent&) override { if (setGrow) setGrow (0); }
+private:
+    int startY = 0, startGrow = 0;
+};
+
 class RollView : public juce::Component, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
@@ -183,7 +205,8 @@ private:
         double viewStart = 0, viewLen = 4, len = 4;
         float ppb = 1.f, rowH = 8.f;
     };
-    enum class Drag { None, Move, Resize, Rubber, Velocity, Seek, BarSel, DrawLen, EraseNotes, MuteNotes, LaneDraw, LaneErase };
+    double wheelAccum = 0.0;
+    enum class Drag { None, Move, Resize, Rubber, Velocity, Seek, BarSel, DrawLen, EraseNotes, MuteNotes, LaneDraw, LaneErase, Key };
     struct ChordClip { bool has = false; int rootPc = 0; enochsolo::Quality q = enochsolo::Quality::Min7; };
 
     void timerCallback() override;
@@ -409,7 +432,8 @@ private:
     juce::ComboBox artist, key, scale, genre, timeSig, bars, mode, harmony, presetBox, gridBox, laneBox, exportBox, refTempoBox, refShiftBox, myStyleBox, startBarBox, voice2Box, claveBox, libBox;
     juce::TextEditor chordBox;
     juce::Label lArtist, lKey, lScale, lGenre, lTs, lBars, lMode, lIntensity, lBusy, lSpace, lRepeat, lOct, lHarmony, lPreset, lGrid, lZoom, lLane, lExport, lRef, lRefAmt, lBarBusy, lZoomT, lZoomP, lMyStyles, lStart, lVoice2, lClave, lGroove, songInfo, lLib, libInfo;
-    juce::Slider intensity, busyG, space, repeat, octave, hTiming, hVel, hLength, hFeel, zoomH, zoomV, barBusy, refAmt, grooveAmt;
+    juce::Slider intensity, busyG, space, repeat, octave, hTiming, hVel, hLength, hFeel, zoomH, zoomV, barBusy, refAmt, grooveAmt, trClean;
+    juce::Label lClean; juce::ToggleButton trGhostsT { "Ghosts" }; int trSeen = 0;
     juce::TextButton tryAnother { "TRY ANOTHER" }, back { "<" }, fwd { ">" }, humanize { "HUMANIZE" }, reHumanize { "Re-roll feel" },
                      play { "PLAY" }, saveBtn { "Save .mid" }, advBtn { "Advanced" },
                      undoBtn { "Undo" }, redoBtn { "Redo" }, editBtn { "Edit  v" }, quantizeBtn { "Quantize" }, deleteBtn { "Delete" },
@@ -425,6 +449,9 @@ private:
     juce::Label lKs, lBend, lVol, ksText, status, hint, barInfo, barBusyText;
 
     RollView roll;
+    RollGrip rollGrip;
+    int rollGrow = 0;
+    void applyRollGrow (int v);
     DragPad drag;
     juce::TooltipWindow tooltips { this, 600 };
 

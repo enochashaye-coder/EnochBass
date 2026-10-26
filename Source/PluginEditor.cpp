@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "FolderMemory.h"
 #include "PhotoData.h"
 
 using namespace enochsolo;
@@ -103,6 +104,16 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     grooveAmt.setTooltip ("How tightly the bass line locks to the groove loop you loaded (FROM YOUR SONG > Load groove): 0 = ignore it, 1 = land on its hits, leave room where it is busy, swing like it.");
     addAndMakeVisible (grooveAmt);
     sliderAtt.push_back (std::make_unique<juce::SliderParameterAttachment> (*A.getParameter ("grooveAmount"), grooveAmt));
+
+    styleLabel (lClean, "CLEANUP", body);
+    trClean.setSliderStyle (juce::Slider::LinearHorizontal);
+    trClean.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    trClean.setTooltip ("After you drop in a recording: how strict the note filter is. Low = keep everything the analysis heard. High = only definite, clear notes (short, quiet or doubtful notes are dropped). Moves live, no need to transcribe again.");
+    addAndMakeVisible (trClean);
+    sliderAtt.push_back (std::make_unique<juce::SliderParameterAttachment> (*A.getParameter ("trClean"), trClean));
+    trGhostsT.setTooltip ("Keep the ghost (muted, dead) notes found in the recording. Off = only the clear notes.");
+    addAndMakeVisible (trGhostsT);
+    buttonAtt.push_back (std::make_unique<juce::ButtonParameterAttachment> (*A.getParameter ("trGhosts"), trGhostsT));
     songBtn.setTooltip ("Detect the chords / key / length from a MIDI clip or audio loop of your song, or load a drum / bass / keys loop for the bass line to groove with.");
     songBtn.onClick = [this] { showSongMenu(); };
     addAndMakeVisible (songBtn);
@@ -420,6 +431,11 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     addAndMakeVisible (chordBox);
 
     addAndMakeVisible (roll); addAndMakeVisible (drag);
+    rollGrow = proc.uiRollGrow;
+    rollGrip.getGrow = [this] { return rollGrow; };
+    rollGrip.setGrow = [this] (int v) { applyRollGrow (v); };
+    rollGrip.setTooltip ("Drag up to make the piano roll taller (the rows above it slide out of the way), drag down to bring them back. Double-click to reset.");
+    addAndMakeVisible (rollGrip);
     refreshArtists();
     refreshBarPanel();
     applyTheme (juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load()));
@@ -649,6 +665,8 @@ void EnochSoloEditor::timerCallback()
         const juce::String now = songMsg.isNotEmpty() ? songMsg : (proc.hasGroove() ? "Groove: " + proc.grooveName() + "  |  " + proc.grooveSummary() : juce::String ("No groove loop loaded"));
         if (now != songShown) { songShown = now; songInfo.setText (now, juce::dontSendNotification); songInfo.setTooltip (now); }
         grooveAmt.setEnabled (proc.hasGroove());
+        trClean.setEnabled (proc.hasTranscription()); trGhostsT.setEnabled (proc.hasTranscription());
+        if (proc.trVersion != trSeen) { trSeen = proc.trVersion; songMsg = "Transcribed: " + proc.lastTrMessage; songShown = "<changed>"; }
         const juce::String sfNow = proc.hasSoundFont() ? "SoundFont: " + proc.soundFontName() : juce::String ("No SoundFont: built-in preview sounds");
         if (sfNow != sfShown) { sfShown = sfNow; sfLabel.setText (sfNow, juce::dontSendNotification); }
         sfClearBtn.setEnabled (proc.hasSoundFont()); sfOnT.setEnabled (proc.hasSoundFont());
@@ -701,10 +719,10 @@ void EnochSoloEditor::filesDropped (const juce::StringArray& files, int, int)
 void EnochSoloEditor::chooseRefFile()
 {
     chooser = std::make_unique<juce::FileChooser> ("Choose a reference recording or MIDI file",
-                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                                                   enochsolo::lastFolder ("reference", juce::File::getSpecialLocation (juce::File::userMusicDirectory)),
                                                    "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg;*.m4a;*.wma;*.mid;*.midi");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc) { auto f = fc.getResult(); if (f != juce::File()) loadRefFile (f); });
+                          [this] (const juce::FileChooser& fc) { auto f = fc.getResult(); if (f != juce::File()) { enochsolo::rememberFolder ("reference", f); loadRefFile (f); } });
 }
 
 void EnochSoloEditor::loadRefFile (const juce::File& f)
@@ -728,12 +746,13 @@ void EnochSoloEditor::loadRefFile (const juce::File& f)
 
 void EnochSoloEditor::chooseBassSample()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Choose a single bass note recording", juce::File::getSpecialLocation (juce::File::userMusicDirectory), "*.wav;*.aif;*.aiff;*.flac;*.mp3");
+    chooser = std::make_unique<juce::FileChooser> ("Choose a single bass note recording", enochsolo::lastFolder ("oneshot", juce::File::getSpecialLocation (juce::File::userMusicDirectory)), "*.wav;*.aif;*.aiff;*.flac;*.mp3");
     juce::Component::SafePointer<EnochSoloEditor> self (this);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [self] (const juce::FileChooser& fc)
     {
         const auto f = fc.getResult();
         if (f == juce::File() || self == nullptr) return;
+        enochsolo::rememberFolder ("oneshot", f);
         self->smpLabel.setText ("Loading " + f.getFileName() + " ...", juce::dontSendNotification);
         juce::MessageManager::callAsync ([self, f]
         {
@@ -748,12 +767,13 @@ void EnochSoloEditor::chooseBassSample()
 
 void EnochSoloEditor::chooseSoundFont()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Choose a SoundFont (General MIDI .sf2)", juce::File::getSpecialLocation (juce::File::userMusicDirectory), "*.sf2");
+    chooser = std::make_unique<juce::FileChooser> ("Choose a SoundFont (General MIDI .sf2)", enochsolo::lastFolder ("soundfont", juce::File::getSpecialLocation (juce::File::userMusicDirectory)), "*.sf2");
     juce::Component::SafePointer<EnochSoloEditor> self (this);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [self] (const juce::FileChooser& fc)
     {
         const auto f = fc.getResult();
         if (f == juce::File() || self == nullptr) return;
+        enochsolo::rememberFolder ("soundfont", f);
         self->sfLabel.setText ("Loading " + f.getFileName() + " ...", juce::dontSendNotification);
         juce::MessageManager::callAsync ([self, f]
         {
@@ -808,10 +828,10 @@ void EnochSoloEditor::showSongMenu()
 void EnochSoloEditor::chooseTranscribeFile()
 {
     chooser = std::make_unique<juce::FileChooser> ("Choose a recording of a bass (one note at a time works best)",
-                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                                                   enochsolo::lastFolder ("transcribe", juce::File::getSpecialLocation (juce::File::userMusicDirectory)),
                                                    "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg;*.m4a;*.wma");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc) { auto f = fc.getResult(); if (f != juce::File()) runTranscribe (f); });
+                          [this] (const juce::FileChooser& fc) { auto f = fc.getResult(); if (f != juce::File()) { enochsolo::rememberFolder ("transcribe", f); runTranscribe (f); } });
 }
 
 void EnochSoloEditor::runTranscribe (const juce::File& f)
@@ -835,13 +855,14 @@ void EnochSoloEditor::runTranscribe (const juce::File& f)
 void EnochSoloEditor::runSongFile (bool chords)
 {
     chooser = std::make_unique<juce::FileChooser> (chords ? "Choose a MIDI clip or audio loop with your chords" : "Choose a drum / bass / keys loop (audio or MIDI)",
-                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                                                   enochsolo::lastFolder ("song", juce::File::getSpecialLocation (juce::File::userMusicDirectory)),
                                                    "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg;*.m4a;*.wma;*.mid;*.midi");
     juce::Component::SafePointer<EnochSoloEditor> self (this);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [self, chords] (const juce::FileChooser& fc)
     {
         const auto f = fc.getResult();
         if (f == juce::File() || self == nullptr) return;
+        enochsolo::rememberFolder ("song", f);
         self->songMsg = (chords ? "Listening to " : "Analysing ") + f.getFileName() + " ...";
         self->songShown = "<changed>";
         juce::MessageManager::callAsync ([self, f, chords]
@@ -856,14 +877,22 @@ void EnochSoloEditor::runSongFile (bool chords)
     });
 }
 
+void EnochSoloEditor::applyRollGrow (int v)
+{
+    rollGrow = juce::jlimit (0, 210, v);
+    proc.uiRollGrow = rollGrow;
+    resized();
+    repaint();
+}
+
 void EnochSoloEditor::saveMidi()
 {
-    chooser = std::make_unique<juce::FileChooser> ("Save MIDI file", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile (proc.suggestedFileName()), "*.mid");
+    chooser = std::make_unique<juce::FileChooser> ("Save MIDI file", enochsolo::lastFolder ("midiExport", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)).getChildFile (proc.suggestedFileName()), "*.mid");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
                           [this] (const juce::FileChooser& fc)
                           {
                               auto f = fc.getResult();
-                              if (f != juce::File()) proc.saveMidiTo (f.withFileExtension ("mid"));
+                              if (f != juce::File()) { enochsolo::rememberFolder ("midiExport", f); proc.saveMidiTo (f.withFileExtension ("mid")); }
                           });
 }
 
@@ -1071,6 +1100,9 @@ void EnochSoloEditor::layoutBody()
     head.removeFromRight (8);
     for (int i = 0; i < I_Count; ++i) instButtons[i]->setBounds (i == I_Bass ? head.reduced (3, 0) : juce::Rectangle<int>());
     r.removeFromTop (6);
+    const int upperTopY = r.getY();
+    const int grow = juce::jlimit (0, 210, rollGrow);
+    r.setY (r.getY() - grow); r.setHeight (r.getHeight() + grow);          // the rows above the roll slide up behind the header
 
     auto cr = r.removeFromTop (46);
     {
@@ -1121,6 +1153,7 @@ void EnochSoloEditor::layoutBody()
         auto sr = r.removeFromTop (28);
         songBtn.setBounds (sr.removeFromLeft (150).reduced (2, 0)); sr.removeFromLeft (6);
         lGroove.setBounds (sr.removeFromLeft (84)); grooveAmt.setBounds (sr.removeFromLeft (96)); sr.removeFromLeft (8);
+        lClean.setBounds (sr.removeFromLeft (52)); trClean.setBounds (sr.removeFromLeft (90)); trGhostsT.setBounds (sr.removeFromLeft (70)); sr.removeFromLeft (8);
         lVoice2.setBounds (0, 0, 0, 0); voice2Box.setBounds (0, 0, 0, 0); lVoice2.setVisible (false); voice2Box.setVisible (false);
         lClave.setBounds (sr.removeFromLeft (46)); claveBox.setBounds (sr.removeFromLeft (110).reduced (2, 0)); sr.removeFromLeft (6);
         songInfo.setBounds (sr);
@@ -1208,6 +1241,15 @@ void EnochSoloEditor::layoutBody()
     for (auto* c : std::initializer_list<juce::Component*> { &playerOn, &hostSync, &loopT, &midiOut, &emitKS, &emitBends, &emitCC, &realize, &ksBase, &bendRange, &volume, &lKs, &lBend, &lVol, &ksText, &sfLoadBtn, &sfClearBtn, &sfOnT, &sfLabel, &smpLoadBtn, &smpClearBtn, &smpOnT, &smpRootBox, &smpLabel })
         c->setVisible (advanced);
     roll.setBounds (r);
+    rollGrip.setBounds (r.getX(), r.getY() - 6, r.getWidth(), 12);
+    rollGrip.toFront (false);
+    {
+        // rows that slid above the top are hidden; the others stay as they were
+        std::initializer_list<juce::Component*> rows = { &lArtist, &artist, &lKey, &key, &lScale, &scale, &lGenre, &genre, &lTs, &timeSig, &lBars, &bars,
+            &tryAnother, &lHarmony, &harmony, &lOct, &octave, &lIntensity, &intensity, &lBusy, &busyG, &lSpace, &space, &lRepeat, &repeat,
+            &chordBox, &hint, &lLib, &libBox, &libInfo, &songBtn, &lGroove, &grooveAmt, &lClean, &trClean, &trGhostsT, &lClave, &claveBox, &songInfo };
+        for (auto* c : rows) if (! c->getBounds().isEmpty()) c->setVisible (c->getY() >= upperTopY - 1);
+    }
 
     drag.setBounds (bottom.removeFromRight (juce::jmin (260, juce::jmax (150, bottom.getWidth() - 690))).reduced (2, 2));
     bottom.removeFromRight (8);

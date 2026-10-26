@@ -993,7 +993,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
         drag = Drag::Seek; proc.seekInternal (juce::jlimit (0.0, g.len, beatAt (g, p.x)));
         return;
     }
-    if (g.gutter.contains (p)) { proc.audition (pitchAt (g, p.y), 100); return; }
+    if (g.gutter.contains (p)) { lastAuditioned = pitchAt (g, p.y); proc.audition (lastAuditioned, 100, true); drag = Drag::Key; return; }
 
     // ---------------- lane below the notes
     if (g.lane.getHeight() > 0 && g.lane.contains (p))
@@ -1065,7 +1065,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
             }
             dragOrig = raw; downBeat = beatAt (g, p.x); downPitch = pitchAt (g, p.y);
             drag = rz ? Drag::Resize : Drag::Move;
-            for (auto& n : raw) if (n.id == anchorId) { proc.audition (n.pitch, n.vel); lastAuditioned = n.pitch; }
+            for (auto& n : raw) if (n.id == anchorId) { proc.audition (n.pitch, n.vel, true); lastAuditioned = n.pitch; }
         }
         else if (tool == Tool::Draw)
         {
@@ -1076,7 +1076,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
             n.length = len; n.pitch = snapPitch (pitchAt (g, p.y), n.start);
             n.vel = 96; n.art = A_Sustain; n.track = 0; n.voice = 0; n.id = proc.allocNoteId(); n.weight = metricWeight (n.start);
             raw.push_back (n); selected = { n.id }; anchorId = n.id; downBeat = n.start; moved = true; drag = Drag::DrawLen;
-            proc.audition (n.pitch, n.vel);
+            proc.audition (n.pitch, n.vel, true);
         }
         else
         {
@@ -1107,6 +1107,12 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
     const auto g = geo(); const auto p = e.position;
 
     if (drag == Drag::Seek) { proc.seekInternal (juce::jlimit (0.0, g.len, beatAt (g, p.x))); return; }
+    if (drag == Drag::Key)                                   // slide over the piano keys: each key sounds as the pointer reaches it
+    {
+        const int kp = pitchAt (g, p.y);
+        if (kp != lastAuditioned) { lastAuditioned = kp; proc.audition (kp, 100, true); }
+        return;
+    }
     if (drag == Drag::BarSel)
     {
         const int bar = barAtX (g, p.x);
@@ -1172,7 +1178,7 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
                 if (dPitch != 0 || dBeat != 0) raw[i].weight = metricWeight (raw[i].start);
             }
         const int ap = juce::jlimit (0, 127, a->pitch + dPitch);
-        if (ap != lastAuditioned && dPitch != 0) { lastAuditioned = ap; proc.audition (snapPitch (ap, a->start + dBeat), a->vel); }
+        if (ap != lastAuditioned && dPitch != 0) { lastAuditioned = ap; proc.audition (snapPitch (ap, a->start + dBeat), a->vel, true); }
     }
     else if (drag == Drag::Resize)
     {
@@ -1192,11 +1198,12 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
 void RollView::mouseUp (const juce::MouseEvent& e)
 {
     const Drag d = drag; drag = Drag::None;
+    proc.auditionRelease();
     const auto g = geo();
     switch (d)
     {
         case Drag::Rubber: rubber = {}; repaint(); return;
-        case Drag::Seek: case Drag::None: return;
+        case Drag::Seek: case Drag::None: case Drag::Key: return;
         case Drag::BarSel:
             if (openMenuOnUp && barDragStart >= 0) showChordMenu (barDragStart, cellRect (g, barDragStart));
             return;
@@ -1309,13 +1316,19 @@ void RollView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
         topPitch = (int) std::lround (anchor + frac * nr); visRows = nr; vAuto = false;
         clampView(); updateScrollBars(); repaint(); notifyView();
     }
-    else if (e.mods.isShiftDown() || (viewLen <= 0 && visRows < 128))        // Shift+wheel: scroll pitch
+    else if (e.mods.isShiftDown())                                            // Shift+wheel: scroll in time (sideways)
     {
-        topPitch += (int) std::lround (dy * 8.0); vAuto = false; clampView(); updateScrollBars(); repaint();
+        if (viewLen > 0 && viewLen < g.len) { viewStart -= dy * viewLen * 0.6; clampView(); updateScrollBars(); repaint(); notifyView(); }
     }
-    else if (viewLen > 0 && viewLen < g.len)                                  // wheel: scroll in time when zoomed in
+    else                                                                      // wheel: scroll the roll up and down (pitch)
     {
-        viewStart -= dy * viewLen * 0.6; clampView(); updateScrollBars(); repaint(); notifyView();
+        wheelAccum += dy * 8.0;
+        const int step = (int) wheelAccum;
+        if (step != 0)
+        {
+            wheelAccum -= step;
+            topPitch += step; vAuto = false; clampView(); updateScrollBars(); repaint(); notifyView();
+        }
     }
 }
 

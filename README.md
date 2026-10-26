@@ -1,4 +1,4 @@
-# Enoch Bass (v1.2)
+# Enoch Bass (v1.3)
 
 A Windows-only VST3 that writes bass-guitar MIDI for you. Choose the key and the chord of each bar, click **TRY ANOTHER** (generate), and drag the MIDI into **Toontrack EZbass** (or any bass instrument). It is built from the Enoch Solo engine and keeps its piano roll, humanize, chord-per-bar editing, groove lock and style reference. Afrobeat, Afrobeats, Amapiano and other African styles come first, then Pop, Gospel, Rock, Swing, Bossa, Samba and Latin.
 
@@ -63,3 +63,11 @@ Piano roll with tools, grid, snap, quantize, velocity / bend / mod lanes, undo, 
 - This Windows build is made by GitHub Actions; it could not be compiled or heard in the environment where it was written (logic, MIDI and the screen were tested there, not the sound).
 - Musical quality is by design, not judged by ear: listen and use TRY ANOTHER, busy and style to steer.
 - Audio chord detection is approximate; the bass sound in the built-in test player is only a stand-in for EZbass.
+
+
+## What is new in v1.3
+- **Clean transcription.** After you drop in a bass recording, the **CLEANUP** slider (song row) decides how strict the note filter is: low keeps everything heard, high keeps only definite, clear notes. It moves live, no need to transcribe again. The **Ghosts** switch keeps or drops the muted/ghost notes (off by default). The message shows how many notes were kept and how many weak ones were left out.
+- **Click to hear.** Pressing a piano key or a note in the roll plays it and keeps sounding while the mouse button is held. Slide down the keys to play each one. Also sent to your instrument when "Send MIDI to host" is on.
+- **Mouse wheel** inside the roll scrolls up and down. Ctrl+wheel = time zoom, Alt+wheel = pitch zoom, Shift+wheel = sideways. The ruler still scrolls sideways.
+- **Taller piano roll.** Move the cursor to the top edge of the roll: it turns into the up/down arrow. Drag up to make the roll taller, down to shrink it, double-click to reset. Remembered with the project.
+- **Remembers folders.** Every file picker (one-shots, SoundFonts, recordings, MIDI export) opens in the last folder you used.

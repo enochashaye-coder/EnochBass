@@ -68,6 +68,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
     choice ("grooveTempo", "Groove Tempo", juce::StringArray { "As detected", "Twice as fast", "Half as fast" }, 0);
     choice ("grooveShift", "Groove Bar Line", juce::StringArray { "Auto", "+1/16", "+1/8", "+3/16", "+1 beat", "+2 beats", "+3 beats" }, 0);
     l.add (std::make_unique<juce::AudioParameterInt> (P { "library", 1 }, "Instrument Of Choice", 0, 63, 1));
+    l.add (std::make_unique<juce::AudioParameterFloat> (P { "trClean", 1 }, "Transcription Cleanup", juce::NormalisableRange<float> (0.f, 1.f), 0.5f,
+                                                        juce::AudioParameterFloatAttributes().withAutomatable (false)));
+    l.add (std::make_unique<juce::AudioParameterBool> (P { "trGhosts", 1 }, "Transcription: Keep Ghost Notes", false,
+                                                       juce::AudioParameterBoolAttributes().withAutomatable (false)));
     l.add (std::make_unique<juce::AudioParameterBool> (P { "smpOn", 1 }, "Preview: Use Bass Sample", true,
                                                        juce::AudioParameterBoolAttributes().withAutomatable (false)));
     {
@@ -719,7 +723,8 @@ void EnochSoloProcessor::applyPreset (int i)
 
 void EnochSoloProcessor::timerCallback()
 {
-    if (auditionNote >= 0 && (juce::int32) (juce::Time::getMillisecondCounter() - auditionOffAt) >= 0)
+    if (lastTr && (std::abs (getF (apvts, "trClean") - lastTrClean) > 1.0e-4f || getB (apvts, "trGhosts") != lastTrGhosts)) { juce::String m; installTranscription (m); if (m.isNotEmpty()) lastTrMessage = m, ++trVersion; lastTrClean = getF (apvts, "trClean"); lastTrGhosts = getB (apvts, "trGhosts"); }
+    if (auditionNote >= 0 && ! auditionHeld && (juce::int32) (juce::Time::getMillisecondCounter() - auditionOffAt) >= 0)
     {
         auditionState.noteOff (1, auditionNote, 0.f);
         auditionNote = -1;
@@ -826,12 +831,22 @@ void EnochSoloProcessor::setInternalPlaying (bool p)
     internalPlaying = p;
 }
 
-void EnochSoloProcessor::audition (int pitch, int velocity)
+void EnochSoloProcessor::audition (int pitch, int velocity, bool hold)
 {
     if (auditionNote >= 0) auditionState.noteOff (1, auditionNote, 0.f);
     auditionNote = juce::jlimit (0, 127, pitch);
     auditionState.noteOn (1, auditionNote, juce::jlimit (1, 127, velocity) / 127.0f);
-    auditionOffAt = juce::Time::getMillisecondCounter() + 380;
+    auditionStart = juce::Time::getMillisecondCounter();
+    auditionHeld = hold;
+    auditionOffAt = auditionStart + (hold ? 6000u : 380u);        // a held key never hangs: it is released at the latest after 6 s
+}
+
+void EnochSoloProcessor::auditionRelease()
+{
+    if (! auditionHeld) return;
+    auditionHeld = false;
+    // let the note be heard at least briefly even on a quick click
+    auditionOffAt = std::max (juce::Time::getMillisecondCounter(), auditionStart + 260u);
 }
 
 void EnochSoloProcessor::prepareToPlay (double sampleRate, int)
@@ -892,7 +907,9 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     { const int ri = getI (apvts, "smpRoot"); player.smp.setRootOverride (ri > 0 ? 11 + ri : 0); }
 
     // notes auditioned from the piano roll join the incoming MIDI
-    auditionState.processNextMidiBuffer (midi, 0, n, true);
+    juce::MidiBuffer auditionBuf;
+    auditionState.processNextMidiBuffer (auditionBuf, 0, n, true);
+    midi.addEvents (auditionBuf, 0, n, 0);
 
     // ---------------------------------------------------------------- transport
     {
@@ -910,6 +927,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const bool useHost = hostActive;
     genBuffer.clear(); playBuffer.clear();
     const bool sendMidiOut = getB (apvts, "midiOut");
+    if (sendMidiOut) genBuffer.addEvents (auditionBuf, 0, n, 0);        // clicked keys / notes also reach your instrument track
     auto flushHeld = [&]
     {
         for (int ch = 0; ch < 16; ++ch)
@@ -1029,6 +1047,7 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         state.setProperty ("ctrlRegions", cr, nullptr);
     }
     state.setProperty ("smpPath", bassSamplePath, nullptr);
+    state.setProperty ("uiRollGrow", uiRollGrow, nullptr);
     if (grooveProfile && grooveProfile->valid())
     {
         state.setProperty ("grvName", juce::String (grooveProfile->name), nullptr);
@@ -1131,6 +1150,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
             barChords.push_back (b);
         }
     }
+    uiRollGrow = juce::jlimit (0, 400, (int) vt.getProperty ("uiRollGrow", 0));
     bassSamplePath = vt.getProperty ("smpPath").toString();
     if (bassSamplePath.isNotEmpty() && juce::File (bassSamplePath).existsAsFile()) { juce::String m; auto s = loadBassSample_ (juce::File (bassSamplePath), m); player.smp.setSample (s); if (! s) bassSamplePath = juce::String(); }
     else { player.smp.setSample (nullptr); bassSamplePath = juce::String(); }
@@ -1521,25 +1541,66 @@ bool EnochSoloProcessor::transcribeAudio (const juce::File& f, juce::String& mes
 {
     std::vector<float> mono; double sr = 0;
     if (! readAudioMono (f, 900.0, mono, sr, message)) return false;
-    const Settings cur = currentSettings();
-    const double barBeats = cur.tsNum * 4.0 / std::max (1, cur.tsDen);
     TranscribeOptions o;
     o.bpm = hostBpm.load() > 20.0 ? hostBpm.load() : 120.0;
     o.detectTempo = trTempoMode == 1;
     o.tidy = juce::jlimit (0, 3, trTidy);
     o.firstNoteIsBarOne = trAnchor == 1;
-    const TranscribeResult r = transcribeBass (mono, sr, o);
+    TranscribeResult r = transcribeBass (mono, sr, o);
     if (! r.ok || r.notes.empty()) { message = juce::String (r.error.empty() ? std::string ("No notes found in that recording.") : r.error); return false; }
+    lastTr = std::make_shared<TranscribeResult> (std::move (r));
+    pushUndo();
+    return installTranscription (message);
+}
+
+// the notes of the last transcription that survive the cleanup slider
+static std::vector<TNote> filterTranscription (const TranscribeResult& r, float clean, bool keepGhosts, int& dropped)
+{
+    std::vector<int> vs; for (auto& n : r.notes) if (n.art != A_Ghost) vs.push_back (n.vel);
+    std::sort (vs.begin(), vs.end());
+    const double medVel = vs.empty() ? 90.0 : (double) vs[vs.size() / 2];
+    const double minLen = 0.040 + 0.090 * clean;                    // seconds
+    const double minVel = medVel * (0.30 + 0.50 * clean);
+    const double minConf = 0.30 + 0.50 * clean;
+    std::vector<TNote> out; dropped = 0;
+    for (auto& n : r.notes)
+    {
+        const double len = n.t1 - n.t0;
+        if (n.art == A_Ghost) { if (keepGhosts && n.vel >= 0.15 * medVel) out.push_back (n); else ++dropped; continue; }
+        if (len < minLen || n.vel < minVel || n.conf < minConf) { ++dropped; continue; }
+        // two notes almost on top of each other: keep the stronger one
+        if (! out.empty() && out.back().art != A_Ghost && n.t0 - out.back().t0 < 0.045 + 0.05 * clean)
+        {
+            if (n.vel > out.back().vel) out.back() = n;
+            ++dropped; continue;
+        }
+        out.push_back (n);
+    }
+    return out;
+}
+
+bool EnochSoloProcessor::installTranscription (juce::String& message)
+{
+    if (! lastTr) return false;
+    const TranscribeResult& r = *lastTr;
+    const Settings cur = currentSettings();
+    const double barBeats = cur.tsNum * 4.0 / std::max (1, cur.tsDen);
+    const float clean = getF (apvts, "trClean");
+    const bool ghosts = getB (apvts, "trGhosts");
+    int dropped = 0;
+    const std::vector<TNote> notes = filterTranscription (r, clean, ghosts, dropped);
+    if (notes.empty()) { message = "Nothing is left at this cleanup setting. Move the CLEANUP slider down."; return false; }
+    lastTrClean = clean; lastTrGhosts = ghosts;
 
     // chords from what was played
     std::vector<ChordNote> cn;
-    for (auto& n : r.notes) if (n.art != A_Ghost) cn.push_back ({ n.beat, n.lenBeats, n.pitch, juce::jlimit (0.1f, 1.f, (float) n.vel / 127.f) });
+    for (auto& n : notes) if (n.art != A_Ghost) cn.push_back ({ n.beat, n.lenBeats, n.pitch, juce::jlimit (0.1f, 1.f, (float) n.vel / 127.f) });
     DetectResult dr = detectChordsFromNotes (cn, barBeats, 256);
     const int needBars = std::max (1, (int) std::ceil (r.lengthBeats / barBeats - 0.02));
     int lenIdx = kNumBarValues - 1;
     for (int i = 0; i < kNumBarValues; ++i) if (kBarValues[i] >= needBars) { lenIdx = i; break; }
     const int bars = kBarValues[lenIdx];
-    const bool truncated = needBars > bars;   // only if the recording is longer than 256 bars
+    const bool truncated = needBars > bars;
 
     loadingState = true;
     if (dr.ok)
@@ -1554,12 +1615,11 @@ bool EnochSoloProcessor::transcribeAudio (const juce::File& f, juce::String& mes
     if (dr.ok) for (int b = 0; b < bars; ++b) barChords[(size_t) b] = dr.chords[(size_t) std::min (b, dr.bars - 1)];
     phraseLocks.clear();
     chordStatus = juce::String();
-    pushUndo();
 
     Settings s = currentSettings();
     Pattern p = Generator::makeShell (s);
     const int chordCount = (int) p.chords.size();
-    for (auto& t : r.notes)
+    for (auto& t : notes)
     {
         if (t.beat >= p.lengthBeats - 1e-6) continue;
         Note n; n.id = p.nextId++;
@@ -1586,9 +1646,12 @@ bool EnochSoloProcessor::transcribeAudio (const juce::File& f, juce::String& mes
     master = std::move (p);
     publishMaster();
 
-    message = juce::String (describeTranscription (r));
-    if (dr.ok) message += "   Chords: " + juce::String (dr.text).substring (0, 140) + (dr.text.size() > 140 ? " ..." : "") + "  (key " + kNoteNames[dr.keyRoot] + (dr.minor ? " minor" : " major") + ")";
+    int ghostCount = 0; for (auto& n : notes) if (n.art == A_Ghost) ++ghostCount;
+    message = juce::String ((int) notes.size()) + " notes kept (" + juce::String (dropped) + " weak or doubtful ones left out" + (ghostCount ? ", " + juce::String (ghostCount) + " ghost notes kept" : juce::String()) + ") at "
+              + juce::String (juce::roundToInt (r.bpm)) + " BPM. ";
+    if (dr.ok) message += "Chords: " + juce::String (dr.text).substring (0, 140) + (dr.text.size() > 140 ? " ..." : "") + "  (key " + kNoteNames[dr.keyRoot] + (dr.minor ? " minor" : " major") + ")";
     if (truncated) message += "   Only the first " + juce::String (bars) + " bars were kept.";
+    lastTrMessage = message; ++trVersion;
     return true;
 }
 
