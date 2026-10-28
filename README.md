@@ -68,6 +68,6 @@ Piano roll with tools, grid, snap, quantize, velocity / bend / mod lanes, undo, 
 ## What is new in v1.3
 - **Clean transcription.** After you drop in a bass recording, the **CLEANUP** slider (song row) decides how strict the note filter is: low keeps everything heard, high keeps only definite, clear notes. It moves live, no need to transcribe again. The **Ghosts** switch keeps or drops the muted/ghost notes (off by default). The message shows how many notes were kept and how many weak ones were left out.
 - **Click to hear.** Pressing a piano key or a note in the roll plays it and keeps sounding while the mouse button is held. Slide down the keys to play each one. Also sent to your instrument when "Send MIDI to host" is on.
-- **Mouse wheel** inside the roll scrolls up and down. Ctrl+wheel = time zoom, Alt+wheel = pitch zoom, Shift+wheel = sideways. The ruler still scrolls sideways.
+- **Mouse wheel** inside the roll scrolls up and down. Ctrl+wheel = make the roll taller or shorter (pitch zoom), Alt+wheel = time zoom, Shift+wheel = sideways. The ruler still scrolls sideways.
 - **Taller piano roll.** Move the cursor to the top edge of the roll: it turns into the up/down arrow. Drag up to make the roll taller, down to shrink it, double-click to reset. Remembered with the project.
 - **Remembers folders.** Every file picker (one-shots, SoundFonts, recordings, MIDI export) opens in the last folder you used.

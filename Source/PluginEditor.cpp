@@ -325,7 +325,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
         addAndMakeVisible (*s);
     }
     zoomH.setTooltip ("Time zoom. Also: scroll the mouse wheel over the bar numbers (just under the chord names).");
-    zoomV.setTooltip ("Pitch zoom. Also: Alt + mouse wheel, or scroll over the piano keys on the left.");
+    zoomV.setTooltip ("Pitch zoom (roll height). Also: Ctrl + mouse wheel, or scroll over the piano keys on the left.");
     zoomH.onValueChange = [this] { if (! updatingUi) roll.setZoomH (zoomH.getValue()); };
     zoomV.onValueChange = [this] { if (! updatingUi) roll.setZoomV (zoomV.getValue()); };
     roll.onViewChanged = [this]

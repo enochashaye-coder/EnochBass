@@ -1306,9 +1306,9 @@ void RollView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheel
     const double dy = std::abs (w.deltaY) > 1e-6 ? w.deltaY : w.deltaX;
     const bool overRuler = g.ruler.contains (e.position) || g.chord.contains (e.position);
     const bool overGutter = g.gutter.contains (e.position);
-    if (overRuler || e.mods.isCtrlDown() || e.mods.isCommandDown())          // wheel on the bar-time ruler (or Ctrl+wheel): zoom in time
+    if (overRuler || e.mods.isAltDown())                                      // wheel on the bar-time ruler (or Alt+wheel): zoom in time
         zoomAround (std::exp (-dy * 1.6), beatAt (g, e.position.x));
-    else if (overGutter || e.mods.isAltDown())                                // wheel on the piano keys (or Alt+wheel): zoom pitch
+    else if (overGutter || e.mods.isCtrlDown() || e.mods.isCommandDown())     // wheel on the piano keys (or Ctrl+wheel): make the roll taller / shorter (pitch zoom)
     {
         const double anchor = (double) pitchAt (g, e.position.y);
         const int nr = juce::jlimit (12, 128, (int) std::lround (visRows * std::exp (-dy * 1.6)));
