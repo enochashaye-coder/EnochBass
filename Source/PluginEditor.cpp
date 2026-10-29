@@ -1,9 +1,23 @@
 #include "PluginEditor.h"
 #include "FolderMemory.h"
+#include "Sounds.h"
 #include "PhotoData.h"
 
 using namespace enochsolo;
 using LF = EnochLookAndFeel;
+
+namespace
+{
+constexpr float kBaseW = 1250.f, kBaseH = 970.f;
+constexpr int kEdge = 2, kWood = 16;
+// surface textures, made once
+const juce::Image& texSheet()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff2b2d31), 1.0f, 3);  return i; }
+const juce::Image& texPlate()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff4a4d54), 0.9f, 5);  return i; }
+const juce::Image& texBlack()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff1f2023), 1.3f, 9);  return i; }
+const juce::Image& texBadge()  { static const juce::Image i = EnochTextures::brushed (512, 256, juce::Colour (0xffb9bcc2), 0.6f, 13);  return i; }
+const juce::Image& texWood()   { static const juce::Image i = EnochTextures::walnut (48, 1024, 17);                                       return i; }
+}
+
 
 //==============================================================================
 // DragPad
@@ -11,16 +25,106 @@ using LF = EnochLookAndFeel;
 void DragPad::paint (juce::Graphics& g)
 {
     const auto& t = LF::of (*this);
-    auto b = getLocalBounds().toFloat().reduced (1.f);
-    g.setColour (t.accent.withAlpha (0.14f)); g.fillRoundedRectangle (b, 9.f);
-    juce::Path dash; dash.addRoundedRectangle (b, 9.f);
-    juce::Path stroked; const float dl[] = { 6.f, 4.f };
-    juce::PathStrokeType (1.6f).createDashedStroke (stroked, dash, dl, 2);
-    g.setColour (t.accent); g.fillPath (stroked);
-    g.setColour (LF::text()); g.setFont (juce::Font (juce::FontOptions (15.f, juce::Font::bold)));
-    g.drawText ("DRAG MIDI", b.withTrimmedBottom (b.getHeight() * 0.45f), juce::Justification::centredBottom);
-    g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (11.5f)));
-    g.drawText ("into your instrument track", b.withTrimmedTop (b.getHeight() * 0.58f), juce::Justification::centredTop);
+    auto b = getLocalBounds().toFloat().reduced (2.f);
+    const bool over = isMouseOver (true);
+    LF::recess (g, b, 7.f, juce::Colour (0xff0a0b0c).interpolatedWith (t.accent, over ? 0.12f : 0.04f));
+    juce::Path shape; shape.addRoundedRectangle (b.reduced (4.f), 5.f);
+    juce::Path stroked; const float dl[] = { 5.f, 4.f };
+    juce::PathStrokeType (1.2f).createDashedStroke (stroked, shape, dl, 2);
+    g.setColour (t.accent.withAlpha (over ? 0.95f : 0.55f)); g.fillPath (stroked);
+    const float ic = juce::jmin (20.f, b.getHeight() * 0.40f);
+    auto ir = juce::Rectangle<float> (b.getX() + 16.f, b.getCentreY() - ic * 0.5f, ic, ic);
+    juce::Path ar;
+    ar.startNewSubPath (ir.getCentreX(), ir.getY()); ar.lineTo (ir.getCentreX(), ir.getY() + ic * 0.62f);
+    ar.startNewSubPath (ir.getCentreX() - ic * 0.26f, ir.getY() + ic * 0.36f); ar.lineTo (ir.getCentreX(), ir.getY() + ic * 0.62f); ar.lineTo (ir.getCentreX() + ic * 0.26f, ir.getY() + ic * 0.36f);
+    ar.startNewSubPath (ir.getX(), ir.getY() + ic * 0.62f); ar.lineTo (ir.getX(), ir.getBottom()); ar.lineTo (ir.getRight(), ir.getBottom()); ar.lineTo (ir.getRight(), ir.getY() + ic * 0.62f);
+    juce::Path as; juce::PathStrokeType (2.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded).createStrokedPath (as, ar);
+    juce::DropShadow (t.accent.withAlpha (0.7f), 6, {}).drawForPath (g, as);
+    g.setColour (t.accent.interpolatedWith (juce::Colours::white, 0.2f)); g.fillPath (as);
+    auto tx = b.withTrimmedLeft (ic + 26.f).withTrimmedRight (8.f);
+    LF::ledText (g, "DRAG MIDI", tx.withTrimmedBottom (tx.getHeight() * 0.48f), LF::fnt (14.5f, "Bold", 0.08f), juce::Justification::bottomLeft, t.accent.interpolatedWith (juce::Colours::white, 0.15f));
+    g.setColour (LF::text().withAlpha (0.65f)); g.setFont (LF::fnt (11.f));
+    g.drawFittedText ("into your instrument track", tx.withTrimmedTop (tx.getHeight() * 0.56f).toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
+}
+
+//==============================================================================
+// VU meter
+//==============================================================================
+void VUMeter::timerCallback()
+{
+    const float rms = src != nullptr ? src->load() : 0.f;
+    const float vuDb = juce::Decibels::gainToDecibels (rms, -80.f) + 18.f;            // -18 dBFS = 0 VU
+    const float v = std::pow (10.f, juce::jlimit (-25.f, 6.f, vuDb) / 20.f);
+    const float target = juce::jlimit (-0.02f, 1.08f, (v - 0.1f) / (1.4125f - 0.1f));
+    needle += (target - needle) * (1.f - std::exp (-1.f / (40.f * 0.075f)));          // ~300 ms VU ballistics
+    if (vuDb > 3.f) peakLamp = 12; else if (peakLamp > 0) --peakLamp;
+    repaint();
+}
+
+void VUMeter::paint (juce::Graphics& g)
+{
+    const auto& T = LF::of (*this);
+    auto b = getLocalBounds().toFloat().reduced (2.f);
+    // bezel with four screws
+    LF::plate (g, b, texBlack(), 8.f, false, 0.03f);
+    for (auto p : { b.getTopLeft() + juce::Point<float> (7.f, 7.f), b.getTopRight() + juce::Point<float> (-7.f, 7.f), b.getBottomLeft() + juce::Point<float> (7.f, -7.f), b.getBottomRight() + juce::Point<float> (-7.f, -7.f) })
+        LF::screw (g, p, 3.f, p.x * 0.013f);
+    auto face = b.reduced (16.f, 13.f);
+    juce::Path fp; fp.addRoundedRectangle (face, 4.f);
+    // backlit paper
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff6edd2).interpolatedWith (T.accent, 0.10f), face.getCentreX(), face.getBottom(),
+                                             juce::Colour (0xffb9ad8c).interpolatedWith (T.accent, 0.06f), face.getCentreX(), face.getY() - face.getHeight() * 0.3f, true));
+    g.fillPath (fp);
+    juce::Graphics::ScopedSaveState ss (g);
+    g.reduceClipRegion (fp);
+    const auto pivot = juce::Point<float> (face.getCentreX(), face.getBottom() + face.getHeight() * 0.35f);
+    const float R = face.getHeight() * 1.31f;
+    const float aMin = -0.70f, aMax = 0.70f;
+    auto angOf = [&] (float vu) { const float v = std::pow (10.f, vu / 20.f); return aMin + (aMax - aMin) * (v - 0.1f) / (1.4125f - 0.1f); };
+    // scale arcs
+    juce::Path arc; arc.addCentredArc (pivot.x, pivot.y, R * 0.80f, R * 0.80f, 0.f, aMin, aMax, true);
+    g.setColour (juce::Colour (0xff1d1a14)); g.strokePath (arc, juce::PathStrokeType (1.1f));
+    juce::Path red; red.addCentredArc (pivot.x, pivot.y, R * 0.815f, R * 0.815f, 0.f, angOf (0.f), aMax, true);
+    g.setColour (juce::Colour (0xffc8241c)); g.strokePath (red, juce::PathStrokeType (3.2f));
+    const float marks[] = { -20.f, -10.f, -7.f, -5.f, -3.f, -2.f, -1.f, 0.f, 1.f, 2.f, 3.f };
+    for (float m : marks)
+    {
+        const float a = angOf (m);
+        const bool lab = (m == -20.f || m == -10.f || m == -7.f || m == -5.f || m == -3.f || m == 0.f || m == 3.f);
+        g.setColour (m > 0.f ? juce::Colour (0xffc8241c) : juce::Colour (0xff1d1a14));
+        g.drawLine ({ pivot.getPointOnCircumference (R * 0.80f, a), pivot.getPointOnCircumference (R * (lab ? 0.89f : 0.86f), a) }, lab ? 1.4f : 1.f);
+        if (lab)
+        {
+            const auto tp = pivot.getPointOnCircumference (R * 0.96f, a);
+            g.setFont (LF::fnt (juce::jmin (10.f, face.getHeight() * 0.11f), "Bold"));
+            g.drawText (m > 0 ? "+" + juce::String ((int) m) : juce::String ((int) m), juce::Rectangle<float> (tp.x - 14.f, tp.y - 6.f, 28.f, 12.f), juce::Justification::centred);
+        }
+    }
+    g.setColour (juce::Colour (0xff1d1a14));
+    g.setFont (LF::fnt (juce::jmin (20.f, face.getHeight() * 0.22f), "ExtraBold", 0.08f));
+    g.drawText ("VU", face.withTrimmedTop (face.getHeight() * 0.50f).withHeight (face.getHeight() * 0.24f), juce::Justification::centred);
+    g.setFont (LF::fnt (juce::jmin (8.f, face.getHeight() * 0.085f), "Bold", 0.18f));
+    g.setColour (juce::Colour (0xff4a4332));
+    g.drawText ("ENOCH  PREVIEW OUTPUT", face.withTrimmedTop (face.getHeight() * 0.73f).withHeight (12.f), juce::Justification::centred);
+    // needle with its shadow on the paper
+    const float na = aMin + (aMax - aMin) * juce::jlimit (-0.03f, 1.08f, needle);
+    const auto tip = pivot.getPointOnCircumference (R * 0.93f, na), root = pivot.getPointOnCircumference (R * 0.30f, na);
+    g.setColour (juce::Colours::black.withAlpha (0.22f)); g.drawLine ({ root.translated (3.f, 4.f), tip.translated (3.f, 4.f) }, 1.6f);
+    g.setColour (juce::Colour (0xff141210)); g.drawLine ({ root, tip }, 1.4f);
+    g.setColour (juce::Colour (0xffc8241c)); g.drawLine ({ pivot.getPointOnCircumference (R * 0.82f, na), tip }, 1.4f);
+    // needle hood
+    juce::Path hood; hood.addCentredArc (pivot.x, pivot.y, R * 0.36f, R * 0.36f, 0.f, -1.6f, 1.6f, true); hood.lineTo (pivot); hood.closeSubPath();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff3a3c41), pivot.x, pivot.y - R * 0.36f, juce::Colour (0xff111214), pivot.x, pivot.y, false));
+    g.fillPath (hood);
+    // peak lamp
+    LF::led (g, { face.getRight() - 10.f, face.getY() + 10.f }, 3.5f, juce::Colour (0xffff3b30), peakLamp > 0);
+    // glass
+    g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.28f), face.getX(), face.getY(), juce::Colours::white.withAlpha (0.f), face.getX() + face.getWidth() * 0.55f, face.getY() + face.getHeight() * 0.6f, false));
+    juce::Path gl; gl.startNewSubPath (face.getX(), face.getY()); gl.lineTo (face.getX() + face.getWidth() * 0.72f, face.getY()); gl.lineTo (face.getX(), face.getBottom() * 0.98f); gl.closeSubPath();
+    g.fillPath (gl);
+    // inner shadow of the window
+    juce::Path ring; ring.addRectangle (face.expanded (10.f)); ring.addRoundedRectangle (face, 4.f); ring.setUsingNonZeroWinding (false);
+    juce::DropShadow (juce::Colours::black.withAlpha (0.85f), 7, { 1, 3 }).drawForPath (g, ring);
 }
 
 void DragPad::mouseDrag (const juce::MouseEvent& e)
@@ -40,7 +144,7 @@ namespace
 void styleLabel (juce::Label& l, const juce::String& t, juce::Component& parent)
 {
     l.setText (t, juce::dontSendNotification);
-    l.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
+    l.setFont (LF::fnt (10.5f, "SemiBold", 0.09f));
     l.setColour (juce::Label::textColourId, LF::dim());
     l.setJustificationType (juce::Justification::centredLeft);
     parent.addAndMakeVisible (l);
@@ -59,6 +163,12 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
 {
     setLookAndFeel (&laf);
     juce::Component::addAndMakeVisible (body);
+    body.addChildComponent (advBg);
+    advBg.paintFn = [this] (juce::Graphics& g)
+    {
+        auto b = advBg.getLocalBounds().toFloat().reduced (3.f);
+        LF::plate (g, b, texPlate(), 7.f, true);
+    };
     body.paintFn = [this] (juce::Graphics& g) { paintBody (g); };
     auto& A = proc.apvts;
     photo = juce::ImageFileFormat::loadFrom (EnochPhoto::data, (size_t) EnochPhoto::size);
@@ -68,6 +178,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     {
         auto* b = instButtons.add (new juce::TextButton (i == I_Bass ? "BASS GUITAR" : instName (i)));
         b->setClickingTogglesState (false);
+        b->getProperties().set ("seg", true);
         b->setTooltip ("Enoch Bass writes bass guitar lines");
         addAndMakeVisible (*b);
         b->setVisible (i == I_Bass);
@@ -265,6 +376,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
 
     play.setTooltip ("Audition the bass line with the built-in test player (or press play in your DAW)");
     play.onClick = [this] { proc.setInternalPlaying (! proc.isInternalPlaying()); };
+    play.getProperties().set ("icon", "play");
     addAndMakeVisible (play);
     saveBtn.onClick = [this] { saveMidi(); };
     saveBtn.setTooltip ("Save the MIDI file anywhere (you can also drag it)");
@@ -411,6 +523,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     adv (ksBase, "ksBase", "MIDI note of the first articulation key-switch (24 = C0). Match your sample library.");
     adv (bendRange, "bendRange", "Pitch-bend range (semitones) set in your target instrument");
     adv (volume, "volume", "Test player volume");
+    volume.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100.0)) + "%"; }; volume.updateText();
     styleLabel (lKs, "KEY-SWITCH BASE NOTE", body); styleLabel (lBend, "PITCH-BEND RANGE", body); styleLabel (lVol, "PLAYER VOLUME", body);
     for (auto* l : { &lKs, &lBend, &lVol }) l->setVisible (false);
     ksText.setFont (juce::Font (juce::FontOptions (12.f))); ksText.setColour (juce::Label::textColourId, LF::dim());
@@ -430,13 +543,51 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     chordBox.onFocusLost = [this] { if (chordBox.getText().trim() != proc.getChordText()) proc.setChordText (chordBox.getText()); };
     addAndMakeVisible (chordBox);
 
+    // ---- built-in preview sound (modelled pianos, e-pianos, B3, Prophet-style synths, Strat / Tele / Les Paul, saxes, basses ...)
+    styleLabel (lSound, "PREVIEW SOUND", body);
+    soundBox.setJustificationType (juce::Justification::centredLeft);
+    soundBox.setTooltip ("The sound the built-in test player uses for this instrument: concert / studio / upright / felt grands, Rhodes, Wurlitzer, FM e-piano, "
+                         "clavinet, Hammond B3, Prophet-5 style synths, Stratocaster / Telecaster / Les Paul / hollow-body / acoustic guitars, tenor / alto / soprano / "
+                         "baritone sax, trumpet / flugelhorn / muted trumpet, violin / viola / cello, and P / Jazz / slap / fretless / upright / synth / 808 / log drum basses.\n"
+                         "They are modelled (not samples): great for auditioning, while your own instrument gets the MIDI. "
+                         "A loaded one-shot or SoundFont (Advanced) takes priority when switched on. Only the preview changes - the MIDI is the same.");
+    soundBox.onChange = [this]
+    {
+        if (updatingUi || soundBox.getSelectedId() <= 0) return;
+        const int inst = juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load());
+        const juce::String id = "sound" + juce::String (inst);
+        if (auto* pr = proc.apvts.getParameter (id))
+            pr->setValueNotifyingHost (pr->convertTo0to1 ((float) (soundBox.getSelectedId() - 1)));
+    };
+    addAndMakeVisible (soundBox);
+
+    // ---- hardware knobs: the main sound-shaping controls (drag up / down, Shift = fine, double-click = default, wheel = step)
+    makeHardwareKnob (intensity, "intensity", "CALM", "FIERY", 0);
+    makeHardwareKnob (busyG, "busy", "LAZY", "RAPID", 0);
+    makeHardwareKnob (space, "space", "BUSY", "AIRY", 0);
+    makeHardwareKnob (repeat, "repeat", "NEW", "RIFFS", 0);
+    makeHardwareKnob (grooveAmt, "grooveAmount", "FREE", "LOCKED", 0);
+    makeHardwareKnob (octave, "octave", "-2", "+2", 1);
+    makeHardwareKnob (trClean, "trClean", "ALL", "CLEAN", 0);
+    lClean.setText ("CLEANUP", juce::dontSendNotification);
+    for (auto* k : { &hTiming, &hVel, &hLength, &hFeel }) makeHardwareKnob (*k, nullptr, "", "", 0);
+    for (auto* l : { &lIntensity, &lBusy, &lSpace, &lRepeat, &lGroove, &lOct, &lClean }) { l->setJustificationType (juce::Justification::centred); l->setColour (juce::Label::textColourId, LF::text()); l->setFont (LF::fnt (10.5f, "Bold", 0.10f)); }
+    lIntensity.setText ("INTENSITY", juce::dontSendNotification); lBusy.setText ("BUSY", juce::dontSendNotification);
+    lSpace.setText ("SPACE", juce::dontSendNotification); lRepeat.setText ("REPEAT", juce::dontSendNotification);
+    lGroove.setText ("GROOVE LOCK", juce::dontSendNotification); lOct.setText ("OCTAVE", juce::dontSendNotification);
+
+    vu.src = &proc.outLevel;
+    addAndMakeVisible (vu);
     addAndMakeVisible (roll); addAndMakeVisible (drag);
     rollGrow = proc.uiRollGrow;
+    roll.setLaneHeight (proc.uiLaneH);
+    roll.onLaneHeightChanged = [this] (float h) { proc.uiLaneH = h; };
     rollGrip.getGrow = [this] { return rollGrow; };
     rollGrip.setGrow = [this] (int v) { applyRollGrow (v); };
     rollGrip.setTooltip ("Drag up to make the piano roll taller (the rows above it slide out of the way), drag down to bring them back. Double-click to reset.");
     addAndMakeVisible (rollGrip);
     refreshArtists();
+    refreshSounds();
     refreshBarPanel();
     applyTheme (juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load()));
     setResizable (true, false);                       // our own edge / corner handles do the resizing (all four edges and corners)
@@ -509,14 +660,57 @@ void EnochSoloEditor::applyTheme (int inst)
     tryAnother.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
     refLoad.setColour (juce::TextButton::buttonColourId, laf.theme.accent);
     refLoad.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
-    learnBtn.setColour (juce::TextButton::buttonColourId, laf.theme.accent.withAlpha (0.85f));
-    learnBtn.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
-    songBtn.setColour (juce::TextButton::buttonColourId, laf.theme.accent.withAlpha (0.85f));
-    songBtn.setColour (juce::TextButton::textColourOffId, juce::Colours::black);
+    learnBtn.setColour (juce::TextButton::buttonColourId, laf.theme.panel2);
+    learnBtn.setColour (juce::TextButton::textColourOffId, laf.theme.accent);
+    songBtn.setColour (juce::TextButton::buttonColourId, laf.theme.panel2);
+    songBtn.setColour (juce::TextButton::textColourOffId, laf.theme.accent);
     liveBtn.setColour (juce::TextButton::buttonOnColourId, laf.theme.accent);
     liveBtn.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
     sendLookAndFeelChange();
     repaint();
+}
+
+void EnochSoloEditor::makeHardwareKnob (juce::Slider& s, const char* paramId, const char* lo, const char* hi, int fmt)
+{
+    s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    s.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    s.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+    s.setMouseDragSensitivity (230);                                                    // a full turn = 230 px of mouse travel
+    s.setVelocityModeParameters (0.4, 1, 0.0, true, juce::ModifierKeys::shiftModifier); // hold Shift for fine adjustment
+    s.getProperties().set ("lcd", true);
+    s.getProperties().set ("lo", lo); s.getProperties().set ("hi", hi);
+    juce::RangedAudioParameter* p = nullptr;
+    if (paramId != nullptr) p = proc.apvts.getParameter (paramId);
+    else for (auto* a : proc.getParameters())                                          // the humanize knobs are already attached: find their parameter by name
+        if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (a))
+            if ((&s == &hTiming && rp->getParameterID() == "hTiming") || (&s == &hVel && rp->getParameterID() == "hVel")
+                || (&s == &hLength && rp->getParameterID() == "hLength") || (&s == &hFeel && rp->getParameterID() == "hFeel")) p = rp;
+    if (p != nullptr) s.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
+    if (fmt == 1) s.textFromValueFunction = [] (double v) { const int o = juce::roundToInt (v); return o > 0 ? "+" + juce::String (o) : juce::String (o); };
+    else          s.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100.0)) + "%"; };
+    s.updateText();
+}
+
+void EnochSoloEditor::refreshSounds()
+{
+    const int inst = juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load());
+    const auto& list = enochsolo::snd::patchList (inst);
+    const auto* pr = proc.apvts.getRawParameterValue ("sound" + juce::String (inst));
+    const int cur = pr != nullptr ? juce::jlimit (0, (int) list.size() - 1, juce::roundToInt (pr->load())) : 0;
+    if (soundBox.getNumItems() != (int) list.size() || soundBox.getItemText (0) != juce::String (list[0].name))
+    {
+        updatingUi = true;
+        soundBox.clear (juce::dontSendNotification);
+        juce::String lastGroup;
+        for (size_t i = 0; i < list.size(); ++i)
+        {
+            const juce::String grp (list[i].group);
+            if (grp.isNotEmpty() && grp != lastGroup) { soundBox.addSectionHeading (grp); lastGroup = grp; }
+            soundBox.addItem (list[i].name, (int) i + 1);
+        }
+        updatingUi = false;
+    }
+    if (soundBox.getSelectedId() != cur + 1) { updatingUi = true; soundBox.setSelectedId (cur + 1, juce::dontSendNotification); updatingUi = false; }
 }
 
 void EnochSoloEditor::refreshArtists()
@@ -615,6 +809,7 @@ void EnochSoloEditor::timerCallback()
     { updatingUi = true; artist.setSelectedItemIndex (juce::jlimit (0, artist.getNumItems() - 1, a), juce::dontSendNotification); updatingUi = false; }
     for (int i = 0; i < instButtons.size(); ++i) instButtons[i]->setToggleState (i == inst, juce::dontSendNotification);
     refreshKeySwitchText();
+    refreshSounds();
 
     if (presetBox.getSelectedItemIndex() != proc.getCurrentProgram())
     { updatingUi = true; presetBox.setSelectedItemIndex (proc.getCurrentProgram(), juce::dontSendNotification); updatingUi = false; }
@@ -898,108 +1093,147 @@ void EnochSoloEditor::saveMidi()
 
 void EnochSoloEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (LF::of (*this).bg);
+    g.fillAll (juce::Colour (0xff0c0c0d));
+}
+
+void EnochSoloEditor::renderChassis()
+{
+    const auto& T = LF::of (*this);
+    const float sc = juce::jlimit (1.f, 3.f, juce::Component::getApproximateScaleFactorForComponent (&body));
+    const int W = body.getWidth(), H = body.getHeight();
+    juce::String key; key << W << "x" << H << "@" << sc << T.accent.toString() << sideRect.toString() << headRect.toString() << deckRect.toString()
+                         << toolRect.toString() << footRect.toString() << roll.getBounds().toString() << barPanelRect.toString() << photoRect.toString() << titleRect.toString();
+    if (key == chassisKey && chassis.isValid()) return;
+    chassisKey = key;
+    chassis = juce::Image (juce::Image::ARGB, juce::jmax (1, (int) std::ceil ((float) W * sc)), juce::jmax (1, (int) std::ceil ((float) H * sc)), true);
+    juce::Graphics g (chassis);
+    g.addTransform (juce::AffineTransform::scale (sc));
+    const auto full = juce::Rectangle<float> (0.f, 0.f, (float) W, (float) H);
+
+    // the faceplate sheet
+    g.drawImage (texSheet(), full, juce::RectanglePlacement::stretchToFit);
+    g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.05f), 0.f, 0.f, juce::Colours::black.withAlpha (0.35f), full.getRight(), full.getBottom(), false));
+    g.fillRect (full);
+    // walnut end cheeks
+    for (int side = 0; side < 2; ++side)
+    {
+        auto wr = side == 0 ? full.withWidth ((float) kWood) : full.withLeft (full.getRight() - (float) kWood);
+        g.drawImage (texWood(), wr, juce::RectanglePlacement::stretchToFit);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.16f), wr.getX(), 0.f, juce::Colours::black.withAlpha (0.45f), wr.getRight(), 0.f, false));
+        g.fillRect (wr);
+        g.setColour (juce::Colours::black.withAlpha (0.8f)); g.fillRect (side == 0 ? wr.getRight() - 1.f : wr.getX(), 0.f, 1.f, full.getHeight());
+        g.setColour (juce::Colours::white.withAlpha (0.12f)); g.fillRect (side == 0 ? wr.getRight() : wr.getX() - 1.f, 0.f, 1.f, full.getHeight());
+    }
+    // sidebar: black anodised module
+    LF::plate (g, sideRect.toFloat(), texBlack(), 8.f, true);
+    // nameplate badge + framed portrait
+    {
+        auto badge = titleRect.toFloat().expanded (4.f, 2.f);
+        LF::plate (g, badge, texBadge(), 5.f, false, -0.02f);
+        auto tr = titleRect.toFloat().reduced (6.f, 4.f);
+        LF::engrave (g, "ENOCH", tr.removeFromTop (27.f), LF::fnt (25.f, "ExtraBold", 0.06f), juce::Justification::bottomLeft, juce::Colour (0xff2a2c31));
+        {
+            auto sr = tr.removeFromTop (28.f);
+            LF::recess (g, sr.withWidth (juce::jmin (sr.getWidth(), 92.f)).expanded (2.f, 0.f), 3.f, juce::Colour (0xff0a0b0c), true);
+            LF::ledText (g, "BASS", sr.withWidth (juce::jmin (sr.getWidth(), 92.f)), LF::fnt (21.f, "ExtraBold", 0.12f), juce::Justification::centred, T.accent);
+        }
+        tr.removeFromTop (3.f);
+        LF::engrave (g, "SMART BASS GENERATOR", tr.removeFromTop (12.f), LF::fnt (7.6f, "Bold", 0.06f), juce::Justification::centredLeft, juce::Colour (0xff3b3e44));
+        LF::engrave (g, "@enochsings", tr.removeFromTop (14.f), LF::fnt (10.5f, "Bold", 0.02f), juce::Justification::centredLeft, juce::Colour (0xff2a2c31));
+    }
+    if (photo.isValid())
+    {
+        auto pr = photoRect.toFloat();
+        LF::recess (g, pr.expanded (4.f), 6.f, juce::Colour (0xff050506), false);
+        juce::Path rp; rp.addRoundedRectangle (pr, 4.f);
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (rp);
+            g.drawImage (photo, pr, juce::RectanglePlacement::fillDestination | juce::RectanglePlacement::xMid | juce::RectanglePlacement::yTop);
+            // glass over the photo
+            g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.20f), pr.getX(), pr.getY(), juce::Colours::white.withAlpha (0.f), pr.getCentreX(), pr.getCentreY(), false));
+            g.fillRect (pr);
+        }
+        g.setColour (juce::Colours::black.withAlpha (0.8f)); g.strokePath (rp, juce::PathStrokeType (1.f));
+    }
+    // instrument selector tray
+    LF::recess (g, headRect.toFloat(), 7.f, juce::Colour (0xff111214), false);
+    // main control plates
+    if (! deckRect.isEmpty()) LF::plate (g, deckRect.toFloat(), texPlate(), 7.f, true);
+    LF::plate (g, toolRect.toFloat(), texPlate(), 7.f, true);
+    LF::plate (g, footRect.toFloat(), texPlate(), 7.f, true);
+    // the piano-roll screen: a heavy bezel with screws
+    {
+        auto bz = roll.getBounds().toFloat().expanded (9.f);
+        LF::plate (g, bz, texBlack(), 9.f, false, 0.02f);
+        const float s = 4.5f;
+        for (auto p : { bz.getTopLeft() + juce::Point<float> (s, s), bz.getTopRight() + juce::Point<float> (-s, s), bz.getBottomLeft() + juce::Point<float> (s, -s), bz.getBottomRight() + juce::Point<float> (-s, -s) })
+            LF::screw (g, p, 2.6f, p.x * 0.01f);
+        LF::recess (g, roll.getBounds().toFloat().expanded (2.f), 6.f, juce::Colour (0xff060708), false);
+    }
+    // bar panel: a recessed strip in the editor plate
+    LF::recess (g, barPanelRect.toFloat(), 6.f, juce::Colour (0xff17181b), false);
 }
 
 void EnochSoloEditor::paintBody (juce::Graphics& g)
 {
     const auto& T = LF::of (*this);
-    g.fillAll (T.bg);
+    renderChassis();
+    if (chassis.isValid()) g.drawImage (chassis, body.getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
 
-    // sidebar card
-    auto side = juce::Rectangle<float> (10.f, 8.f, 274.f, (float) body.getHeight() - 16.f);
-    g.setColour (T.panel); g.fillRoundedRectangle (side, 14.f);
-
-    // logo (square portrait) + title
-    if (photo.isValid())
-    {
-        juce::Path rp; rp.addRoundedRectangle (photoRect.toFloat(), 14.f);
-        {
-            juce::Graphics::ScopedSaveState ss (g);
-            g.reduceClipRegion (rp);
-            g.drawImage (photo, photoRect.toFloat(), juce::RectanglePlacement::fillDestination | juce::RectanglePlacement::xMid | juce::RectanglePlacement::yTop);
-        }
-        g.setColour (T.accent); g.strokePath (rp, juce::PathStrokeType (2.f));
-    }
-    {
-        auto tr = titleRect;
-        g.setColour (T.accent); g.setFont (juce::Font (juce::FontOptions (23.f, juce::Font::bold)));
-        g.drawText ("ENOCH BASS", tr.removeFromTop (30), juce::Justification::centredLeft);
-        g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (11.f)));
-        g.drawFittedText ("smart bass-line generator", tr.removeFromTop (30), juce::Justification::topLeft, 2, 0.9f);
-        g.setColour (T.accent); g.setFont (juce::Font (juce::FontOptions (12.5f, juce::Font::bold)));
-        g.drawText ("@enochsings", tr.removeFromTop (18), juce::Justification::centredLeft);
-        const juce::Colour cols[3] = { LF::green(), T.accent, LF::red() };
-        for (int i = 0; i < 3; ++i) { g.setColour (cols[i]); g.fillRect (titleRect.getX() + i * 26, titleRect.getBottom() - 3, 24, 3); }
-    }
-
-    // artist card
+    // artist display
     {
         const int inst = juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load());
         const int a = juce::roundToInt (proc.apvts.getRawParameterValue ("artist")->load());
         const auto& style = styleFor (inst, a);
         auto c = cardRect.toFloat();
-        g.setColour (T.panel2); g.fillRoundedRectangle (c, 10.f);
-        auto in = cardRect.reduced (12, 8);
-        g.setColour (T.accent); g.setFont (juce::Font (juce::FontOptions (17.f, juce::Font::bold)));
-        g.drawText (juce::String (style.name), in.removeFromTop (22), juce::Justification::centredLeft);
-        g.setColour (LF::green()); g.setFont (juce::Font (juce::FontOptions (11.5f, juce::Font::bold)));
-        g.drawText (juce::String (style.cat).toUpperCase(), in.removeFromTop (16), juce::Justification::centredLeft);
-        in.removeFromTop (3);
-        g.setColour (LF::text()); g.setFont (juce::Font (juce::FontOptions (12.5f)));
-        auto best = in.removeFromBottom (style.fav.empty() ? 0 : 32);
-        g.drawFittedText (juce::String (style.desc), in, juce::Justification::topLeft, 4, 0.9f);
+        LF::recess (g, c, 6.f, juce::Colour (0xff0a0b0c).interpolatedWith (T.accent, 0.04f));
+        auto in = cardRect.reduced (12, 8).toFloat();
+        LF::ledText (g, juce::String (style.name), in.removeFromTop (22.f), LF::fnt (16.5f, "Bold"), juce::Justification::centredLeft, laf.lcdText());
+        LF::ledText (g, juce::String (style.cat).toUpperCase(), in.removeFromTop (14.f), LF::fnt (9.5f, "Bold", 0.12f), juce::Justification::centredLeft, T.accent.withAlpha (0.75f));
+        in.removeFromTop (4.f);
+        auto best = in.removeFromBottom (style.fav.empty() ? 0.f : 28.f);
+        g.setColour (LF::text().withAlpha (0.86f)); g.setFont (LF::fnt (12.f));
+        g.drawFittedText (juce::String (style.desc), in.toNearestInt(), juce::Justification::topLeft, 4, 0.9f);
         if (! style.fav.empty())
         {
-            g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (11.5f)));
-            g.drawFittedText ("Best with: " + juce::String (style.fav), best, juce::Justification::bottomLeft, 2, 0.9f);
+            g.setColour (LF::dim()); g.setFont (LF::fnt (10.5f, "Medium"));
+            g.drawFittedText ("Best with: " + juce::String (style.fav), best.toNearestInt(), juce::Justification::bottomLeft, 2, 0.9f);
         }
     }
 
     // captions under the humanize knobs
-    g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (10.5f, juce::Font::bold)));
-    auto cap = [&] (juce::Slider& sl, const char* t) { auto b = sl.getBounds(); g.drawText (t, b.getX() - 10, b.getBottom() + 1, b.getWidth() + 20, 14, juce::Justification::centred); };
+    auto cap = [&] (juce::Slider& sl, const char* t) { auto b = sl.getBounds().toFloat(); LF::ink (g, t, { b.getX() - 14.f, b.getBottom() + 1.f, b.getWidth() + 28.f, 13.f }, LF::fnt (9.f, "Bold", 0.10f), juce::Justification::centred); };
     cap (hTiming, "TIMING"); cap (hVel, "VELOCITY"); cap (hLength, "LENGTH"); cap (hFeel, "FEEL");
 
-    // style reference drop box
+    // style reference drop window
     {
         auto b = refRect.toFloat().reduced (1.f);
-        g.setColour (dropHover ? T.accent.withAlpha (0.28f) : T.panel2); g.fillRoundedRectangle (b, 9.f);
-        juce::Path dash; dash.addRoundedRectangle (b, 9.f);
-        juce::Path stroked; const float dl[] = { 5.f, 4.f };
-        juce::PathStrokeType (1.3f).createDashedStroke (stroked, dash, dl, 2);
-        g.setColour (dropHover ? T.accent : T.border.brighter (0.35f)); g.fillPath (stroked);
-        auto in = refRect.reduced (10, 4);
+        LF::recess (g, b, 6.f, juce::Colour (0xff0a0b0c).interpolatedWith (T.accent, dropHover ? 0.2f : 0.f));
+        juce::Path shape; shape.addRoundedRectangle (b.reduced (3.f), 4.f);
+        juce::Path stroked; const float dl[] = { 4.f, 4.f };
+        juce::PathStrokeType (1.f).createDashedStroke (stroked, shape, dl, 2);
+        g.setColour (T.accent.withAlpha (dropHover ? 0.9f : 0.35f)); g.fillPath (stroked);
+        auto in = refRect.reduced (12, 6).toFloat();
         if (refMsg.isNotEmpty())
-        {
-            g.setColour (refMsg.startsWith ("Analysing") ? T.accent : LF::red()); g.setFont (juce::Font (juce::FontOptions (11.5f)));
-            g.drawFittedText (refMsg, in, juce::Justification::centredLeft, 3, 0.9f);
-        }
+            LF::ledText (g, refMsg, in, LF::fnt (11.f, "Medium"), juce::Justification::centredLeft, refMsg.startsWith ("Analysing") ? T.accent : LF::red(), 3);
         else if (proc.hasReference())
         {
-            g.setColour (T.accent); g.setFont (juce::Font (juce::FontOptions (13.f, juce::Font::bold)));
-            g.drawText (proc.referenceName(), in.removeFromTop (18), juce::Justification::centredLeft, true);
-            g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (11.f)));
-            g.drawFittedText (proc.referenceSummary(), in, juce::Justification::topLeft, 2, 0.9f);
+            LF::ledText (g, proc.referenceName(), in.removeFromTop (18.f), LF::fnt (12.5f, "Bold"), juce::Justification::centredLeft, laf.lcdText());
+            g.setColour (LF::text().withAlpha (0.75f)); g.setFont (LF::fnt (10.5f));
+            g.drawFittedText (proc.referenceSummary(), in.toNearestInt(), juce::Justification::topLeft, 2, 0.9f);
         }
         else
         {
-            g.setColour (LF::text()); g.setFont (juce::Font (juce::FontOptions (13.5f, juce::Font::bold)));
-            g.drawText ("DROP AUDIO / MIDI HERE", in.removeFromTop (20), juce::Justification::centred);
-            g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (11.f)));
-            g.drawFittedText ("a bass line recording sets the rhythm and feel", in, juce::Justification::centredTop, 2, 0.9f);
+            LF::ledText (g, "DROP AUDIO / MIDI HERE", in.removeFromTop (19.f), LF::fnt (12.f, "Bold", 0.08f), juce::Justification::centred, laf.lcdText());
+            g.setColour (LF::text().withAlpha (0.6f)); g.setFont (LF::fnt (10.5f));
+            g.drawFittedText ("a bass line recording sets the rhythm and feel", in.toNearestInt(), juce::Justification::centredTop, 2, 0.9f);
         }
     }
-
-    // thin accent frame around the bar panel
-    g.setColour (T.panel2); g.fillRoundedRectangle (barPanelRect.toFloat(), 8.f);
-    g.setColour (T.border); g.drawRoundedRectangle (barPanelRect.toFloat().reduced (0.5f), 8.f, 1.f);
 }
 
 namespace
 {
-constexpr float kBaseW = 1180.f, kBaseH = 860.f;
-constexpr int kEdge = 8;
 
 /** lay a row of components left to right; width 0 + null = gap. Shrinks everything a little when the row is too narrow. */
 void rowLayout (juce::Rectangle<int> r, std::initializer_list<std::pair<juce::Component*, int>> items, int vInset = 0)
@@ -1031,12 +1265,13 @@ void EnochSoloEditor::resized()
 
 void EnochSoloEditor::layoutBody()
 {
-    auto area = body.getLocalBounds().reduced (6, 4);
+    auto area = body.getLocalBounds().reduced (kWood + 8, 8);
     const int H = body.getHeight();
 
     // ---- sidebar
-    auto s = area.removeFromLeft (266).reduced (4, 4);
-    area.removeFromLeft (14);
+    sideRect = area.removeFromLeft (274).reduced (2, 2);
+    auto s = sideRect.reduced (14, 14);
+    area.removeFromLeft (12);
     {
         auto top = s.removeFromTop (92);
         photoRect = top.removeFromLeft (92);                  // the portrait is a square logo
@@ -1052,10 +1287,10 @@ void EnochSoloEditor::layoutBody()
     humanize.setBounds (hrow.removeFromLeft (124)); hrow.removeFromLeft (6); reHumanize.setBounds (hrow);
     s.removeFromTop (8);
     {
-        auto kr = s.removeFromTop (50);
+        auto kr = s.removeFromTop (68);
         const int kw = kr.getWidth() / 4;
         for (auto* k : { &hTiming, &hVel, &hLength, &hFeel })
-            k->setBounds (kr.removeFromLeft (kw).withSizeKeepingCentre (46, 46));
+            k->setBounds (kr.removeFromLeft (kw).withSizeKeepingCentre (juce::jmin (kw - 2, 60), 66));
     }
     s.removeFromTop (20);
     // style reference: the Load button sits right under the humanize controls
@@ -1089,7 +1324,10 @@ void EnochSoloEditor::layoutBody()
     s.removeFromTop (4);
     learnBtn.setBounds (s.removeFromTop (28));
     s.removeFromTop (6);
-    status.setBounds (s.removeFromTop (50));
+    status.setBounds (s.removeFromTop (44));
+    s.removeFromTop (4);
+    vu.setVisible (s.getHeight() >= 80);
+    vu.setBounds (s.removeFromTop (juce::jmin (s.getHeight(), 168)));
 
     // ---- main column
     auto r = area;
@@ -1098,11 +1336,17 @@ void EnochSoloEditor::layoutBody()
     head.removeFromRight (4);
     back.setBounds (head.removeFromRight (34).withSizeKeepingCentre (34, 30));
     head.removeFromRight (8);
+    headRect = head;
+    head = head.reduced (4, 4);
     for (int i = 0; i < I_Count; ++i) instButtons[i]->setBounds (i == I_Bass ? head.reduced (3, 0) : juce::Rectangle<int>());
-    r.removeFromTop (6);
+    r.removeFromTop (10);
+    const int deckTop = r.getY();
+    r.removeFromTop (10);
     const int upperTopY = r.getY();
     const int grow = juce::jlimit (0, 210, rollGrow);
     r.setY (r.getY() - grow); r.setHeight (r.getHeight() + grow);          // the rows above the roll slide up behind the header
+    const auto rFull = r;
+    r = r.reduced (14, 0);
 
     auto cr = r.removeFromTop (46);
     {
@@ -1121,22 +1365,23 @@ void EnochSoloEditor::layoutBody()
     }
     r.removeFromTop (4);
 
-    // sliders row
+    // knob row: the main controls as hardware knobs, then CHORDS and TRY ANOTHER
     {
-        auto tr = r.removeFromTop (46);
-        tryAnother.setBounds (tr.removeFromRight (150).reduced (2, 2));
-        tr.removeFromRight (6);
-        auto hm = tr.removeFromRight (120);
-        lHarmony.setBounds (hm.removeFromTop (16)); harmony.setBounds (hm.removeFromTop (26).reduced (3, 0));
-        auto oct = tr.removeFromRight (104);
-        lOct.setBounds (oct.removeFromTop (16)); octave.setBounds (oct.removeFromTop (26));
-        const int sw = tr.getWidth() / 4;
-        auto c1 = tr.removeFromLeft (sw).reduced (3, 0); auto c2 = tr.removeFromLeft (sw).reduced (3, 0);
-        auto c3 = tr.removeFromLeft (sw).reduced (3, 0); auto c4 = tr.reduced (3, 0);
-        lIntensity.setBounds (c1.removeFromTop (16)); intensity.setBounds (c1.removeFromTop (26));
-        lBusy.setBounds (c2.removeFromTop (16));      busyG.setBounds (c2.removeFromTop (26));
-        lSpace.setBounds (c3.removeFromTop (16));     space.setBounds (c3.removeFromTop (26));
-        lRepeat.setBounds (c4.removeFromTop (16));    repeat.setBounds (c4.removeFromTop (26));
+        auto tr = r.removeFromTop (100);
+        auto right = tr.removeFromRight (juce::jmin (250, tr.getWidth() / 3));
+        right.removeFromLeft (10);
+        lHarmony.setBounds (right.removeFromTop (16)); harmony.setBounds (right.removeFromTop (28).reduced (2, 0));
+        right.removeFromTop (10);
+        tryAnother.setBounds (right.removeFromTop (40));
+        juce::Slider* ks[] = { &intensity, &busyG, &space, &repeat, &trClean, &grooveAmt, &octave };
+        juce::Label* ls[] = { &lIntensity, &lBusy, &lSpace, &lRepeat, &lClean, &lGroove, &lOct };
+        const int kw = tr.getWidth() / 7;
+        for (int i = 0; i < 7; ++i)
+        {
+            auto col = tr.removeFromLeft (kw);
+            ls[i]->setBounds (col.removeFromTop (14));
+            ks[i]->setBounds (col.withSizeKeepingCentre (juce::jmin (kw - 6, 88), col.getHeight()));
+        }
     }
     r.removeFromTop (2);
     chordBox.setBounds (r.removeFromTop (28).reduced (3, 0));
@@ -1144,29 +1389,38 @@ void EnochSoloEditor::layoutBody()
     r.removeFromTop (2);
     {
         auto lr2 = r.removeFromTop (28);
-        lLib.setBounds (lr2.removeFromLeft (150));
-        libBox.setBounds (lr2.removeFromLeft (juce::jmin (330, lr2.getWidth() / 2)).reduced (2, 0)); lr2.removeFromLeft (6);
+        lLib.setBounds (lr2.removeFromLeft (142));
+        libBox.setBounds (lr2.removeFromLeft (juce::jmin (270, lr2.getWidth() * 2 / 5)).reduced (2, 0)); lr2.removeFromLeft (14);
+        lSound.setBounds (lr2.removeFromLeft (102));
+        soundBox.setBounds (lr2.removeFromLeft (juce::jmin (270, lr2.getWidth() * 3 / 5)).reduced (2, 0)); lr2.removeFromLeft (8);
         libInfo.setBounds (lr2);
         r.removeFromTop (3);
     }
     {
         auto sr = r.removeFromTop (28);
         songBtn.setBounds (sr.removeFromLeft (150).reduced (2, 0)); sr.removeFromLeft (6);
-        lGroove.setBounds (sr.removeFromLeft (84)); grooveAmt.setBounds (sr.removeFromLeft (96)); sr.removeFromLeft (8);
-        lClean.setBounds (sr.removeFromLeft (52)); trClean.setBounds (sr.removeFromLeft (90)); trGhostsT.setBounds (sr.removeFromLeft (70)); sr.removeFromLeft (8);
+        trGhostsT.setBounds (sr.removeFromLeft (100)); sr.removeFromLeft (8);
         lVoice2.setBounds (0, 0, 0, 0); voice2Box.setBounds (0, 0, 0, 0); lVoice2.setVisible (false); voice2Box.setVisible (false);
         lClave.setBounds (sr.removeFromLeft (46)); claveBox.setBounds (sr.removeFromLeft (110).reduced (2, 0)); sr.removeFromLeft (6);
         songInfo.setBounds (sr);
         r.removeFromTop (3);
     }
 
+    // deck card ends here; the toolbar card starts
+    deckRect = juce::Rectangle<int> (rFull.getX(), deckTop, rFull.getWidth(), r.getY() + 6 - deckTop);
+    if (deckRect.getBottom() - upperTopY < 24) deckRect = {};
+    r = juce::Rectangle<int> (rFull.getX(), r.getY() + 6 + 10, rFull.getWidth(), r.getBottom() - (r.getY() + 16));
+    const auto rFull2 = r;
+    const int toolTop = r.getY();
+    r.removeFromTop (9);
+    r = r.reduced (12, 0);
     // toolbar row 1: tools / undo / edit / grid / snaps
     {
         auto tb = r.removeFromTop (28);
         lGrid.setBounds (0, 0, 0, 0);
         rowLayout (tb, { { &toolSelect, 58 }, { &toolDraw, 52 }, { &toolErase, 56 }, { &toolSplit, 52 }, { &toolMute, 54 }, { nullptr, 8 },
                          { &undoBtn, 52 }, { &redoBtn, 52 }, { &editBtn, 64 }, { nullptr, 8 },
-                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 100 }, { &snapScale, 104 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 } });
+                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 } });
         // the toggles are drawn smaller, centred in the row
         for (auto* t : { &snapGrid, &snapScale }) t->setBounds (t->getBounds().reduced (0, 4));
         gridBox.setTooltip ("Grid used for the grid lines, snapping, quantize and new-note length");
@@ -1177,7 +1431,7 @@ void EnochSoloEditor::layoutBody()
     {
         auto tb = r.removeFromTop (26);
         lZoom.setBounds (tb.removeFromLeft (42));
-        const int fixed = 38 + 36 + 150 + 104 + 104 + 24 + 64 + 110;
+        const int fixed = 38 + 36 + 150 + 116 + 24 + 64 + 124;
         const int zw = juce::jmax (80, (tb.getWidth() - fixed) / 2);
         const int zv = juce::jmax (60, zw * 3 / 4);
         lZoomT.setBounds (tb.removeFromLeft (30)); zoomH.setBounds (tb.removeFromLeft (zw).reduced (2, 0));
@@ -1186,8 +1440,8 @@ void EnochSoloEditor::layoutBody()
         auto rest = tb;
         lLane.setBounds (rest.removeFromLeft (36)); laneBox.setBounds (rest.removeFromLeft (150).reduced (2, 0));
         rest.removeFromLeft (8);
-        resetChords.setBounds (rest.removeFromLeft (104).reduced (2, 0)); chordPad.setBounds (rest.removeFromLeft (104).reduced (2, 0));
-        showScaleT.setBounds (rest.removeFromLeft (110).reduced (2, 0));
+        chordPad.setBounds (rest.removeFromLeft (116).reduced (2, 0));
+        showScaleT.setBounds (rest.removeFromLeft (124).reduced (2, 0));
     }
     r.removeFromTop (3);
     // bar panel (two lines: which bars, then the labelled BUSY slider)
@@ -1199,6 +1453,8 @@ void EnochSoloEditor::layoutBody()
         barClear.setBounds (l1.removeFromRight (76).reduced (2, 0));
         barPaste.setBounds (l1.removeFromRight (90).reduced (2, 0));
         barCopy.setBounds (l1.removeFromRight (86).reduced (2, 0));
+        l1.removeFromRight (10);
+        resetChords.setBounds (l1.removeFromRight (104).reduced (2, 0));
         barInfo.setBounds (l1);
         bp.removeFromTop (2);
         auto l2 = bp.removeFromTop (24);
@@ -1208,13 +1464,22 @@ void EnochSoloEditor::layoutBody()
         lBarBusy.setBounds (l2.removeFromLeft (252));
         barBusy.setBounds (l2);
     }
-    r.removeFromTop (4);
+    r.removeFromTop (2);
+    toolRect = juce::Rectangle<int> (rFull2.getX(), toolTop, rFull2.getWidth(), r.getY() + 8 - toolTop);
+    r = juce::Rectangle<int> (rFull2.getX(), r.getY() + 8 + 10, rFull2.getWidth(), r.getBottom() - (r.getY() + 18));
 
-    auto bottom = r.removeFromBottom (62);
-    r.removeFromBottom (6);
+    auto bottom = r.removeFromBottom (72);
+    footRect = bottom;
+    bottom = bottom.reduced (12, 5);
+    r.removeFromBottom (10);
     if (advanced)
     {
-        auto ap = r.removeFromBottom (176); r.removeFromBottom (6);
+        auto drawer = r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236));      // a drawer over the lower part of the roll: the roll keeps its size
+        advBg.setBounds (drawer);
+        auto ap = drawer.reduced (16, 10);
+        ksText.setBounds (ap.removeFromTop (30));
+        ap.removeFromTop (6);
+        ap = ap.removeFromTop (176);
         {
             auto smr = ap.removeFromBottom (30);
             smpLoadBtn.setBounds (smr.removeFromLeft (190).reduced (2, 2)); smpClearBtn.setBounds (smr.removeFromLeft (80).reduced (2, 2));
@@ -1235,19 +1500,24 @@ void EnochSoloEditor::layoutBody()
         lKs.setBounds (ap.removeFromTop (14)); ksBase.setBounds (ap.removeFromTop (22));
         lBend.setBounds (ap.removeFromTop (14)); bendRange.setBounds (ap.removeFromTop (22));
         lVol.setBounds (ap.removeFromTop (14)); volume.setBounds (ap.removeFromTop (22));
-        ksText.setBounds (juce::Rectangle<int> (r.getX(), r.getBottom() - 34, r.getWidth(), 34));
-        r.removeFromBottom (36);
     }
     for (auto* c : std::initializer_list<juce::Component*> { &playerOn, &hostSync, &loopT, &midiOut, &emitKS, &emitBends, &emitCC, &realize, &ksBase, &bendRange, &volume, &lKs, &lBend, &lVol, &ksText, &sfLoadBtn, &sfClearBtn, &sfOnT, &sfLabel, &smpLoadBtn, &smpClearBtn, &smpOnT, &smpRootBox, &smpLabel })
         c->setVisible (advanced);
     roll.setBounds (r);
+    advBg.setVisible (advanced);
+    if (advanced)
+    {
+        advBg.toFront (false);
+        for (auto* c : std::initializer_list<juce::Component*> { &playerOn, &hostSync, &loopT, &midiOut, &emitKS, &emitBends, &emitCC, &realize, &ksBase, &bendRange, &volume, &lKs, &lBend, &lVol, &ksText, &sfLoadBtn, &sfClearBtn, &sfOnT, &sfLabel, &smpLoadBtn, &smpClearBtn, &smpOnT, &smpRootBox, &smpLabel })
+            c->toFront (false);
+    }
     rollGrip.setBounds (r.getX(), r.getY() - 6, r.getWidth(), 12);
     rollGrip.toFront (false);
     {
         // rows that slid above the top are hidden; the others stay as they were
         std::initializer_list<juce::Component*> rows = { &lArtist, &artist, &lKey, &key, &lScale, &scale, &lGenre, &genre, &lTs, &timeSig, &lBars, &bars,
             &tryAnother, &lHarmony, &harmony, &lOct, &octave, &lIntensity, &intensity, &lBusy, &busyG, &lSpace, &space, &lRepeat, &repeat,
-            &chordBox, &hint, &lLib, &libBox, &libInfo, &songBtn, &lGroove, &grooveAmt, &lClean, &trClean, &trGhostsT, &lClave, &claveBox, &songInfo };
+            &chordBox, &hint, &lLib, &libBox, &libInfo, &lSound, &soundBox, &songBtn, &lGroove, &grooveAmt, &lClean, &trClean, &trGhostsT, &lClave, &claveBox, &songInfo };
         for (auto* c : rows) if (! c->getBounds().isEmpty()) c->setVisible (c->getY() >= upperTopY - 1);
     }
 

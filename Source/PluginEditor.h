@@ -5,89 +5,8 @@
 #include <set>
 #include "PluginProcessor.h"
 
-//==============================================================================
-/** Look and feel with one colour theme per instrument (guitar = amber, sax = rose, violin = violet, piano = ice blue, trumpet = emerald). */
-struct EnochLookAndFeel : public juce::LookAndFeel_V4
-{
-    struct Theme { juce::Colour accent, bg, panel, panel2, border; };
-
-    static juce::Colour text()  { return juce::Colour (0xfff3ead9); }
-    static juce::Colour dim()   { return juce::Colour (0xff9a8f7d); }
-    static juce::Colour green() { return juce::Colour (0xff3fae6a); }
-    static juce::Colour red()   { return juce::Colour (0xffe0533d); }
-
-    static Theme makeTheme (int inst)
-    {
-        switch (inst)
-        {
-            case 1:  return { juce::Colour (0xfff0577a), juce::Colour (0xff170f12), juce::Colour (0xff22171b), juce::Colour (0xff2e2026), juce::Colour (0xff47303a) };   // sax: rose
-            case 2:  return { juce::Colour (0xffb07cff), juce::Colour (0xff120f1a), juce::Colour (0xff1b1727), juce::Colour (0xff262036), juce::Colour (0xff3a3355) };   // violin: violet
-            case 3:  return { juce::Colour (0xff4db8ff), juce::Colour (0xff0e141a), juce::Colour (0xff151e27), juce::Colour (0xff1d2a36), juce::Colour (0xff2f4356) };   // piano: ice blue
-            case 4:  return { juce::Colour (0xff3ddc97), juce::Colour (0xff0e1713), juce::Colour (0xff15231d), juce::Colour (0xff1d3128), juce::Colour (0xff2e4a3e) };   // trumpet: emerald
-            case 5:  return { juce::Colour (0xffff7a2f), juce::Colour (0xff130e0b), juce::Colour (0xff1e1511), juce::Colour (0xff2b1d16), juce::Colour (0xff45301f) };   // bass: deep orange
-            default: return { juce::Colour (0xfff2b134), juce::Colour (0xff14110f), juce::Colour (0xff1f1a16), juce::Colour (0xff2a231d), juce::Colour (0xff3d342b) };   // guitar: amber
-        }
-    }
-    static const Theme& of (const juce::Component& c)
-    {
-        if (auto* l = dynamic_cast<EnochLookAndFeel*> (&c.getLookAndFeel())) return l->theme;
-        static const Theme d = makeTheme (5);
-        return d;
-    }
-
-    Theme theme = makeTheme (5);
-
-    EnochLookAndFeel() { applyColours(); }
-    void setInstrument (int inst) { theme = makeTheme (inst); applyColours(); }
-
-    void applyColours()
-    {
-        setColour (juce::ResizableWindow::backgroundColourId, theme.bg);
-        setColour (juce::ComboBox::backgroundColourId, theme.panel2);
-        setColour (juce::ComboBox::textColourId, text());
-        setColour (juce::ComboBox::outlineColourId, theme.border);
-        setColour (juce::ComboBox::arrowColourId, theme.accent);
-        setColour (juce::PopupMenu::backgroundColourId, theme.panel);
-        setColour (juce::PopupMenu::textColourId, text());
-        setColour (juce::PopupMenu::headerTextColourId, theme.accent);
-        setColour (juce::PopupMenu::highlightedBackgroundColourId, theme.accent);
-        setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::black);
-        setColour (juce::TextButton::buttonColourId, theme.panel2);
-        setColour (juce::TextButton::buttonOnColourId, theme.accent);
-        setColour (juce::TextButton::textColourOffId, text());
-        setColour (juce::TextButton::textColourOnId, juce::Colours::black);
-        setColour (juce::Slider::thumbColourId, theme.accent);
-        setColour (juce::Slider::trackColourId, theme.accent);
-        setColour (juce::Slider::rotarySliderFillColourId, theme.accent);
-        setColour (juce::Slider::rotarySliderOutlineColourId, theme.border);
-        setColour (juce::Slider::backgroundColourId, theme.border);
-        setColour (juce::Slider::textBoxTextColourId, text());
-        setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        setColour (juce::Label::textColourId, text());
-        setColour (juce::ToggleButton::textColourId, text());
-        setColour (juce::ToggleButton::tickColourId, theme.accent);
-        setColour (juce::ScrollBar::thumbColourId, theme.accent.withAlpha (0.55f));
-        setColour (juce::TooltipWindow::backgroundColourId, theme.panel2);
-        setColour (juce::TooltipWindow::textColourId, text());
-        setColour (juce::TextEditor::backgroundColourId, theme.panel2);
-        setColour (juce::TextEditor::textColourId, text());
-        setColour (juce::TextEditor::outlineColourId, theme.border);
-        setColour (juce::TextEditor::focusedOutlineColourId, theme.accent);
-    }
-
-    void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) override
-    {
-        auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-        auto base = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : b.findColour (juce::TextButton::buttonColourId);
-        if (! b.isEnabled()) base = base.withMultipliedAlpha (0.45f);
-        if (over) base = base.brighter (0.12f);
-        if (down) base = base.darker (0.15f);
-        g.setColour (base); g.fillRoundedRectangle (r, 7.f);
-        g.setColour (theme.border); g.drawRoundedRectangle (r, 7.f, 1.f);
-    }
-
-    juce::Font getTextButtonFont (juce::TextButton&, int h) override { return juce::Font (juce::FontOptions ((float) juce::jmin (16, h * 6 / 10), juce::Font::bold)); }
-};
+#define ENOCH_DEFAULT_THEME 5
+#include "EnochLook.h"
 
 //==============================================================================
 /** Overview bar under the piano roll: drag the middle to scroll, drag either END to zoom in or out (left-right arrows show at the ends). */
@@ -127,7 +46,7 @@ public:
     {
         const bool on = isMouseOverOrDragging();
         const auto c = getLocalBounds().toFloat().getCentre();
-        g.setColour (juce::Colour (0xffff8a3d).withAlpha (on ? 0.95f : 0.35f));
+        g.setColour (EnochLookAndFeel::of (*this).accent.withAlpha (on ? 0.95f : 0.35f));
         for (int i = -2; i <= 2; ++i) g.fillEllipse (c.x + (float) i * 9.f - 1.5f, c.y - 1.5f, 3.f, 3.f);
         if (on) g.fillRect (getLocalBounds().toFloat().withSizeKeepingCentre ((float) getWidth() - 4.f, 1.f));
     }
@@ -141,6 +60,10 @@ private:
 class RollView : public juce::Component, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
+    /** height of the velocity / controller lane in pixels: drag the thin line above it (up = taller lane, down = more room for notes) */
+    void setLaneHeight (float h) { laneHpx = juce::jlimit (28.f, 900.f, h); repaint(); }
+    float getLaneHeight() const { return laneHpx; }
+    std::function<void (float)> onLaneHeightChanged;
     enum class Tool { Select = 0, Draw, Erase, Split, Mute };
 
     explicit RollView (EnochSoloProcessor& p);
@@ -206,7 +129,7 @@ private:
         float ppb = 1.f, rowH = 8.f;
     };
     double wheelAccum = 0.0;
-    enum class Drag { None, Move, Resize, Rubber, Velocity, Seek, BarSel, DrawLen, EraseNotes, MuteNotes, LaneDraw, LaneErase, Key };
+    enum class Drag { None, Move, Resize, Rubber, Velocity, Seek, BarSel, DrawLen, EraseNotes, MuteNotes, LaneDraw, LaneErase, Key, Divider };
     struct ChordClip { bool has = false; int rootPc = 0; enochsolo::Quality q = enochsolo::Quality::Min7; };
 
     void timerCallback() override;
@@ -285,6 +208,8 @@ private:
     int lastAuditioned = -1;
     bool overResize = false;
     float lastLaneX = 0;
+    float laneHpx = 96.f, laneHAtDown = 96.f; bool overDivider = false;     // height of the velocity / controller lane (drag the line above it)
+    bool nearDivider (const Geo& g, juce::Point<float> p) const;
     std::vector<enochsolo::CtrlPoint> stroke; double strokeT0 = 0, strokeT1 = 0; bool strokeLine = false; juce::Point<float> strokeStart;
     bool rightDownInLane = false;
 
@@ -296,6 +221,19 @@ private:
 
 //==============================================================================
 /** The "drag the MIDI into your track" pad. */
+/** analogue VU meter for the preview player: backlit paper face, needle with real ballistics, peak lamp */
+class VUMeter : public juce::Component, private juce::Timer
+{
+public:
+    VUMeter() { startTimerHz (40); setInterceptsMouseClicks (false, false); }
+    ~VUMeter() override { stopTimer(); }
+    std::atomic<float>* src = nullptr;
+    void paint (juce::Graphics& g) override;
+private:
+    void timerCallback() override;
+    float needle = 0.f, peakHold = 0.f; int peakLamp = 0;
+};
+
 class DragPad : public juce::Component
 {
 public:
@@ -424,9 +362,18 @@ private:
     void setBoolParam (const char* id, bool v);
 
     EnochSoloProcessor& proc;
+    juce::SharedResourcePointer<EnochFontHost> fontHost;     // embedded Inter typeface for every font in the plugin
     EnochLookAndFeel laf;
+    juce::ComboBox soundBox; juce::Label lSound;                  // built-in preview sound for the current instrument
+    void refreshSounds();
+    juce::Rectangle<int> headRect, deckRect, toolRect, footRect, sideRect;
+    VUMeter vu;
+    juce::Image chassis; juce::String chassisKey;                // the rendered hardware chassis (rebuilt when the size or colour changes)
+    void renderChassis();
+    void makeHardwareKnob (juce::Slider& s, const char* paramId, const char* lo, const char* hi, int fmt);
     juce::Image photo;
     Body body;
+    Body advBg;                                                  // the Advanced drawer that slides over the lower part of the roll
 
     juce::OwnedArray<juce::TextButton> instButtons;
     juce::ComboBox artist, key, scale, genre, timeSig, bars, mode, harmony, presetBox, gridBox, laneBox, exportBox, refTempoBox, refShiftBox, myStyleBox, startBarBox, voice2Box, claveBox, libBox;

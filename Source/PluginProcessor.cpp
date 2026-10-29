@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "PluginEditor.h"
+#include "Sounds.h"
 #include "Engine/ChordDetect.h"
 #include "Engine/Transcribe.h"
 
@@ -116,6 +117,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
     }
     flt ("volume", "Player Volume", 0.f, 1.f, 0.75f);
     flt ("reverb", "Player Reverb", 0.f, 1.f, 0.25f);
+    // built-in preview sound, one choice per instrument (Concert grand, Rhodes, Prophet-5, Stratocaster, Tenor sax, P-Bass ...)
+    for (int i : { 5 })
+    {
+        juce::StringArray names; for (auto& pt : enochsolo::snd::patchList (i)) names.add (pt.name);
+        const juce::String id = "sound" + juce::String (i);
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { id, 1 }, juce::String ("Preview Sound (") + instName (i) + ")", names, 0,
+                                                             juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+    }
     return l;
 }
 
@@ -893,6 +902,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const auto& st = styleFor (inst, juce::jlimit (0, std::max (0, maxArtists() - 1), getI (apvts, "artist")));
     if (inst != lastInstrument) { player.reset(); lastInstrument = inst; }
     player.setInstrument (inst, st.variant);
+    if (auto* sp = apvts.getRawParameterValue ("sound" + juce::String (inst))) player.setSound ((int) std::lround (sp->load()));
     player.setKeySwitches (getI (apvts, "ksBase"), getI (apvts, "bendRange"));
     {
         const auto& ll = getLibraries (inst);
@@ -934,6 +944,21 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             for (int nt = 0; nt < 128; ++nt)
                 if (heldOut[ch][nt]) { genBuffer.addEvent (juce::MidiMessage::noteOff (ch + 1, nt), 0); heldOut[ch][nt] = false; }
     };
+    // a new pattern arrived (a knob was moved, notes edited, regenerated): notes and the sustain pedal of the old pattern would
+    // otherwise never get their note-off / pedal-up, which is what left piano notes ringing on
+    if (audioSnap.get() != (const void*) lastPlayedSnap)
+    {
+        if (lastPlayedSnap != nullptr && wasRunning)
+        {
+            player.allNotesOff();
+            if (sendMidiOut || wasSendingOut)
+            {
+                flushHeld();
+                for (int ch = 1; ch <= 16; ++ch) genBuffer.addEvent (juce::MidiMessage::controllerEvent (ch, 64, 0), 0);
+            }
+        }
+        lastPlayedSnap = audioSnap.get();
+    }
 
     if (audioSnap && running)
     {
@@ -998,6 +1023,11 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (pos < n) player.render (buffer, pos, n - pos);
     }
 
+    {
+        float lv = 0.f;
+        if (getB (apvts, "playerOn")) for (int c = 0; c < juce::jmin (2, buffer.getNumChannels()); ++c) lv = juce::jmax (lv, buffer.getRMSLevel (c, 0, n));
+        outLevel.store (lv);
+    }
     // ---------------------------------------------------------------- MIDI out
     if (! sendMidiOut && wasSendingOut) flushHeld();               // switched off while notes were sounding
     midi.clear();
@@ -1048,6 +1078,7 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
     }
     state.setProperty ("smpPath", bassSamplePath, nullptr);
     state.setProperty ("uiRollGrow", uiRollGrow, nullptr);
+    state.setProperty ("uiLaneH", uiLaneH, nullptr);
     if (grooveProfile && grooveProfile->valid())
     {
         state.setProperty ("grvName", juce::String (grooveProfile->name), nullptr);
@@ -1151,6 +1182,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
         }
     }
     uiRollGrow = juce::jlimit (0, 400, (int) vt.getProperty ("uiRollGrow", 0));
+    uiLaneH = juce::jlimit (28.f, 900.f, (float) (double) vt.getProperty ("uiLaneH", 96.0));
     bassSamplePath = vt.getProperty ("smpPath").toString();
     if (bassSamplePath.isNotEmpty() && juce::File (bassSamplePath).existsAsFile()) { juce::String m; auto s = loadBassSample_ (juce::File (bassSamplePath), m); player.smp.setSample (s); if (! s) bassSamplePath = juce::String(); }
     else { player.smp.setSample (nullptr); bassSamplePath = juce::String(); }

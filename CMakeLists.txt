@@ -8,7 +8,7 @@ endif()
 # static MSVC runtime: the plugin runs on any Windows PC without installing redistributables
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
 
-project(EnochBass VERSION 1.3.0 LANGUAGES C CXX)
+project(EnochBass VERSION 1.5.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

@@ -60,9 +60,9 @@ Press Advanced. The built-in player has three sounds: the built-in bass, a **Sou
 Piano roll with tools, grid, snap, quantize, velocity / bend / mod lanes, undo, phrase locking, My Styles (save your own and learn from a line), humanize, SoundFont preview in Advanced, resizable window, and project save/restore.
 
 ## Limits
-- This Windows build is made by GitHub Actions; it could not be compiled or heard in the environment where it was written (logic, MIDI and the screen were tested there, not the sound).
+- This Windows build is made by GitHub Actions. Where it was written, the plugin code was compiled with the same JUCE version (on Linux), its screen was rendered and its audio was measured, but nobody listened to it there: judge the sounds by ear.
 - Musical quality is by design, not judged by ear: listen and use TRY ANOTHER, busy and style to steer.
-- Audio chord detection is approximate; the bass sound in the built-in test player is only a stand-in for EZbass.
+- Audio chord detection is approximate; the built-in bass sounds are models for auditioning; EZbass or your own library gives the final sound.
 
 
 ## What is new in v1.3
@@ -71,3 +71,21 @@ Piano roll with tools, grid, snap, quantize, velocity / bend / mod lanes, undo, 
 - **Mouse wheel** inside the roll scrolls up and down. Ctrl+wheel = make the roll taller or shorter (pitch zoom), Alt+wheel = time zoom, Shift+wheel = sideways. The ruler still scrolls sideways.
 - **Taller piano roll.** Move the cursor to the top edge of the roll: it turns into the up/down arrow. Drag up to make the roll taller, down to shrink it, double-click to reset. Remembered with the project.
 - **Remembers folders.** Every file picker (one-shots, SoundFonts, recordings, MIDI export) opens in the last folder you used.
+
+## What is new in v1.4: real basses and a new look
+- **PREVIEW SOUND** (next to Instrument of choice): P-Bass (fingers, flatwound), Jazz Bass (bridge + neck), pick bass, slap bass (thumb + pop), upright bass, fretless (mwah), Moog-style synth bass, 808 sub, amapiano log drum, or Classic (the old preview sound).
+  - The electric basses are modelled strings with pluck position, pickups, pickup tone and amp; ghost, palm-mute, hammer-on, pull-off, slide and slap articulations change how the string is played. They respond to pitch-bend, mod wheel and expression.
+  - These are models, not samples: much more natural than before, but EZbass or your own library is still the final word.
+- **Fixed: notes that kept ringing** after the pattern changed while playing (a lost sustain pedal or note-off). Changing a knob, TRY ANOTHER, editing while playing, stopping or jumping now lifts the pedal and releases old notes; live MIDI out gets the note-offs and a pedal-up too.
+- **New interface.** Glass cards, glowing knobs and sliders, switch toggles, a real ivory-and-ebony keyboard on the piano roll, gradient notes, and the Inter typeface built in so it looks the same on every PC. Advanced opens as a drawer over the roll instead of squashing it. "Reset chords" moved next to Copy chord / Paste chord.
+- Inter typeface: SIL Open Font License 1.1, (c) The Inter Project Authors (https://rsms.me/inter).
+
+## What is new in v1.5: studio hardware and many more basses
+- **A new hardware-style interface** with lighting from the top left everywhere. It has a brushed-gunmetal faceplate with walnut end cheeks and screwed-on plates. The main controls are machined knobs (knurled grips, spun-aluminium caps, LED pointer, backlit value arc, printed scale legends, a value display under each knob). Drag up/down, hold **Shift** for fine adjustment, **double-click** to reset. Menus are recessed LCD windows, on/off settings are chrome toggle switches with status LEDs, and the piano roll sits in a bezelled screen.
+- **VU meter** at the bottom left shows the preview output.
+- **Resizable velocity / controller lane.** Drag the thin line above the velocity lane (the cursor turns into the up/down arrow); double-click to reset. Remembered with the project.
+- **Many more bass sounds** (PREVIEW SOUND, grouped):
+  - **Electric:** P-Bass flatwound, Precision roundwound, Jazz Bass, Jazz Bass bridge pickup, Modern active 5-string, StingRay-style humbucker, Rickenbacker 4003 style (pick, growl), Gospel active bass, Afrobeat bass, Motown flats with foam mute, Hofner violin bass, pick bass, slap bass, fretless.
+  - **Upright and acoustic:** upright, upright jazz pizzicato, upright rockabilly slap, acoustic bass guitar.
+  - **Synth:** Minimoog bass with glide, Moog synth bass, Reese, Juno square, Acid 303, clean sine sub, 808, 808 long (slides), and three log drums (classic, deep, short).
+  - All of these are models built from the character of each instrument. They are not samples and do not come from any commercial sample library (Scarbee or any other). For final tracks, EZbass or your own library is still the reference.

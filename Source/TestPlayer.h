@@ -12,6 +12,7 @@
 #include "BassSampler.h"
 #include <array>
 #include "Engine/Libraries.h"
+#include "Sounds.h"
 
 class TestPlayer
 {
@@ -20,6 +21,7 @@ public:
     {
         sampleRate = sr;
         sf.prepare (sr); smp.prepare (sr);
+        eng.prepare (sr); engKey = -1; syncEngine();
         reverb.setSampleRate (sr);
         juce::Reverb::Parameters rp; rp.roomSize = 0.45f; rp.damping = 0.5f; rp.wetLevel = 0.f; rp.dryLevel = 1.f; rp.width = 1.f;
         reverb.setParameters (rp);
@@ -35,7 +37,10 @@ public:
         switch (inst) { case enochsolo::I_Bass: return 33; case enochsolo::I_Guitar: return 27; case enochsolo::I_Sax: return alto ? 65 : 66; case enochsolo::I_Violin: return 40;
                         case enochsolo::I_Piano: return 0; default: return 56; }
     }
-    void setInstrument (int inst, int sax) { instrument = inst; saxAlto = (sax == 1); sf.setProgram (gmProgram (inst, saxAlto)); }
+    void setInstrument (int inst, int sax) { instrument = inst; saxAlto = (sax == 1); sf.setProgram (gmProgram (inst, saxAlto)); syncEngine(); }
+    /** which built-in sound (index into enochsolo::snd::patchList (instrument)) the test player uses */
+    void setSound (int idx) { soundIdx = idx; syncEngine(); }
+    enochsolo::snd::Engine eng;                   // the modelled instruments (grand pianos, e-pianos, B3, Prophet, Strat / Tele / Les Paul, saxes, basses ...)
     void setKeySwitches (int base, int bendRangeSemis) { ksBase = base; bendRange = bendRangeSemis; sf.setBendRange ((float) bendRangeSemis); }
     /** which notes are key-switches (and what they switch) for the chosen instrument of choice; call from the audio thread only */
     void configureKeySwitches (const enochsolo::Library* lib, int inst, int base)
@@ -66,7 +71,7 @@ public:
         for (auto& v : voices) v.clear();
         for (int c = 0; c < 16; ++c) { bend[(size_t) c] = 0; mod[(size_t) c] = 0; aftertouch[(size_t) c] = 0; expr[(size_t) c] = exprTarget[(size_t) c] = 100.f / 127.f; pedal[(size_t) c] = false; art[(size_t) c] = enochsolo::A_Sustain; }
         reverb.reset();
-        sf.reset(); smp.reset();
+        sf.reset(); smp.reset(); eng.reset();
     }
 
     void handle (const juce::MidiMessage& m)
@@ -76,35 +81,42 @@ public:
         {
             const int n = m.getNoteNumber();
             if (n >= 0 && n < 128 && ksArt[(size_t) n] != -2) { if (ksArt[(size_t) n] >= 0) art[(size_t) ch] = ksArt[(size_t) n]; return; }   // key-switch
-            if (sampleActive()) smp.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else if (sfActive()) sf.noteOn (ch, n, m.getVelocity()); else noteOn (ch, n, m.getVelocity());
+            if (sampleActive()) smp.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else if (sfActive()) sf.noteOn (ch, n, m.getVelocity()); else if (engFor (ch)) eng.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else noteOn (ch, n, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int n = m.getNoteNumber();
             if (n >= 0 && n < 128 && ksArt[(size_t) n] != -2) return;
-            if (sampleActive()) smp.noteOff (ch, n); else if (sfActive()) sf.noteOff (ch, n); else noteOff (ch, n);
+            if (sampleActive()) smp.noteOff (ch, n); else if (sfActive()) sf.noteOff (ch, n); else { eng.noteOff (ch, n); noteOff (ch, n); }
         }
         else if (m.isPitchWheel())
-            { bend[(size_t) ch] = (float) (m.getPitchWheelValue() - 8192) / 8192.0f * (float) bendRange; smp.setBend (ch, bend[(size_t) ch]); if (sfActive()) sf.pitchWheel (ch, m.getPitchWheelValue()); }
+            { bend[(size_t) ch] = (float) (m.getPitchWheelValue() - 8192) / 8192.0f * (float) bendRange; smp.setBend (ch, bend[(size_t) ch]); eng.setBend (ch, bend[(size_t) ch]); if (sfActive()) sf.pitchWheel (ch, m.getPitchWheelValue()); }
         else if (m.isChannelPressure())
-            aftertouch[(size_t) ch] = (float) m.getChannelPressureValue() / 127.0f;
+            { aftertouch[(size_t) ch] = (float) m.getChannelPressureValue() / 127.0f; eng.setAftertouch (ch, aftertouch[(size_t) ch]); }
         else if (m.isController())
         {
             const int cc = m.getControllerNumber(), v = m.getControllerValue();
             if (sfActive() && cc != 123 && cc != 120) sf.controller (ch, cc, v);
-            if (cc == 1)  mod[(size_t) ch] = (float) v / 127.0f;
-            if (cc == 11) exprTarget[(size_t) ch] = (float) v / 127.0f;
+            if (cc == 1)  { mod[(size_t) ch] = (float) v / 127.0f; eng.setMod (ch, mod[(size_t) ch]); }
+            if (cc == 11) { exprTarget[(size_t) ch] = (float) v / 127.0f; eng.setExpression (ch, exprTarget[(size_t) ch]); }
             if (cc == 64)
             {
                 const bool down = v >= 64;
-                pedal[(size_t) ch] = down;
+                pedal[(size_t) ch] = down; eng.setPedal (ch, down);
                 if (! down) for (auto& vc : voices) if (vc.active && vc.ch == ch && vc.heldByPedal) { vc.heldByPedal = false; release (vc); }
             }
             if (cc == 123 || cc == 120) allNotesOff();
         }
     }
 
-    void allNotesOff() { for (auto& v : voices) if (v.active) { v.held = false; v.heldByPedal = false; release (v); } sf.allNotesOff(); smp.allNotesOff(); }
+    /** stops everything. The sustain pedal is lifted too: before v2.5 a pedal-down that lost its pedal-up (stop, loop jump or a
+        re-generated pattern while playing) kept every later piano note ringing - the "unwanted sustain" bug. */
+    void allNotesOff()
+    {
+        pedal.fill (false);
+        for (auto& v : voices) if (v.active) { v.held = false; v.heldByPedal = false; release (v); }
+        sf.allNotesOff(); smp.allNotesOff(); eng.allNotesOff();
+    }
 
     void render (juce::AudioBuffer<float>& buf, int start, int num)
     {
@@ -288,6 +300,7 @@ public:
             }
             L[i] = outL; if (R) R[i] = outR;
         }
+        eng.render (L, R, num, level);
         if (R) reverb.processStereo (L, R, num);
         for (int i = 0; i < num; ++i)
         {
@@ -299,6 +312,15 @@ private:
     std::array<int, 128> ksArt = [] { std::array<int, 128> a; a.fill (-2); return a; }();   // -2 = a normal note, -1 = silent key-switch, >= 0 = switches to that articulation
     bool sampleActive() const { return useSample && smp.isLoaded(); }
     bool sfActive() const { return useSoundFont && sf.isLoaded(); }
+    bool engFor (int ch) const { return ch != 2 && ! eng.usesClassic(); }      // MIDI channel 3 (the chord pad) keeps its soft pad
+    int soundIdx = 0, engKey = -1;
+    void syncEngine()
+    {
+        const int key = instrument * 1000 + soundIdx * 2 + (saxAlto ? 1 : 0);
+        if (key == engKey) return;
+        engKey = key;
+        eng.setSound (instrument, soundIdx, saxAlto);
+    }
     enum Kind { K_Pluck = 0, K_Piano, K_Sax, K_Bowed, K_Trumpet, K_Pad };
     static constexpr int kBuf = 4096, kMask = kBuf - 1, kMaxPart = 34;
 

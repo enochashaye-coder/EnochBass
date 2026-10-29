@@ -129,7 +129,9 @@ RollView::Geo RollView::geo() const
     g.phrase = { x, g.ruler.getBottom() + 1.f, w, kPhraseH };
     g.hbar  = { x, b.getBottom() - kBarThk, w, kBarThk };
     g.ks    = { x, g.hbar.getY() - 2.f - kKsH, w, kKsH };
-    const float laneH = laneSel >= 6 ? 0.f : kLaneH;
+    const float fixedH = kChordH + kRulerH + kPhraseH + 1.f + 3.f + 4.f + 3.f + kKsH + 2.f + kBarThk;
+    const float maxLane = std::max (28.f, b.getHeight() - fixedH - 60.f);           // always leave the notes at least 60 px
+    const float laneH = laneSel >= 6 ? 0.f : juce::jlimit (28.f, maxLane, laneHpx);
     g.lane  = { x, laneH > 0 ? g.ks.getY() - 3.f - laneH : g.ks.getY(), w, laneH };
     const float nt = g.phrase.getBottom() + 3.f;
     const float nb = (laneH > 0 ? g.lane.getY() : g.ks.getY()) - 4.f;
@@ -499,7 +501,8 @@ void RollView::paint (juce::Graphics& g)
 {
     const auto& T = LF::of (*this);
     auto b = getLocalBounds().toFloat();
-    g.setColour (T.panel); g.fillRoundedRectangle (b, 8.f);
+    g.setGradientFill (juce::ColourGradient (T.bg.brighter (0.03f), 0.f, b.getY(), T.bg.darker (0.25f), 0.f, b.getBottom(), false));
+    g.fillRoundedRectangle (b, 10.f);
     if (! snap) return;
     const auto G = geo();
     const auto& P = snap->pattern;
@@ -520,11 +523,16 @@ void RollView::paint (juce::Graphics& g)
             const bool isSet = bar < (int) bc.size() && bc[(size_t) bar].set;
             const bool sel = bar >= selLo && bar <= selHi && selLo >= 0;
             const bool hov = (bar == hoverBar);
-            g.setColour (sel ? T.accent.withAlpha (0.55f) : (isSet ? T.accent.withAlpha (hov ? 0.4f : 0.26f) : T.panel2.brighter (hov ? 0.25f : 0.f)));
-            g.fillRoundedRectangle (cell, 5.f);
-            g.setColour (sel ? T.accent.brighter (0.4f) : (isSet ? T.accent : T.border)); g.drawRoundedRectangle (cell, 5.f, sel ? 2.f : 1.f);
+            if (sel) { g.setGradientFill (LF::accentGradient (T, cell)); g.fillRoundedRectangle (cell, 6.f); }
+            else
+            {
+                g.setGradientFill (juce::ColourGradient ((isSet ? T.accent.withAlpha (hov ? 0.36f : 0.24f) : T.panel2.brighter (hov ? 0.22f : 0.06f)), 0.f, cell.getY(),
+                                                         (isSet ? T.accent.withAlpha (hov ? 0.22f : 0.12f) : T.panel2.darker (0.1f)), 0.f, cell.getBottom(), false));
+                g.fillRoundedRectangle (cell, 6.f);
+            }
+            g.setColour (sel ? juce::Colours::white.withAlpha (0.5f) : (isSet ? T.accent.withAlpha (0.8f) : T.border.brighter (0.1f))); g.drawRoundedRectangle (cell, 6.f, 1.f);
             g.setColour (sel ? juce::Colours::black : LF::text());
-            g.setFont (juce::Font (juce::FontOptions (cell.getWidth() < 46.f ? 11.f : 14.f, juce::Font::bold)));
+            g.setFont (LF::fnt (cell.getWidth() < 46.f ? 11.f : 14.f, "Bold"));
             g.drawText (juce::String (P.chordAt (bar * bb + 0.01).name), cell.withTrimmedRight (cell.getWidth() > 40.f ? 12.f : 0.f), juce::Justification::centred);
             if (cell.getWidth() > 40.f)
             {
@@ -602,11 +610,14 @@ void RollView::paint (juce::Graphics& g)
         {
             const int pc = p % 12; const bool blk = (pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10);
             const float y = yOf (G, p);
-            g.setColour (blk ? T.panel2 : T.border.brighter (0.15f));
-            g.fillRect (G.gutter.getX(), y, G.gutter.getWidth(), G.rowH - 0.5f);
+            if (blk) g.setGradientFill (juce::ColourGradient (juce::Colour (0xff262a33), G.gutter.getX(), 0.f, juce::Colour (0xff0e1015), G.gutter.getRight(), 0.f, false));
+            else     g.setGradientFill (juce::ColourGradient (juce::Colour (0xffc9cfd9), G.gutter.getX(), 0.f, juce::Colour (0xffeef1f5), G.gutter.getRight(), 0.f, false));
+            g.fillRect (G.gutter.getX(), y, G.gutter.getWidth() - (blk ? 6.f : 0.f), G.rowH - 0.5f);
+            if (! blk) { g.setColour (juce::Colour (0xff8d95a3)); g.fillRect (G.gutter.getX(), y + G.rowH - 0.75f, G.gutter.getWidth(), 0.5f); }
             if (pc == 0 || G.rowH > 12.f)
             {
-                g.setColour (pc == 0 ? T.accent : LF::dim()); g.setFont (juce::Font (juce::FontOptions (juce::jmin (10.f, G.rowH + 1.f))));
+                g.setColour (pc == 0 ? juce::Colour (0xff1a1d24) : (blk ? juce::Colour (0xff8b93a3) : juce::Colour (0xff5d6573)));
+                g.setFont (LF::fnt (juce::jmin (10.f, G.rowH + 1.f), pc == 0 ? "Bold" : "Medium"));
                 g.drawText (juce::String (noteName (p)), (int) G.gutter.getX() + 2, (int) y, (int) G.gutter.getWidth() - 4, (int) std::max (1.f, G.rowH), juce::Justification::centredRight);
             }
             if (gc && inMask (gc->scaleMask, p))
@@ -685,10 +696,14 @@ void RollView::paint (juce::Graphics& g)
                     g.drawLine (r.getX(), r.getBottom(), r.getRight(), r.getY(), 0.8f);
                     continue;
                 }
-                const float a = 0.45f + 0.55f * (float) n.vel / 127.f;
-                g.setColour (sel ? col.brighter (0.5f) : col.withAlpha (n.track == 2 ? 0.55f : a));
-                g.fillRoundedRectangle (r, 2.5f);
-                if (sel) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 2.5f, 1.4f); }
+                const float a = 0.55f + 0.45f * (float) n.vel / 127.f;
+                const float rad = juce::jmin (3.5f, r.getHeight() * 0.35f);
+                const auto base = sel ? col.brighter (0.45f) : col.withAlpha (n.track == 2 ? 0.55f : a);
+                if (sel) { juce::Path gp; gp.addRoundedRectangle (r, rad); juce::DropShadow (col.withAlpha (0.8f), 8, {}).drawForPath (g, gp); }
+                g.setGradientFill (juce::ColourGradient (base.brighter (0.22f), 0.f, r.getY(), base.darker (0.18f), 0.f, r.getBottom(), false));
+                g.fillRoundedRectangle (r, rad);
+                g.setColour (juce::Colours::white.withAlpha (sel ? 0.5f : 0.28f)); g.fillRect (r.getX() + rad, r.getY() + 0.5f, juce::jmax (0.f, r.getWidth() - 2.f * rad), 1.f);
+                g.setColour (sel ? juce::Colours::white : juce::Colours::black.withAlpha (0.45f)); g.drawRoundedRectangle (r, rad, sel ? 1.4f : 0.8f);
                 if (n.art == A_Bend || n.art == A_Fall || n.art == A_Doit || n.art == A_Scoop)
                 {
                     g.setColour (juce::Colours::white.withAlpha (0.85f));
@@ -698,7 +713,7 @@ void RollView::paint (juce::Graphics& g)
                 }
                 if (r.getWidth() > 34.f && G.rowH >= 10.f && n.track != 2)
                 {
-                    g.setColour (juce::Colours::black.withAlpha (0.75f)); g.setFont (juce::Font (juce::FontOptions (juce::jmin (11.f, G.rowH - 1.f))));
+                    g.setColour (juce::Colours::black.withAlpha (0.78f)); g.setFont (LF::fnt (juce::jmin (11.f, G.rowH - 1.f), "SemiBold"));
                     g.drawText (juce::String (noteName (n.pitch)), r.reduced (3.f, 0.f), juce::Justification::centredLeft);
                 }
             }
@@ -769,9 +784,19 @@ void RollView::paint (juce::Graphics& g)
 void RollView::drawLane (juce::Graphics& g, const Geo& G, const EnochLookAndFeel::Theme& T)
 {
     if (G.lane.getHeight() <= 0 || ! snap) return;
+    {
+        // the grip line above the lanes (drag it up / down)
+        const float y = G.lane.getY() - 2.5f, on = (overDivider || drag == Drag::Divider) ? 1.f : 0.f;
+        g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillRect (G.gutter.getX(), y - 1.f, G.lane.getRight() - G.gutter.getX(), 2.f);
+        g.setColour (on > 0 ? T.accent : juce::Colours::white.withAlpha (0.10f)); g.fillRect (G.gutter.getX(), y, G.lane.getRight() - G.gutter.getX(), 1.f);
+        const float cx = G.lane.getCentreX();
+        g.setColour (on > 0 ? T.accent : juce::Colours::white.withAlpha (0.35f));
+        for (int i = -2; i <= 2; ++i) g.fillEllipse (cx + (float) i * 8.f - 1.5f, y - 1.f, 3.f, 3.f);
+    }
     const auto& P = snap->pattern;
     const double bb = std::max (0.5, P.barBeats);
-    g.setColour (T.panel2); g.fillRoundedRectangle (G.lane, 3.f);
+    g.setGradientFill (juce::ColourGradient (T.bg.brighter (0.05f), 0.f, G.lane.getY(), T.bg.darker (0.2f), 0.f, G.lane.getBottom(), false));
+    g.fillRoundedRectangle (G.lane, 6.f);
     juce::Graphics::ScopedSaveState ss (g);
     g.reduceClipRegion (G.lane.getSmallestIntegerContainer());
     for (int bar = 0; bar <= P.bars; ++bar)
@@ -789,7 +814,10 @@ void RollView::drawLane (juce::Graphics& g, const Geo& G, const EnochLookAndFeel
             const float h = (G.lane.getHeight() - 4.f) * (float) n.vel / 127.f;
             const bool sel = selected.count (n.id) > 0;
             g.setColour (n.mute ? juce::Colour (0xff6b6458) : (sel ? juce::Colours::white : (n.track == 0 ? colourFor (n.art, T.accent) : juce::Colour (0xff5d86a0))));
-            g.fillRect (x, G.lane.getBottom() - 2.f - h, 3.f, h);
+            juce::ColourGradient stem (sel ? juce::Colours::white : (n.mute ? juce::Colour (0xff6b6458) : (n.track == 0 ? colourFor (n.art, T.accent) : juce::Colour (0xff5d86a0))),
+                                       0.f, G.lane.getBottom() - 2.f - h, T.bg.withAlpha (0.2f), 0.f, G.lane.getBottom(), false);
+            g.setGradientFill (stem);
+            g.fillRoundedRectangle (x, G.lane.getBottom() - 2.f - h, 3.f, h, 1.5f);
             g.fillEllipse (x - 2.f, G.lane.getBottom() - 4.f - h, 7.f, 7.f);
         }
     }
@@ -853,8 +881,16 @@ void RollView::drawLane (juce::Graphics& g, const Geo& G, const EnochLookAndFeel
 }
 
 //------------------------------------------------------------------------------ mouse
+bool RollView::nearDivider (const Geo& g, juce::Point<float> p) const
+{
+    if (g.lane.getHeight() <= 0) return false;
+    const float y = g.lane.getY() - 2.5f;
+    return std::abs (p.y - y) <= 4.5f && p.x >= g.gutter.getX() && p.x <= g.lane.getRight();
+}
+
 juce::MouseCursor RollView::getMouseCursor()
 {
+    if (overDivider || drag == Drag::Divider) return juce::MouseCursor::UpDownResizeCursor;
     if (hoverBar >= 0) return juce::MouseCursor::PointingHandCursor;
     if (overResize) return juce::MouseCursor::LeftRightResizeCursor;
     if (hoverPhrase >= 0) return juce::MouseCursor::PointingHandCursor;
@@ -868,7 +904,10 @@ void RollView::mouseMove (const juce::MouseEvent& e)
     if (snap)
     {
         const auto g = geo(); const auto p = e.position;
-        if (g.phrase.contains (p))
+        const bool dv = nearDivider (g, p);
+        if (dv != overDivider) { overDivider = dv; updateMouseCursor(); repaint(); }
+        if (dv) h = "Drag up / down: make the velocity and articulation lanes taller or shorter (more room for the notes). Double-click = reset";
+        else if (g.phrase.contains (p))
         {
             hp = phraseAtX (g, p.x);
             h = hp >= 0 ? "Click = lock / unlock this phrase (a locked phrase is kept when you press Try another)   |   right-click = more" : "";
@@ -897,7 +936,7 @@ void RollView::mouseMove (const juce::MouseEvent& e)
     if (h != hover || hb != hoverBar || rz != overResize || hp != hoverPhrase) { hover = h; hoverBar = hb; hoverPhrase = hp; overResize = rz; updateMouseCursor(); repaint(); }
 }
 
-void RollView::mouseExit (const juce::MouseEvent&) { hover = {}; hoverBar = -1; hoverPhrase = -1; overResize = false; repaint(); }
+void RollView::mouseExit (const juce::MouseEvent&) { hover = {}; hoverBar = -1; hoverPhrase = -1; overResize = false; overDivider = false; repaint(); }
 
 int RollView::phraseAtX (const Geo& g, float x) const
 {
@@ -957,6 +996,13 @@ void RollView::mouseDown (const juce::MouseEvent& e)
     if (! snap) return;
     const auto g = geo(); const auto p = e.position;
     downPos = p; moved = false; duplicated = false; drag = Drag::None; rightDownInLane = false;
+
+    // ---------------- the line above the velocity lane: drag to resize the lanes
+    if (nearDivider (g, p) && ! e.mods.isPopupMenu())
+    {
+        if (e.getNumberOfClicks() >= 2) { laneHpx = kLaneH; if (onLaneHeightChanged) onLaneHeightChanged (laneHpx); repaint(); return; }
+        laneHAtDown = g.lane.getHeight(); drag = Drag::Divider; updateMouseCursor(); return;
+    }
 
     // ---------------- phrase strip: click locks / unlocks, right-click opens the phrase menu
     if (g.phrase.contains (p))
@@ -1106,6 +1152,13 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
     if (! snap || drag == Drag::None) return;
     const auto g = geo(); const auto p = e.position;
 
+    if (drag == Drag::Divider)
+    {
+        laneHpx = juce::jlimit (28.f, 900.f, laneHAtDown + (downPos.y - p.y));
+        const float shown = geo().lane.getHeight(); laneHpx = shown;               // stays within what fits
+        if (onLaneHeightChanged) onLaneHeightChanged (laneHpx);
+        repaint(); return;
+    }
     if (drag == Drag::Seek) { proc.seekInternal (juce::jlimit (0.0, g.len, beatAt (g, p.x))); return; }
     if (drag == Drag::Key)                                   // slide over the piano keys: each key sounds as the pointer reaches it
     {
@@ -1204,6 +1257,7 @@ void RollView::mouseUp (const juce::MouseEvent& e)
     {
         case Drag::Rubber: rubber = {}; repaint(); return;
         case Drag::Seek: case Drag::None: case Drag::Key: return;
+        case Drag::Divider: updateMouseCursor(); return;
         case Drag::BarSel:
             if (openMenuOnUp && barDragStart >= 0) showChordMenu (barDragStart, cellRect (g, barDragStart));
             return;
@@ -1256,6 +1310,7 @@ void RollView::mouseUp (const juce::MouseEvent& e)
 
 void RollView::mouseDoubleClick (const juce::MouseEvent& e)
 {
+    if (snap && nearDivider (geo(), e.position)) return;
     if (! snap) return;
     const auto g = geo();
     if (g.lane.getHeight() > 0 && g.lane.contains (e.position) && ctrlLane() >= 0)

@@ -169,6 +169,8 @@ public:
     // hearing a single note while editing (message thread) and jumping the test player to a position
     void audition (int pitch, int velocity, bool hold = false);   // hold = keeps sounding until auditionRelease() (mouse button held)
     void auditionRelease();
+    std::atomic<float> outLevel { 0.f };    // RMS of the preview output, for the VU meter
+    float uiLaneH = 96.f;                  // height of the velocity / controller lane, remembered with the project
     int uiRollGrow = 0;                    // how far the person pulled the piano roll up (pixels), remembered with the project
     void seekInternal (double beat) { seekBeat = beat; }
 
@@ -242,6 +244,7 @@ private:
     double sr = 44100.0;
     double internalBeat = 0.0, expectedNext = -1.0;
     bool wasRunning = false;
+    const void* lastPlayedSnap = nullptr;          // audio thread: which pattern the player last played
     juce::MidiBuffer genBuffer, playBuffer;
     int lastInstrument = -1;
     bool heldOut[16][128] = {};              // notes currently sounding on the MIDI output (so they can be released when the host stops)
