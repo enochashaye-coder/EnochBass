@@ -223,7 +223,8 @@ inline uint16_t blueNotesFor (int rootPc, Quality q)
 //==============================================================================
 enum Genre { G_Afrobeat = 0, G_AfroJazz, G_Highlife, G_AfroFusion, G_Swing, G_Ballad,
              G_Amapiano, G_Juju, G_Soukous, G_EthioJazz, G_Township, G_Gospel, G_Pop, G_Rock, G_Bossa, G_Samba, G_Flamenco,
-             G_Salsa, G_AfroCuban, G_AfroBrazilian, G_Caribbean, G_Reggae, G_Funk, G_HipHop, G_AfroHouse, G_Count };
+             G_Salsa, G_AfroCuban, G_AfroBrazilian, G_Caribbean, G_Reggae, G_Funk, G_HipHop, G_AfroHouse,
+             G_Bebop, G_HardBop, G_ModalJazz, G_CoolJazz, G_LatinJazz, G_JazzFunk, G_SmoothJazz, G_Kizomba, G_Zouk, G_PrivateSchool, G_Bacardi, G_Sgija, G_Count };
 
 struct GenreInfo
 {
@@ -264,11 +265,42 @@ inline const GenreInfo& genreInfo (int g)
         { "Reggae & Dub",        0.00, 0.85, 0.75, 1.3, 2, false, "One-drop and rockers: space, deep roots and fifths, dub weight" },
         { "Funk & Disco",        0.00, 0.60, 1.10, 0.8, 2, false, "Pocket sixteenths, ghost notes, slap and disco octaves" },
         { "Hip-Hop & Trap",      0.00, 0.80, 0.65, 1.4, 2, false, "Boom-bap and 808: long sub notes, sparse hits and slides" },
-        { "Afro-House",          0.00, 0.85, 0.85, 1.1, 2, true,  "Rolling offbeat house bass with African swing" }
+        { "Afro-House",          0.00, 0.85, 0.85, 1.1, 2, true,  "Rolling offbeat house bass with African swing" },
+        // ---- v2.7 batch 3 (appended: older genre numbers stay the same)
+        { "Jazz: Bebop",               -1.00, 0.15, 1.20, 0.8, 0, false, "Fast eighth-note lines, enclosures and chromatic approach notes over quick ii-V changes" },
+        { "Jazz: Hard Bop",            -1.00, 0.30, 1.05, 0.9, 0, false, "Bluesy, gospel-tinged bebop with strong riffs and call and response" },
+        { "Jazz: Modal",                0.25, 0.35, 0.85, 1.2, 0, false, "Long Dorian vamps, space, fourths and pentatonic shapes (So What, Impressions)" },
+        { "Jazz: Cool / West Coast",    0.25, 0.25, 0.80, 1.2, 0, false, "Relaxed, lyrical, light swing and soft dynamics" },
+        { "Jazz: Latin Jazz",           0.00, 0.45, 1.00, 1.0, 0, false, "Afro-Cuban / Brazilian grooves with jazz language: montunos and syncopated lines" },
+        { "Jazz: Jazz-Funk / Fusion",   0.00, 0.55, 1.05, 0.9, 2, false, "Tight 16th-note funk groove, dominant 9th vamps, bluesy and chromatic fusion lines" },
+        { "Jazz: Smooth Jazz",          0.10, 0.40, 0.70, 1.2, 2, false, "Mid-tempo R&B groove, singable melodic phrases, lush major 9th harmony" },
+        { "Kizomba",                    0.05, 0.70, 0.65, 1.3, 2, true,  "Angolan kizomba / tarraxinha: slow, sensual, heavy downbeat, minor pop changes" },
+        { "Zouk",                       0.00, 0.65, 0.80, 1.1, 2, true,  "French Caribbean zouk: tresillo bounce, sweet melodic lines, romantic harmony" },
+        { "Amapiano: Private School",   0.18, 0.70, 0.70, 1.3, 2, true,  "Soulful, jazzy, mellow amapiano: rich 9th chords, sparse log drums, lyrical piano and sax" },
+        { "Amapiano: Bacardi",          0.10, 0.85, 1.10, 0.8, 2, true,  "Pretoria Bacardi: faster, percussive, busy log drums and choppy riffs" },
+        { "Amapiano: Sgija",            0.15, 0.90, 0.85, 1.0, 2, true,  "Sgija / quantum: deep, dark, hypnotic log-drum bass lines, repetitive minor vamps" }
     };
     return t[std::clamp (g, 0, (int) G_Count - 1)];
 }
 
+
+/** v2.7 batch 3: the genre an added genre builds on for everything it does not define itself (rhythm cells, comping, bass patterns ...) */
+inline int baseGenre (int g)
+{
+    switch (g)
+    {
+        case G_Bebop: case G_HardBop: case G_ModalJazz: case G_CoolJazz: return G_Swing;
+        case G_LatinJazz: return G_AfroCuban;
+        case G_JazzFunk: return G_Funk;
+        case G_SmoothJazz: return G_Gospel;
+        case G_Kizomba: return G_AfroFusion;
+        case G_Zouk: return G_Caribbean;
+        case G_PrivateSchool: case G_Bacardi: case G_Sgija: return G_Amapiano;
+        default: return g;
+    }
+}
+inline bool isAmapianoFamily (int g) { return g == G_Amapiano || g == G_PrivateSchool || g == G_Bacardi || g == G_Sgija; }
+inline bool isJazzFamily (int g) { return g == G_Swing || (g >= G_Bebop && g <= G_SmoothJazz); }
 //==============================================================================
 struct ProgChord { int degree; Quality q; double bars; };
 struct Prog { int genre; int family; const char* name; std::vector<ProgChord> chords; };
@@ -277,6 +309,45 @@ inline const std::vector<Prog>& allProgressions()
 {
     using Q = Quality;
     static const std::vector<Prog> p = {
+        // ---------------- v2.7 batch 3 genres
+        { G_Bebop, 0, "ii7 | V7 | Imaj7 | VI7",       { {2,Q::Min7,1}, {7,Q::Dom7,1}, {0,Q::Maj7,1}, {9,Q::Dom7,1} } },
+        { G_Bebop, 0, "Imaj7 VI7 | ii7 V7 (rhythm)",  { {0,Q::Maj7,0.5}, {9,Q::Dom7,0.5}, {2,Q::Min7,0.5}, {7,Q::Dom7,0.5} } },
+        { G_Bebop, 1, "iim7b5 | V7alt | i7 | i7",     { {2,Q::Min7b5,1}, {7,Q::Dom7alt,1}, {0,Q::Min7,2} } },
+        { G_Bebop, 2, "I7 | IV7 | I7 | V7 (bebop blues)", { {0,Q::Dom7,1}, {5,Q::Dom7,1}, {0,Q::Dom7,1}, {7,Q::Dom7,1} } },
+        { G_HardBop, 1, "i7 | iv7 | i7 | V7alt",      { {0,Q::Min7,1}, {5,Q::Min7,1}, {0,Q::Min7,1}, {7,Q::Dom7alt,1} } },
+        { G_HardBop, 2, "I7 | IV7 | I7 | I7",         { {0,Q::Dom7,1}, {5,Q::Dom7,1}, {0,Q::Dom7,2} } },
+        { G_HardBop, 0, "Imaj7 | IV7 | iii7 | VI7",   { {0,Q::Maj7,1}, {5,Q::Dom7,1}, {4,Q::Min7,1}, {9,Q::Dom7,1} } },
+        { G_ModalJazz, 1, "i7 (Dorian) vamp",         { {0,Q::Min7,4} } },
+        { G_ModalJazz, 1, "i7 | i7 | bii7 | i7 (So What)", { {0,Q::Min7,2}, {1,Q::Min7,1}, {0,Q::Min7,1} } },
+        { G_ModalJazz, 0, "Imaj7#11 | II7sus",        { {0,Q::Maj7,2}, {2,Q::Sus4,2} } },
+        { G_ModalJazz, 2, "I7sus vamp",               { {0,Q::Sus4,4} } },
+        { G_CoolJazz, 0, "Imaj7 | vi7 | ii7 | V7",    { {0,Q::Maj7,1}, {9,Q::Min7,1}, {2,Q::Min7,1}, {7,Q::Dom7,1} } },
+        { G_CoolJazz, 0, "Imaj7 | IVmaj7 | iii7 | VI7", { {0,Q::Maj7,1}, {5,Q::Maj7,1}, {4,Q::Min7,1}, {9,Q::Dom7,1} } },
+        { G_CoolJazz, 1, "i7 | iv7 | bVII7 | bIIImaj7", { {0,Q::Min7,1}, {5,Q::Min7,1}, {10,Q::Dom7,1}, {3,Q::Maj7,1} } },
+        { G_LatinJazz, 1, "i7 | iv7 | V7 | i7 (montuno)", { {0,Q::Min7,1}, {5,Q::Min7,1}, {7,Q::Dom7,1}, {0,Q::Min7,1} } },
+        { G_LatinJazz, 1, "i7 | bVI7 | V7alt | i7",   { {0,Q::Min7,1}, {8,Q::Dom7,1}, {7,Q::Dom7alt,1}, {0,Q::Min7,1} } },
+        { G_LatinJazz, 0, "ii7 | V7 | Imaj7 | Imaj7", { {2,Q::Min7,1}, {7,Q::Dom7,1}, {0,Q::Maj7,2} } },
+        { G_JazzFunk, 2, "I9 vamp",                    { {0,Q::Dom9,4} } },
+        { G_JazzFunk, 1, "i9 | IV9",                   { {0,Q::Min9,2}, {5,Q::Dom9,2} } },
+        { G_JazzFunk, 1, "i7 | bVII7 | bVI7 | V7alt", { {0,Q::Min7,1}, {10,Q::Dom7,1}, {8,Q::Dom7,1}, {7,Q::Dom7alt,1} } },
+        { G_SmoothJazz, 0, "Imaj9 | IVmaj9",           { {0,Q::Maj9,2}, {5,Q::Maj9,2} } },
+        { G_SmoothJazz, 0, "Imaj9 | iii7 | vi9 | ii9 V7", { {0,Q::Maj9,1}, {4,Q::Min7,1}, {9,Q::Min9,1}, {2,Q::Min9,0.5}, {7,Q::Dom7,0.5} } },
+        { G_SmoothJazz, 1, "i9 | iv9 | bVIImaj7 | bIIImaj7", { {0,Q::Min9,1}, {5,Q::Min9,1}, {10,Q::Maj7,1}, {3,Q::Maj7,1} } },
+        { G_Kizomba, 1, "i | bVI | bIII | bVII",       { {0,Q::Min,1}, {8,Q::Maj,1}, {3,Q::Maj,1}, {10,Q::Maj,1} } },
+        { G_Kizomba, 1, "i | iv | bVII | bIII",        { {0,Q::Min,1}, {5,Q::Min,1}, {10,Q::Maj,1}, {3,Q::Maj,1} } },
+        { G_Kizomba, 0, "vi | IV | I | V",             { {9,Q::Min,1}, {5,Q::Maj,1}, {0,Q::Maj,1}, {7,Q::Maj,1} } },
+        { G_Zouk, 0, "I | vi | ii7 | V7",              { {0,Q::Maj,1}, {9,Q::Min,1}, {2,Q::Min7,1}, {7,Q::Dom7,1} } },
+        { G_Zouk, 1, "i7 | iv7 | bVII7 | bIIImaj7",    { {0,Q::Min7,1}, {5,Q::Min7,1}, {10,Q::Dom7,1}, {3,Q::Maj7,1} } },
+        { G_Zouk, 1, "i | bVI | bVII | i",             { {0,Q::Min,1}, {8,Q::Maj,1}, {10,Q::Maj,1}, {0,Q::Min,1} } },
+        { G_PrivateSchool, 1, "i9 | iv9 | bVIImaj7 | bIIImaj9", { {0,Q::Min9,1}, {5,Q::Min9,1}, {10,Q::Maj7,1}, {3,Q::Maj9,1} } },
+        { G_PrivateSchool, 0, "Imaj9 | vi9 | ii9 | V9", { {0,Q::Maj9,1}, {9,Q::Min9,1}, {2,Q::Min9,1}, {7,Q::Dom9,1} } },
+        { G_PrivateSchool, 1, "i9 | bVImaj7 | iv9 | V7alt", { {0,Q::Min9,1}, {8,Q::Maj7,1}, {5,Q::Min9,1}, {7,Q::Dom7alt,1} } },
+        { G_Bacardi, 1, "i7 vamp",                     { {0,Q::Min7,4} } },
+        { G_Bacardi, 1, "i7 | iv7",                    { {0,Q::Min7,2}, {5,Q::Min7,2} } },
+        { G_Bacardi, 2, "I7 | bVII7",                  { {0,Q::Dom7,2}, {10,Q::Dom7,2} } },
+        { G_Sgija, 1, "i7 vamp (deep)",                { {0,Q::Min7,4} } },
+        { G_Sgija, 1, "i7 | bVII7",                    { {0,Q::Min7,2}, {10,Q::Dom7,2} } },
+        { G_Sgija, 1, "i9 | bVImaj7",                  { {0,Q::Min9,2}, {8,Q::Maj7,2} } },
         // ---------------- Afrobeat
         { G_Afrobeat, 1, "i7 | IV7",                { {0,Q::Min7,2}, {5,Q::Dom7,2} } },
         { G_Afrobeat, 1, "i7 | IV7 | i7 | bVII7",   { {0,Q::Min7,1}, {5,Q::Dom7,1}, {0,Q::Min7,1}, {10,Q::Dom7,1} } },

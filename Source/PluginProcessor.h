@@ -130,7 +130,22 @@ public:
     void clearBassSample();
     bool hasBassSample() const;
     juce::String bassSampleInfo() const;
-    bool hasSoundFont() const { return player.sf.isLoaded(); }
+    bool hasSoundFont() const;
+    juce::StringArray soundFontPresets();
+    int soundFontPreset() const;
+    void setSoundFontPreset (int index);                        // -1 = automatic (General MIDI program)
+    /** what the audio engine is really playing (read back from the audio thread) */
+    juce::String nowPlayingText (bool& matches, bool& warning) const;
+    /** v2.7: per-bar speed (-1 follow the global Speed, 0 normal, 1 double time); the bars are written again */
+    void applyBarSpeed (int bar0, int bar1, int speed, uint64_t seed);
+    int barSpeedOf (int bar) const;
+    int previewSlot() const { return curSlot(); }                // the instrument slot the preview / source controls act on
+    // same names as Enoch Solo so the shared SOUND SOURCE row works in both plugins
+    bool loadOneShot (const juce::File& f, juce::String& m) { return loadBassSample (f, m); }
+    void clearOneShot() { clearBassSample(); }
+    bool hasOneShot() const { return hasBassSample(); }
+    juce::String oneShotInfo() const { return bassSampleInfo(); }
+    TestPlayer& testPlayer() { return player; }               // tests
     juce::String soundFontName() const;
 
     /** pick a mode (scale) for bars bar0..bar1 on top of their chord; -1 = the song's own scale */
@@ -217,7 +232,15 @@ private:
     int currentPreset = 0;
 
     juce::String chordText, chordStatus;
-    juce::String soundFontPath, bassSamplePath;
+    juce::String soundFontPath, bassSamplePath;                 // (pre-2.7 single paths, kept for reading old projects)
+    std::array<juce::String, TestPlayer::kSlots> smpPaths, sfPaths;
+    std::vector<int> barSpeed;                                 // v2.7 per-bar speed override
+    std::array<std::atomic<int>, TestPlayer::kSlots> sfPresets {};
+    std::array<std::atomic<uint32_t>, TestPlayer::kSlots> smpGen {}, sfGen {};
+    std::array<std::atomic<float>*, TestPlayer::kSlots> soundParams {}, srcParams {};
+    int curSlot() const;
+    bool loadSoundFontInto (int slot, const juce::File& f, juce::String& message);
+    void restoreSoundSlots (const juce::ValueTree& vt);
     std::shared_ptr<enochsolo::TranscribeResult> lastTr; float lastTrClean = 0.5f; bool lastTrGhosts = false;
     std::vector<std::shared_ptr<const enochsolo::Library>> libLists[enochsolo::I_Count];
     juce::String libReport;

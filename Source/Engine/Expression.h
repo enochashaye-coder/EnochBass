@@ -378,7 +378,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         if (inst == I_Piano && s.emitCC)
         {
             const bool afro = genreInfo (s.genre).afro;
-            const double prob = st.pedal * (afro ? 0.5 : 1.0) + (s.genre == G_Ballad ? 0.3 : 0.0);
+            const double prob = st.pedal * (afro ? 0.5 : 1.0) + (baseGenre (s.genre) == G_Ballad ? 0.3 : 0.0);
             if (rng.chance (std::min (1.0, prob * 1.4)) || prob > 0.45)
             {
                 for (auto& c : p.chords)

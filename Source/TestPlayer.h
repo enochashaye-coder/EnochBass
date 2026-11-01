@@ -20,7 +20,9 @@ public:
     void prepare (double sr)
     {
         sampleRate = sr;
-        sf.prepare (sr); smp.prepare (sr);
+        for (auto& f : sfSlot) f->prepare (sr);
+        smp.prepare (sr);
+        tailL.assign (kFade, 0.f); tailR.assign (kFade, 0.f); tailLeft = 0;
         eng.prepare (sr); engKey = -1; syncEngine();
         reverb.setSampleRate (sr);
         juce::Reverb::Parameters rp; rp.roomSize = 0.45f; rp.damping = 0.5f; rp.wetLevel = 0.f; rp.dryLevel = 1.f; rp.width = 1.f;
@@ -28,20 +30,60 @@ public:
         reset();
     }
 
-    SoundFontPlayer sf;                // optional SoundFont voice (used instead of the built-in sounds when loaded and switched on)
-    bool useSoundFont = false;
-    enochsolo::BassSampler smp;                   // optional one-shot bass sample (takes priority over the SoundFont when switched on)
-    bool useSample = false;
+    //------------------------------------------------------------------ sound sources (one set per instrument)
+    // An instrument never inherits another instrument's one-shot or SoundFont: every instrument has its own slot, and an instrument
+    // without a custom sound always plays the built-in engine.
+    static constexpr int kSlots = 6, kFade = 288;
+    enum Src { S_Builtin = 0, S_OneShot, S_SoundFont, S_External };
+    enum Warn { W_None = 0, W_NoOneShot, W_NoSoundFont, W_NoProgram };
+    struct Config
+    {
+        int inst = 0, sound = 0, src = S_Builtin, sfPreset = -1, sax = 0;
+        uint32_t smpGen = 0, sfGen = 0;
+        bool operator== (const Config& o) const { return inst == o.inst && sound == o.sound && src == o.src && sfPreset == o.sfPreset && sax == o.sax && smpGen == o.smpGen && sfGen == o.sfGen; }
+        bool operator!= (const Config& o) const { return ! (*this == o); }
+    };
+    std::array<std::unique_ptr<SoundFontPlayer>, kSlots> sfSlot = [] { std::array<std::unique_ptr<SoundFontPlayer>, kSlots> a; for (auto& f : a) f = std::make_unique<SoundFontPlayer>(); return a; }();
+    std::array<std::shared_ptr<const enochsolo::BassSample>, kSlots> smpSlot;           // written on the message thread with std::atomic_store
+    enochsolo::BassSampler smp;                                                            // plays the active instrument's one-shot
+    void setSlotSample (int slot, std::shared_ptr<const enochsolo::BassSample> sm) { std::atomic_store (&smpSlot[(size_t) juce::jlimit (0, kSlots - 1, slot)], std::move (sm)); }
+    std::shared_ptr<const enochsolo::BassSample> slotSample (int slot) const { return std::atomic_load (&smpSlot[(size_t) juce::jlimit (0, kSlots - 1, slot)]); }
+    SoundFontPlayer& slotSF (int slot) { return *sfSlot[(size_t) juce::jlimit (0, kSlots - 1, slot)]; }
+
+    /** what the processor wants (audio thread, every block) */
+    void setDesired (const Config& c) { desired = c; }
+    /** audio thread, once per block before any MIDI: when the instrument / sound / source changed, the old sound fades out over 6 ms,
+        every voice, effect tail, filter, sample voice, SoundFont channel and the pedal are flushed, and only then is the new sound set up */
+    void update()
+    {
+        if (desired == active && effective == resolveSource (active)) return;
+        // render a short faded tail of whatever was sounding, so the switch never clicks
+        if (tailLeft <= 0 && configured)
+        {
+            std::fill (tailL.begin(), tailL.end(), 0.f); std::fill (tailR.begin(), tailR.end(), 0.f);
+            renderInto (tailL.data(), tailR.data(), kFade);
+            for (int i = 0; i < kFade; ++i) { const float g = 1.f - (float) i / (float) kFade; tailL[(size_t) i] *= g * g; tailR[(size_t) i] *= g * g; }
+            tailLeft = kFade;
+        }
+        flush();
+        apply (desired);
+        switches.fetch_add (1);
+    }
+    // ---- read back by the editor's NOW PLAYING display (what the audio thread is really using)
+    std::atomic<int> nowInst { -1 }, nowSound { -1 }, nowReqSrc { 0 }, nowEffSrc { 0 }, nowWarn { 0 }, nowSfPreset { -1 }, nowAlto { 0 };
+    std::atomic<uint32_t> switches { 0 };
+    int effectiveSource() const { return effective; }
+
     static int gmProgram (int inst, bool alto)
     {
         switch (inst) { case enochsolo::I_Bass: return 33; case enochsolo::I_Guitar: return 27; case enochsolo::I_Sax: return alto ? 65 : 66; case enochsolo::I_Violin: return 40;
                         case enochsolo::I_Piano: return 0; default: return 56; }
     }
-    void setInstrument (int inst, int sax) { instrument = inst; saxAlto = (sax == 1); sf.setProgram (gmProgram (inst, saxAlto)); syncEngine(); }
+    void setInstrument (int inst, int sax) { instrument = inst; saxAlto = (sax == 1); curSF().setProgram (gmProgram (inst, saxAlto)); syncEngine(); }
     /** which built-in sound (index into enochsolo::snd::patchList (instrument)) the test player uses */
     void setSound (int idx) { soundIdx = idx; syncEngine(); }
     enochsolo::snd::Engine eng;                   // the modelled instruments (grand pianos, e-pianos, B3, Prophet, Strat / Tele / Les Paul, saxes, basses ...)
-    void setKeySwitches (int base, int bendRangeSemis) { ksBase = base; bendRange = bendRangeSemis; sf.setBendRange ((float) bendRangeSemis); }
+    void setKeySwitches (int base, int bendRangeSemis) { ksBase = base; bendRange = bendRangeSemis; for (auto& f : sfSlot) f->setBendRange ((float) bendRangeSemis); }
     /** which notes are key-switches (and what they switch) for the chosen instrument of choice; call from the audio thread only */
     void configureKeySwitches (const enochsolo::Library* lib, int inst, int base)
     {
@@ -63,15 +105,26 @@ public:
     void setLevel (float gain, float reverbAmt)
     {
         level = gain;
-        auto p = reverb.getParameters(); p.wetLevel = reverbAmt * 0.45f; p.dryLevel = 1.0f - reverbAmt * 0.2f; reverb.setParameters (p);
+        auto p = reverb.getParameters(); p.wetLevel = reverbAmt * 0.45f; p.dryLevel = 1.0f - reverbAmt * 0.2f;
+        p.roomSize = roomSize; p.damping = roomDamp; p.width = roomWidth;
+        reverb.setParameters (p);
     }
+    /** v2.7 room type for the preview reverb: 0 classic (as before), 1 studio, 2 small room, 3 club, 4 hall, 5 plate, 6 church */
+    void setRoom (int type)
+    {
+        static const float sz[] = { 0.45f, 0.30f, 0.22f, 0.55f, 0.82f, 0.62f, 0.95f }, dp[] = { 0.5f, 0.65f, 0.40f, 0.45f, 0.30f, 0.12f, 0.25f }, wd[] = { 1.f, 0.8f, 0.6f, 1.f, 1.f, 1.f, 1.f };
+        type = juce::jlimit (0, 6, type);
+        roomSize = sz[type]; roomDamp = dp[type]; roomWidth = wd[type];
+    }
+    void setMonoOut (bool m) { monoOut = m; }
 
     void reset()
     {
         for (auto& v : voices) v.clear();
         for (int c = 0; c < 16; ++c) { bend[(size_t) c] = 0; mod[(size_t) c] = 0; aftertouch[(size_t) c] = 0; expr[(size_t) c] = exprTarget[(size_t) c] = 100.f / 127.f; pedal[(size_t) c] = false; art[(size_t) c] = enochsolo::A_Sustain; }
         reverb.reset();
-        sf.reset(); smp.reset(); eng.reset();
+        for (auto& f : sfSlot) f->reset();
+        smp.reset(); eng.reset();
     }
 
     void handle (const juce::MidiMessage& m)
@@ -81,22 +134,23 @@ public:
         {
             const int n = m.getNoteNumber();
             if (n >= 0 && n < 128 && ksArt[(size_t) n] != -2) { if (ksArt[(size_t) n] >= 0) art[(size_t) ch] = ksArt[(size_t) n]; return; }   // key-switch
-            if (sampleActive()) smp.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else if (sfActive()) sf.noteOn (ch, n, m.getVelocity()); else if (engFor (ch)) eng.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else noteOn (ch, n, m.getVelocity());
+            if (effective == S_External) return;
+            if (sampleActive()) smp.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else if (sfActive()) curSF().noteOn (ch, n, m.getVelocity()); else if (engFor (ch)) eng.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else noteOn (ch, n, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int n = m.getNoteNumber();
             if (n >= 0 && n < 128 && ksArt[(size_t) n] != -2) return;
-            if (sampleActive()) smp.noteOff (ch, n); else if (sfActive()) sf.noteOff (ch, n); else { eng.noteOff (ch, n); noteOff (ch, n); }
+            if (sampleActive()) smp.noteOff (ch, n); else if (sfActive()) curSF().noteOff (ch, n); else { eng.noteOff (ch, n); noteOff (ch, n); }
         }
         else if (m.isPitchWheel())
-            { bend[(size_t) ch] = (float) (m.getPitchWheelValue() - 8192) / 8192.0f * (float) bendRange; smp.setBend (ch, bend[(size_t) ch]); eng.setBend (ch, bend[(size_t) ch]); if (sfActive()) sf.pitchWheel (ch, m.getPitchWheelValue()); }
+            { bend[(size_t) ch] = (float) (m.getPitchWheelValue() - 8192) / 8192.0f * (float) bendRange; smp.setBend (ch, bend[(size_t) ch]); eng.setBend (ch, bend[(size_t) ch]); if (sfActive()) curSF().pitchWheel (ch, m.getPitchWheelValue()); }
         else if (m.isChannelPressure())
             { aftertouch[(size_t) ch] = (float) m.getChannelPressureValue() / 127.0f; eng.setAftertouch (ch, aftertouch[(size_t) ch]); }
         else if (m.isController())
         {
             const int cc = m.getControllerNumber(), v = m.getControllerValue();
-            if (sfActive() && cc != 123 && cc != 120) sf.controller (ch, cc, v);
+            if (sfActive() && cc != 123 && cc != 120) curSF().controller (ch, cc, v);
             if (cc == 1)  { mod[(size_t) ch] = (float) v / 127.0f; eng.setMod (ch, mod[(size_t) ch]); }
             if (cc == 11) { exprTarget[(size_t) ch] = (float) v / 127.0f; eng.setExpression (ch, exprTarget[(size_t) ch]); }
             if (cc == 64)
@@ -115,13 +169,31 @@ public:
     {
         pedal.fill (false);
         for (auto& v : voices) if (v.active) { v.held = false; v.heldByPedal = false; release (v); }
-        sf.allNotesOff(); smp.allNotesOff(); eng.allNotesOff();
+        for (auto& f : sfSlot) f->allNotesOff();
+        smp.allNotesOff(); eng.allNotesOff();
     }
 
     void render (juce::AudioBuffer<float>& buf, int start, int num)
     {
         auto* L = buf.getWritePointer (0, start);
         auto* R = buf.getNumChannels() > 1 ? buf.getWritePointer (1, start) : nullptr;
+        renderInto (L, R, num);
+        // the faded tail of the sound that was playing before a switch
+        for (int i = 0; i < num && tailLeft > 0; ++i, --tailLeft)
+        {
+            const size_t k = (size_t) (kFade - tailLeft);
+            L[i] += tailL[k]; if (R) R[i] += tailR[k];
+        }
+        if (monoOut && R) for (int i = 0; i < num; ++i) { const float m = 0.5f * (L[i] + R[i]); L[i] = R[i] = m; }
+    }
+
+    void renderInto (float* L, float* R, int num)
+    {
+        if (effective == S_External)
+        {
+            for (int i = 0; i < num; ++i) { L[i] = 0.f; if (R) R[i] = 0.f; }
+            return;
+        }
         if (sampleActive())
         {
             for (int i = 0; i < num; ++i) { L[i] = 0.f; if (R) R[i] = 0.f; }
@@ -133,7 +205,7 @@ public:
         if (sfActive())
         {
             for (int i = 0; i < num; ++i) { L[i] = 0.f; if (R) R[i] = 0.f; }
-            sf.renderAdd (L, R, num, level * 0.6f);
+            curSF().renderAdd (L, R, num, level * 0.6f);
             if (R) reverb.processStereo (L, R, num);
             for (int i = 0; i < num; ++i) { L[i] = std::tanh (L[i]); if (R) R[i] = std::tanh (R[i]); }
             return;
@@ -310,8 +382,49 @@ public:
 
 private:
     std::array<int, 128> ksArt = [] { std::array<int, 128> a; a.fill (-2); return a; }();   // -2 = a normal note, -1 = silent key-switch, >= 0 = switches to that articulation
-    bool sampleActive() const { return useSample && smp.isLoaded(); }
-    bool sfActive() const { return useSoundFont && sf.isLoaded(); }
+    bool sampleActive() const { return effective == S_OneShot && smp.isLoaded(); }
+    bool sfActive() { return effective == S_SoundFont && curSF().isLoaded(); }
+    SoundFontPlayer& curSF() { return *sfSlot[(size_t) juce::jlimit (0, kSlots - 1, instrument)]; }
+
+    Config desired, active; bool configured = false;
+    int effective = S_Builtin;
+    std::vector<float> tailL, tailR; int tailLeft = 0;
+
+    /** which source can really play for this configuration (never a silent fallback to someone else's sound) */
+    int resolveSource (const Config& c)
+    {
+        int warn = W_None, eff = S_Builtin;
+        auto& f = slotSF (c.inst);
+        switch (c.src)
+        {
+            case S_OneShot:   if (slotSample (c.inst) != nullptr) eff = S_OneShot; else warn = W_NoOneShot; break;
+            case S_SoundFont:
+                if (! f.isLoaded()) warn = W_NoSoundFont;
+                else { f.setProgram (gmProgram (c.inst, c.sax == 1)); f.setPreset (c.sfPreset); if (f.canPlay()) eff = S_SoundFont; else warn = W_NoProgram; }
+                break;
+            case S_External:  eff = S_External; break;
+            default: break;
+        }
+        lastWarn = warn;
+        return eff;
+    }
+    int lastWarn = W_None;
+    void flush()
+    {
+        for (auto& v : voices) v.clear();
+        for (auto& f : sfSlot) f->soundsOff();
+        smp.reset(); eng.reset(); reverb.reset();
+        for (int c = 0; c < 16; ++c) { bend[(size_t) c] = 0; mod[(size_t) c] = 0; aftertouch[(size_t) c] = 0; expr[(size_t) c] = exprTarget[(size_t) c] = 100.f / 127.f; pedal[(size_t) c] = false; }
+    }
+    void apply (const Config& c)
+    {
+        active = c; configured = true;
+        instrument = c.inst; saxAlto = (c.sax == 1); soundIdx = c.sound;
+        effective = resolveSource (c);
+        smp.setSample (effective == S_OneShot ? slotSample (c.inst) : nullptr);
+        syncEngine();
+        nowInst = c.inst; nowSound = c.sound; nowReqSrc = c.src; nowEffSrc = effective; nowWarn = lastWarn; nowSfPreset = c.sfPreset; nowAlto = c.sax == 1 ? 1 : 0;
+    }
     bool engFor (int ch) const { return ch != 2 && ! eng.usesClassic(); }      // MIDI channel 3 (the chord pad) keeps its soft pad
     int soundIdx = 0, engKey = -1;
     void syncEngine()
@@ -362,6 +475,7 @@ private:
     std::array<bool, 16> pedal {};
     std::array<int, 16> art {};
     juce::Reverb reverb;
+    float roomSize = 0.45f, roomDamp = 0.5f, roomWidth = 1.f; bool monoOut = false;
     juce::Random rnd;
 
     float noise() { return rnd.nextFloat() * 2.f - 1.f; }

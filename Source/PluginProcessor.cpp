@@ -28,7 +28,7 @@ int getI (const juce::AudioProcessorValueTreeState& a, const char* id) { return 
 bool getB (const juce::AudioProcessorValueTreeState& a, const char* id) { return getF (a, id) > 0.5f; }
 
 // parameters that change the notes (need a full regenerate with the same seed) / only the expression pass
-const char* kGenIds[] = { "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift" };
+const char* kGenIds[] = { "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift", "speed", "subdiv" };
 const char* kFinIds[] = { "library", "humanize", "hTiming", "hVel", "hLength", "hFeel", "ksBase", "bendRange", "emitKS", "emitBends", "emitCC", "realize", "exportMode" };
 }
 
@@ -118,12 +118,86 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
     flt ("volume", "Player Volume", 0.f, 1.f, 0.75f);
     flt ("reverb", "Player Reverb", 0.f, 1.f, 0.25f);
     // built-in preview sound, one choice per instrument (Concert grand, Rhodes, Prophet-5, Stratocaster, Tenor sax, P-Bass ...)
+    // ---- v2.7 log drum control panel (relative controls: 100% = the selected log drum type's own value)
+    {
+        auto f = [&] (const char* id, const char* name, float lo, float hi, float def, const char* unit)
+        {
+            l.add (std::make_unique<juce::AudioParameterFloat> (P { id, 1 }, name, juce::NormalisableRange<float> (lo, hi), def,
+                                                                juce::AudioParameterFloatAttributes().withLabel (unit)));
+        };
+        l.add (std::make_unique<juce::AudioParameterInt> (P { "ldTune", 1 }, "Log Drum Tune", -12, 12, 0));
+        f ("ldFine", "Log Drum Fine Tune", -50.f, 50.f, 0.f, "ct");
+        f ("ldDrop", "Log Drum Pitch Drop", 0.f, 200.f, 100.f, "%");
+        f ("ldDropT", "Log Drum Drop Time", 25.f, 300.f, 100.f, "%");
+        f ("ldAttack", "Log Drum Attack", 0.f, 20.f, 0.5f, "ms");
+        f ("ldPunch", "Log Drum Punch", 0.f, 200.f, 100.f, "%");
+        f ("ldDecay", "Log Drum Decay", 25.f, 300.f, 100.f, "%");
+        f ("ldSub", "Log Drum Sub Level", -24.f, 6.f, 0.f, "dB");
+        f ("ldBody", "Log Drum Body Resonance", 0.f, 200.f, 100.f, "%");
+        f ("ldTone", "Log Drum Tone", -100.f, 100.f, 0.f, "%");
+        f ("ldDrive", "Log Drum Drive", 0.f, 100.f, 0.f, "%");
+        f ("ldWidth", "Log Drum Stereo Width", 0.f, 100.f, 20.f, "%");
+        f ("ldVel", "Log Drum Velocity Response", 0.f, 100.f, 60.f, "%");
+        f ("ldGlide", "Log Drum Glide", 0.f, 500.f, 60.f, "ms");
+        f ("ldHuman", "Log Drum Humanize", 0.f, 100.f, 30.f, "%");
+        f ("ldRoom", "Log Drum Room", 0.f, 100.f, 10.f, "%");
+        f ("ldOut", "Log Drum Output", -24.f, 6.f, 0.f, "dB");
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "ldMono", 1 }, "Log Drum Mono Maker", juce::StringArray { "Off", "80 Hz", "120 Hz", "160 Hz" }, 2));
+        l.add (std::make_unique<juce::AudioParameterBool> (P { "ldSC", 1 }, "Log Drum Sidechain-Friendly Output", true));
+    }
+    for (int i : { 5 })
+    {
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "src" + juce::String (i), 1 }, juce::String ("Sound Source (") + instName (i) + ")",
+                                                             juce::StringArray { "Built-in engine", "One-shot sample", "SoundFont", "External instrument (MIDI out)" }, 0,
+                                                             juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+    }
     for (int i : { 5 })
     {
         juce::StringArray names; for (auto& pt : enochsolo::snd::patchList (i)) names.add (pt.name);
         const juce::String id = "sound" + juce::String (i);
         l.add (std::make_unique<juce::AudioParameterChoice> (P { id, 1 }, juce::String ("Preview Sound (") + instName (i) + ")", names, 0,
                                                              juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+    }
+    // ---- v2.7 batch 2: global sound controls (both plugins), glide, speed and subdivisions
+    {
+        auto pct = [&] (const char* id, const char* name, float lo, float hi, float def)
+        {
+            l.add (std::make_unique<juce::AudioParameterFloat> (P { id, 1 }, name, juce::NormalisableRange<float> (lo, hi), def,
+                                                                juce::AudioParameterFloatAttributes().withLabel ("%")));
+        };
+        pct ("realism", "Realism", 0.f, 100.f, 60.f);
+        pct ("sndHuman", "Sound Humanization", 0.f, 100.f, 30.f);
+        pct ("dynamics", "Dynamics", 0.f, 100.f, 50.f);
+        pct ("exprResp", "Expression Response", 0.f, 100.f, 50.f);
+        pct ("bright", "Brightness", -100.f, 100.f, 0.f);
+        pct ("mechNoise", "Mechanical Noise", 0.f, 100.f, 50.f);
+        pct ("micPos", "Mic Position (close - far)", 0.f, 100.f, 35.f);
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "roomType", 1 }, "Room", juce::StringArray { "Classic (as before)", "Studio", "Small room", "Club", "Hall", "Plate", "Church" }, 0));
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "outMode", 1 }, "Preview Output", juce::StringArray { "Stereo", "Mono" }, 0));
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "glideMode", 1 }, "Glide Mode", juce::StringArray { "Off", "Legato glide", "Always glide", "Overlap glide", "Portamento" }, 1));
+        pct ("glideTime", "Glide Time (fast - slow)", 0.f, 100.f, 20.f);
+        l.add (std::make_unique<juce::AudioParameterBool> (P { "humanPlay", 1 }, "Human Play (phrasing engine)", true));
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "speed", 1 }, "Speed", juce::StringArray { "Normal", "Double time (2x)" }, 0,
+                                                             juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "subdiv", 1 }, "Fastest Subdivision", juce::StringArray { "Auto (style)", "1/16", "1/16 triplets", "1/32", "1/32 triplets" }, 0,
+                                                             juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+    }
+    // ---- v2.7 batch 3: modulation matrix (4 slots) + creative effect
+    {
+        const juce::StringArray srcs { "Off", "LFO 1", "LFO 2", "Velocity", "Mod wheel", "Aftertouch", "Expression", "Key (pitch)", "Note envelope", "Random per note" };
+        const juce::StringArray dsts { "Pitch", "Brightness", "Level", "Pan", "Vibrato", "Drive" };
+        for (int k = 1; k <= 4; ++k)
+        {
+            const juce::String n (k);
+            l.add (std::make_unique<juce::AudioParameterChoice> (P { "mm" + n + "Src", 1 }, "Mod " + n + " Source", srcs, 0));
+            l.add (std::make_unique<juce::AudioParameterChoice> (P { "mm" + n + "Dst", 1 }, "Mod " + n + " Destination", dsts, 0));
+            l.add (std::make_unique<juce::AudioParameterFloat> (P { "mm" + n + "Amt", 1 }, "Mod " + n + " Amount", juce::NormalisableRange<float> (-100.f, 100.f), 0.f,
+                                                                juce::AudioParameterFloatAttributes().withLabel ("%")));
+        }
+        l.add (std::make_unique<juce::AudioParameterFloat> (P { "lfo1Rate", 1 }, "LFO 1 Rate", juce::NormalisableRange<float> (0.1f, 12.f, 0.f, 0.5f), 5.f, juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+        l.add (std::make_unique<juce::AudioParameterFloat> (P { "lfo2Rate", 1 }, "LFO 2 Rate", juce::NormalisableRange<float> (0.02f, 4.f, 0.f, 0.5f), 0.3f, juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "fxMode", 1 }, "Creative Effect", juce::StringArray { "Off", "Tape wobble", "Lo-fi", "Wide", "Telephone / radio", "Warm saturation" }, 0));
+        l.add (std::make_unique<juce::AudioParameterFloat> (P { "fxAmt", 1 }, "Creative Effect Amount", juce::NormalisableRange<float> (0.f, 100.f), 50.f, juce::AudioParameterFloatAttributes().withLabel ("%")));
     }
     return l;
 }
@@ -145,6 +219,12 @@ EnochSoloProcessor::EnochSoloProcessor()
       apvts (*this, nullptr, "ENOCHBASS", createLayout())
 {
     loadLibraries();
+    for (int i = 0; i < TestPlayer::kSlots; ++i)
+    {
+        sfPresets[(size_t) i] = -1;
+        soundParams[(size_t) i] = apvts.getRawParameterValue ("sound" + juce::String (i));     // null for instruments this plugin does not have
+        srcParams[(size_t) i] = apvts.getRawParameterValue ("src" + juce::String (i));
+    }
     for (auto* id : kGenIds) apvts.addParameterListener (id, this);
     for (auto* id : kFinIds) apvts.addParameterListener (id, this);
     seed = (uint64_t) juce::Random::getSystemRandom().nextInt64();
@@ -196,6 +276,7 @@ Settings EnochSoloProcessor::currentSettings() const
     s.chordTrack = getB (apvts, "chordTrack");
     s.busy = getF (apvts, "busy");
     s.barBusy = barBusy;
+    s.speed = juce::jlimit (0, 1, getI (apvts, "speed")); s.subdiv = juce::jlimit (0, 4, getI (apvts, "subdiv")); s.barSpeed = barSpeed;
     s.refProfile = refProfile;
     s.refAmount = getF (apvts, "refAmount");
     s.refTempo = juce::jlimit (0, 2, getI (apvts, "refTempo"));
@@ -326,6 +407,7 @@ Settings EnochSoloProcessor::editSettings() const
     s.tsNum = m.tsNum; s.tsDen = m.tsDen; s.bars = m.bars; s.mode = m.mode; s.octaveShift = m.octaveShift; s.intensity = m.intensity;
     s.harmony = m.harmony; s.chordText = m.chordText; s.space = m.space; s.repeat = m.repeat; s.chordTrack = m.chordTrack;
     s.busy = m.busy; s.barBusy = barBusy;
+    s.speed = m.speed; s.subdiv = m.subdiv; s.barSpeed = barSpeed;
     s.refProfile = m.refProfile; s.refAmount = m.refAmount; s.refTempo = m.refTempo; s.refShift = m.refShift;
     s.grooveProfile = m.grooveProfile; s.grooveAmount = m.grooveAmount; s.grooveTempo = m.grooveTempo; s.grooveShift = m.grooveShift; s.voice2 = m.voice2; s.clave = m.clave;
     s.hSeed = hSeed;
@@ -438,6 +520,22 @@ void EnochSoloProcessor::applyBusy (int bar0, int bar1, float busy, uint64_t sd)
     Generator::finalize (master, s);
     publishMaster();
 }
+
+void EnochSoloProcessor::applyBarSpeed (int bar0, int bar1, int speed, uint64_t sd)
+{
+    const int bars = master.bars;
+    if (bars <= 0) return;
+    bar0 = std::max (0, bar0); bar1 = std::min (bars - 1, bar1);
+    if (bar1 < bar0) return;
+    pushUndo();
+    if ((int) barSpeed.size() < bars) barSpeed.resize ((size_t) bars, -1);
+    for (int b = bar0; b <= bar1; ++b) barSpeed[(size_t) b] = juce::jlimit (-1, 1, speed);
+    Settings s = editSettings(); s.barChords = barChords;
+    Generator::rerollRegion (master, s, bar0, bar1 + 1, sd);
+    Generator::finalize (master, s);
+    publishMaster();
+}
+int EnochSoloProcessor::barSpeedOf (int bar) const { return bar >= 0 && bar < (int) barSpeed.size() ? barSpeed[(size_t) bar] : -1; }
 
 void EnochSoloProcessor::commitCtrl (int lane, double t0, double t1, std::vector<CtrlPoint> pts)
 {
@@ -599,7 +697,7 @@ bool EnochSoloProcessor::loadMyStyle (const juce::String& name, juce::String& me
         }
         if (rp->valid()) refProfile = rp;
     }
-    barBusy.clear();
+    barBusy.clear(); barSpeed.clear();
     loadingState = false;
     needRegen = true; timerCallback();
     tryAnother();
@@ -723,7 +821,7 @@ void EnochSoloProcessor::applyPreset (int i)
     setParam ("key", (float) pr.key); setParam ("scale", (float) pr.scale); setParam ("harmony", (float) pr.harmony);
     setParam ("intensity", pr.intensity); setParam ("bars", (float) pr.bars);
     setParam ("mode", 0.f); setParam ("space", 0.5f); setParam ("repeat", 0.5f); setParam ("busy", 0.5f);
-    barBusy.clear();
+    barBusy.clear(); barSpeed.clear();
     loadingState = false;
     chordText = juce::String();
     needRegen = true; timerCallback();
@@ -901,8 +999,18 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const int inst = getI (apvts, "inst");
     const auto& st = styleFor (inst, juce::jlimit (0, std::max (0, maxArtists() - 1), getI (apvts, "artist")));
     if (inst != lastInstrument) { player.reset(); lastInstrument = inst; }
-    player.setInstrument (inst, st.variant);
-    if (auto* sp = apvts.getRawParameterValue ("sound" + juce::String (inst))) player.setSound ((int) std::lround (sp->load()));
+    {
+        // the player switches instrument, sound and source in one step on the audio thread (fade, full flush, then the new sound)
+        TestPlayer::Config cfg;
+        const int slot = juce::jlimit (0, TestPlayer::kSlots - 1, inst);
+        cfg.inst = inst; cfg.sax = st.variant;
+        if (auto* sp = soundParams[(size_t) slot]) cfg.sound = (int) std::lround (sp->load());
+        if (auto* sp = srcParams[(size_t) slot]) cfg.src = (int) std::lround (sp->load());
+        cfg.sfPreset = sfPresets[(size_t) slot].load();
+        cfg.smpGen = smpGen[(size_t) slot].load(); cfg.sfGen = sfGen[(size_t) slot].load();
+        player.setDesired (cfg);
+        player.update();
+    }
     player.setKeySwitches (getI (apvts, "ksBase"), getI (apvts, "bendRange"));
     {
         const auto& ll = getLibraries (inst);
@@ -911,9 +1019,42 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (lp != lastLibPtr || inst != lastLibInst || getI (apvts, "ksBase") != lastLibBase)
         { player.configureKeySwitches (lp, inst, getI (apvts, "ksBase")); lastLibPtr = lp; lastLibInst = inst; lastLibBase = getI (apvts, "ksBase"); }
     }
-    player.setLevel (getF (apvts, "volume"), getF (apvts, "reverb"));
-    player.useSoundFont = getB (apvts, "sfOn");
-    player.useSample = getB (apvts, "smpOn");
+    {
+        enochsolo::snd::Engine::LogCtl lc;
+        lc.tune = (float) getI (apvts, "ldTune") + getF (apvts, "ldFine") / 100.f;
+        lc.dropMul = getF (apvts, "ldDrop") / 100.f; lc.dropTimeMul = getF (apvts, "ldDropT") / 100.f;
+        lc.attack = getF (apvts, "ldAttack") / 1000.f; lc.punchMul = getF (apvts, "ldPunch") / 100.f;
+        lc.decayMul = getF (apvts, "ldDecay") / 100.f; lc.subDb = getF (apvts, "ldSub"); lc.bodyMul = getF (apvts, "ldBody") / 100.f;
+        lc.tone = getF (apvts, "ldTone") / 100.f; lc.drive = getF (apvts, "ldDrive") / 100.f; lc.width = getF (apvts, "ldWidth") / 100.f;
+        lc.velResp = getF (apvts, "ldVel") / 100.f; lc.glide = getF (apvts, "ldGlide") / 1000.f; lc.human = getF (apvts, "ldHuman") / 100.f;
+        lc.outDb = getF (apvts, "ldOut");
+        static const float monoHz[] = { 0.f, 80.f, 120.f, 160.f };
+        lc.monoHz = monoHz[juce::jlimit (0, 3, getI (apvts, "ldMono"))]; lc.scSafe = getB (apvts, "ldSC");
+        player.eng.setLogControls (lc);
+    }
+    // a log drum uses its own room amount (the panel's ROOM knob)
+    {
+        enochsolo::snd::Engine::GlobalCtl g;
+        g.realism = getF (apvts, "realism") / 100.f; g.human = getF (apvts, "sndHuman") / 100.f; g.dynamics = getF (apvts, "dynamics") / 100.f;
+        g.exprResp = getF (apvts, "exprResp") / 100.f; g.bright = getF (apvts, "bright") / 100.f; g.mech = getF (apvts, "mechNoise") / 100.f;
+        g.mic = getF (apvts, "micPos") / 100.f; g.glideMode = juce::jlimit (0, 4, getI (apvts, "glideMode")); g.glideTime = getF (apvts, "glideTime") / 100.f;
+        g.humanPlay = getB (apvts, "humanPlay"); g.seed = (uint32_t) (master.s.seed & 0xffffffffu) | 1u;
+        player.eng.setGlobal (g);
+        enochsolo::snd::Engine::ModCtl mc;
+        for (int k = 0; k < 4; ++k)
+        {
+            const juce::String n (k + 1);
+            mc.slot[(size_t) k].src = getI (apvts, ("mm" + n + "Src").toRawUTF8()); mc.slot[(size_t) k].dst = getI (apvts, ("mm" + n + "Dst").toRawUTF8());
+            mc.slot[(size_t) k].amt = getF (apvts, ("mm" + n + "Amt").toRawUTF8()) / 100.f;
+        }
+        mc.lfo1Hz = getF (apvts, "lfo1Rate"); mc.lfo2Hz = getF (apvts, "lfo2Rate");
+        mc.fx = getI (apvts, "fxMode"); mc.fxAmt = getF (apvts, "fxAmt") / 100.f;
+        player.eng.setMod (mc);
+        player.setRoom (getI (apvts, "roomType"));
+        player.setMonoOut (getI (apvts, "outMode") == 1);
+    }
+    // a far microphone hears more of the room
+    player.setLevel (getF (apvts, "volume"), juce::jlimit (0.f, 1.f, (player.eng.logDrumActive() ? getF (apvts, "ldRoom") / 100.f : getF (apvts, "reverb")) + 0.3f * juce::jmax (0.f, (getF (apvts, "micPos") / 100.f - 0.35f) / 0.65f)));
     { const int ri = getI (apvts, "smpRoot"); player.smp.setRootOverride (ri > 0 ? 11 + ri : 0); }
 
     // notes auditioned from the piano roll join the incoming MIDI
@@ -936,7 +1077,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const bool running = hostActive || internalPlaying.load();
     const bool useHost = hostActive;
     genBuffer.clear(); playBuffer.clear();
-    const bool sendMidiOut = getB (apvts, "midiOut");
+    const bool sendMidiOut = getB (apvts, "midiOut") || player.effectiveSource() == TestPlayer::S_External;     // External source: your own instrument plays
     if (sendMidiOut) genBuffer.addEvents (auditionBuf, 0, n, 0);        // clicked keys / notes also reach your instrument track
     auto flushHeld = [&]
     {
@@ -1076,7 +1217,7 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         state.setProperty ("ctrlPts", cp, nullptr);
         state.setProperty ("ctrlRegions", cr, nullptr);
     }
-    state.setProperty ("smpPath", bassSamplePath, nullptr);
+    state.setProperty ("smpPath", smpPaths[(size_t) curSlot()], nullptr);         // older versions read this one
     state.setProperty ("uiRollGrow", uiRollGrow, nullptr);
     state.setProperty ("uiLaneH", uiLaneH, nullptr);
     if (grooveProfile && grooveProfile->valid())
@@ -1104,12 +1245,66 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
     {
         juce::String bb; for (float v : barBusy) bb << juce::String (v, 3) << ',';
         state.setProperty ("barBusy", bb, nullptr);
+        juce::String bs; for (int v : barSpeed) bs << v << ',';
+        state.setProperty ("barSpeed", bs, nullptr);
         juce::String bc;
         for (auto& b : barChords) bc << (b.set ? 1 : 0) << ':' << b.degree << ':' << (int) b.q << ':' << b.mode << ',';
         state.setProperty ("barChords", bc, nullptr);
-        state.setProperty ("sfPath", soundFontPath, nullptr);
+        for (int i = 0; i < TestPlayer::kSlots; ++i)
+        {
+            state.setProperty ("sfPath_" + juce::String (i), sfPaths[(size_t) i], nullptr);
+            state.setProperty ("sfPreset_" + juce::String (i), sfPresets[(size_t) i].load(), nullptr);
+            state.setProperty ("smpPath_" + juce::String (i), smpPaths[(size_t) i], nullptr);
+        }
+        state.setProperty ("srcVer", 1, nullptr);
     }
     if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
+}
+
+void EnochSoloProcessor::restoreSoundSlots (const juce::ValueTree& vt)
+{
+    for (int i = 0; i < TestPlayer::kSlots; ++i)
+    {
+        player.setSlotSample (i, nullptr); player.slotSF (i).unload();
+        smpPaths[(size_t) i] = sfPaths[(size_t) i] = juce::String(); sfPresets[(size_t) i] = -1;
+    }
+    auto loadSmp = [&] (int i, const juce::String& path)
+    {
+        if (path.isEmpty() || ! juce::File (path).existsAsFile()) return;
+        juce::String m; auto smp = loadBassSample_ (juce::File (path), m);
+        if (smp) { player.setSlotSample (i, smp); smpPaths[(size_t) i] = path; }
+    };
+    auto loadSf = [&] (int i, const juce::String& path)
+    {
+        if (path.isEmpty() || ! juce::File (path).existsAsFile()) return;
+        juce::String m; loadSoundFontInto (i, juce::File (path), m);
+    };
+    if ((int) vt.getProperty ("srcVer", 0) >= 1)
+    {
+        for (int i = 0; i < TestPlayer::kSlots; ++i)
+        {
+            loadSmp (i, vt.getProperty ("smpPath_" + juce::String (i)).toString());
+            loadSf (i, vt.getProperty ("sfPath_" + juce::String (i)).toString());
+            sfPresets[(size_t) i] = (int) vt.getProperty ("sfPreset_" + juce::String (i), -1);
+        }
+    }
+    else
+    {
+        // a project saved before per-instrument sounds: the one-shot belongs to the instrument that was selected, the SoundFont to every
+        // instrument (as before); the Sound Source of each instrument is set to match what used to play
+        const int inst = juce::jlimit (0, TestPlayer::kSlots - 1, getI (apvts, "inst"));
+        const juce::String sp = vt.getProperty ("smpPath").toString(), fp = vt.getProperty ("sfPath").toString();
+        loadSmp (inst, sp);
+        if (fp.isNotEmpty()) for (int i : { 5 }) loadSf (i, fp);
+        for (int i : { 5 })
+        {
+            int src = TestPlayer::S_Builtin;
+            if (getB (apvts, "smpOn") && i == inst && smpPaths[(size_t) i].isNotEmpty()) src = TestPlayer::S_OneShot;
+            else if (getB (apvts, "sfOn") && sfPaths[(size_t) i].isNotEmpty()) src = TestPlayer::S_SoundFont;
+            setParam (("src" + juce::String (i)).toRawUTF8(), (float) src);
+        }
+    }
+    for (int i = 0; i < TestPlayer::kSlots; ++i) { smpGen[(size_t) i].fetch_add (1); sfGen[(size_t) i].fetch_add (1); }
 }
 
 void EnochSoloProcessor::setStateInformation (const void* data, int size)
@@ -1183,14 +1378,11 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     }
     uiRollGrow = juce::jlimit (0, 400, (int) vt.getProperty ("uiRollGrow", 0));
     uiLaneH = juce::jlimit (28.f, 900.f, (float) (double) vt.getProperty ("uiLaneH", 96.0));
-    bassSamplePath = vt.getProperty ("smpPath").toString();
-    if (bassSamplePath.isNotEmpty() && juce::File (bassSamplePath).existsAsFile()) { juce::String m; auto s = loadBassSample_ (juce::File (bassSamplePath), m); player.smp.setSample (s); if (! s) bassSamplePath = juce::String(); }
-    else { player.smp.setSample (nullptr); bassSamplePath = juce::String(); }
-    soundFontPath = vt.getProperty ("sfPath").toString();
-    if (soundFontPath.isNotEmpty() && juce::File (soundFontPath).existsAsFile()) { juce::String m; player.sf.load (juce::File (soundFontPath), sr, m); }
-    else { player.sf.unload(); if (soundFontPath.isNotEmpty()) soundFontPath = juce::String(); }
-    barBusy.clear();
+    restoreSoundSlots (vt);
+    barBusy.clear(); barSpeed.clear();
     for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("barBusy").toString(), ",", "")) barBusy.push_back (tok.getFloatValue());
+    barSpeed.clear();
+    for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("barSpeed").toString(), ",", "")) if (tok.isNotEmpty()) barSpeed.push_back (tok.getIntValue());
     undoStack.clear(); redoStack.clear();
 
     // restore the exact notes (including edits) when they were saved
@@ -1454,43 +1646,111 @@ std::shared_ptr<const enochsolo::Library> EnochSoloProcessor::currentLibrary() c
     return (li > 0 && li < (int) ll.size()) ? ll[(size_t) li] : nullptr;
 }
 
+int EnochSoloProcessor::curSlot() const { return juce::jlimit (0, TestPlayer::kSlots - 1, getI (apvts, "inst")); }
+
+bool EnochSoloProcessor::loadSoundFontInto (int slot, const juce::File& f, juce::String& message)
+{
+    slot = juce::jlimit (0, TestPlayer::kSlots - 1, slot);
+    auto& dst = player.slotSF (slot);
+    bool ok = false;
+    // the same file already loaded for another instrument: share its samples instead of loading a second copy
+    for (int o = 0; o < TestPlayer::kSlots && ! ok; ++o)
+        if (o != slot && player.slotSF (o).isLoaded() && player.slotSF (o).path == f.getFullPathName())
+            ok = dst.loadCopyOf (player.slotSF (o), sr);
+    if (! ok) ok = dst.load (f, sr, message);
+    if (! ok) return false;
+    sfPaths[(size_t) slot] = f.getFullPathName();
+    sfPresets[(size_t) slot] = -1;
+    sfGen[(size_t) slot].fetch_add (1);
+    return true;
+}
+
 bool EnochSoloProcessor::loadSoundFont (const juce::File& f, juce::String& message)
 {
-    if (! player.sf.load (f, sr, message)) return false;
-    soundFontPath = f.getFullPathName();
+    const int slot = curSlot();
+    if (! loadSoundFontInto (slot, f, message)) return false;
+    setParam (("src" + juce::String (slot)).toRawUTF8(), (float) TestPlayer::S_SoundFont);
     setParam ("sfOn", 1.f);
     return true;
 }
 
 void EnochSoloProcessor::clearSoundFont()
 {
-    player.sf.unload();
-    soundFontPath = juce::String();
+    const int slot = curSlot();
+    player.slotSF (slot).unload();
+    sfPaths[(size_t) slot] = juce::String(); sfPresets[(size_t) slot] = -1;
+    sfGen[(size_t) slot].fetch_add (1);
 }
+bool EnochSoloProcessor::hasSoundFont() const { return const_cast<TestPlayer&> (player).slotSF (curSlot()).isLoaded(); }
+juce::String EnochSoloProcessor::soundFontName() const { return const_cast<TestPlayer&> (player).slotSF (curSlot()).getName(); }
+juce::StringArray EnochSoloProcessor::soundFontPresets() { return player.slotSF (curSlot()).presetNames(); }
+int EnochSoloProcessor::soundFontPreset() const { return sfPresets[(size_t) curSlot()].load(); }
+void EnochSoloProcessor::setSoundFontPreset (int index) { const int slot = curSlot(); sfPresets[(size_t) slot] = index; sfGen[(size_t) slot].fetch_add (1); }
 
 bool EnochSoloProcessor::loadBassSample (const juce::File& f, juce::String& message)
 {
     auto s = loadBassSample_ (f, message);
     if (! s) return false;
-    player.smp.setSample (s);
-    bassSamplePath = f.getFullPathName();
+    const int slot = curSlot();
+    player.setSlotSample (slot, s);
+    smpPaths[(size_t) slot] = f.getFullPathName();
+    smpGen[(size_t) slot].fetch_add (1);
     setParam ("smpRoot", 0.f);
+    setParam (("src" + juce::String (slot)).toRawUTF8(), (float) TestPlayer::S_OneShot);
     setParam ("smpOn", 1.f);
     return true;
 }
 
-void EnochSoloProcessor::clearBassSample() { player.smp.setSample (nullptr); player.smp.allNotesOff(); bassSamplePath = juce::String(); }
-bool EnochSoloProcessor::hasBassSample() const { return player.smp.isLoaded(); }
+void EnochSoloProcessor::clearBassSample()
+{
+    const int slot = curSlot();
+    player.setSlotSample (slot, nullptr);
+    smpPaths[(size_t) slot] = juce::String();
+    smpGen[(size_t) slot].fetch_add (1);
+}
+bool EnochSoloProcessor::hasBassSample() const { return player.slotSample (curSlot()) != nullptr; }
 juce::String EnochSoloProcessor::bassSampleInfo() const
 {
-    auto s = player.smp.getSample();
+    auto s = player.slotSample (curSlot());
     if (! s) return juce::String();
     const int ri = (int) std::lround (apvts.getRawParameterValue ("smpRoot")->load());
     const int root = ri > 0 ? 11 + ri : s->rootNote;
     return s->name + "  (root " + juce::String (noteName (root)) + (ri > 0 ? ", set by you" : ", found automatically") + ")";
 }
 
-juce::String EnochSoloProcessor::soundFontName() const { return player.sf.getName(); }
+juce::String EnochSoloProcessor::nowPlayingText (bool& matches, bool& warning) const
+{
+    const int inst = getI (apvts, "inst"), slot = curSlot();
+    auto& pl = const_cast<TestPlayer&> (player);
+    const int ni = pl.nowInst.load(), ns = pl.nowSound.load(), req = pl.nowReqSrc.load(), eff = pl.nowEffSrc.load(), w = pl.nowWarn.load();
+    const int wantSound = soundParams[(size_t) slot] ? (int) std::lround (soundParams[(size_t) slot]->load()) : 0;
+    const int wantSrc = srcParams[(size_t) slot] ? (int) std::lround (srcParams[(size_t) slot]->load()) : 0;
+    matches = (ni == inst && ns == wantSound && req == wantSrc);
+    warning = (w != TestPlayer::W_None);
+    if (ni < 0) { matches = true; warning = true; return "waiting for the audio engine  !! the preview starts when your DAW is processing audio"; }
+    juce::String t = juce::String (instName (ni)).toUpperCase() + "  |  ";
+    const auto& pl2 = enochsolo::snd::patchList (ni);
+    switch (eff)
+    {
+        case TestPlayer::S_OneShot:  { auto smp = pl.slotSample (ni); t << "One-shot: " << (smp ? smp->name : juce::String ("?")); break; }
+        case TestPlayer::S_SoundFont:
+        {
+            const int pr = sfPresets[(size_t) juce::jlimit (0, TestPlayer::kSlots - 1, ni)].load();
+            t << "SoundFont: " << pl.slotSF (ni).getName();
+            if (pr >= 0) { auto names = pl.slotSF (ni).presetNames(); if (pr < names.size()) t << " > " << names[pr]; }
+            break;
+        }
+        case TestPlayer::S_External: t << "External instrument (MIDI out to your track)"; break;
+        default:
+            t << "Built-in: " << (ns >= 0 && ns < (int) pl2.size() ? juce::String (pl2[(size_t) ns].name) : juce::String ("?"));
+            if (ni == enochsolo::I_Sax && ns == 0) t << "  ->  " << (pl.nowAlto.load() ? "alto" : "tenor") << " sax for this artist";
+            break;
+    }
+    if (w == TestPlayer::W_NoOneShot)   t << "   !! no one-shot loaded for " << instName (ni) << " - built-in engine plays";
+    if (w == TestPlayer::W_NoSoundFont) t << "   !! no SoundFont loaded for " << instName (ni) << " - built-in engine plays";
+    if (w == TestPlayer::W_NoProgram)   t << "   !! this SoundFont has no " << instName (ni) << " program - built-in engine plays (pick a preset)";
+    return t;
+}
 
 void EnochSoloProcessor::setBarMode (int bar0, int bar1, int mode)
 {

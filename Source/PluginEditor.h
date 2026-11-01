@@ -7,6 +7,9 @@
 
 #define ENOCH_DEFAULT_THEME 5
 #include "EnochLook.h"
+#include "SourceBar.h"
+#include "FeelPanel.h"
+#include "LogDrumPanel.h"
 
 //==============================================================================
 /** Overview bar under the piano roll: drag the middle to scroll, drag either END to zoom in or out (left-right arrows show at the ends). */
@@ -310,10 +313,11 @@ private:
 };
 
 //==============================================================================
-class EnochSoloEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer
+class EnochSoloEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
     explicit EnochSoloEditor (EnochSoloProcessor&);
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     ~EnochSoloEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -396,6 +400,17 @@ private:
     juce::Label lKs, lBend, lVol, ksText, status, hint, barInfo, barBusyText;
 
     RollView roll;
+    LogDrumPanel ldPanel { proc };                                // v2.7: Amapiano log drum drawer
+    juce::TextButton ldBtn { "LOG DRUM" };
+    bool logOpen = false;
+    FeelPanel feelPanel { proc };                                 // v2.7 batch 2: SOUND & FEEL drawer
+    juce::TextButton feelBtn { "SOUND & FEEL" };
+    bool feelOpen = false;
+    juce::ComboBox barSpeedBox;                                   // v2.7: per-bar speed
+    SourceBar srcBar { proc };
+    juce::ScrollBar vScroll { true };                             // v2.7: always-visible scroll bar on the right
+    float scrollY = 0.f, scaleNow = 1.f; int shownTheme = -1;
+    void scrollBarMoved (juce::ScrollBar*, double) override;                                    // v2.7: SOUND SOURCE row + NOW PLAYING (main UI)
     RollGrip rollGrip;
     int rollGrow = 0;
     void applyRollGrow (int v);

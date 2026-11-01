@@ -15,6 +15,7 @@ namespace enochsolo
 {
 enum BassRole { BR_None = 0, BR_Root, BR_Fifth, BR_Octave, BR_Third, BR_Approach, BR_Other, BR_Ghost, BR_Harmonic, BR_Seventh };
 
+
 namespace bassdetail
 {
 inline const std::vector<std::string>& bassCells (int genre)
@@ -134,6 +135,16 @@ inline const std::vector<std::string>& bassCells (int genre)
         case G_Funk: { static const std::vector<std::string> m = [&] { std::vector<std::string> r; for (auto* b : { &funk, &disco }) r.insert (r.end(), b->begin(), b->end()); return r; }(); return m; }
         case G_HipHop: { static const std::vector<std::string> m = [&] { std::vector<std::string> r; for (auto* b : { &hiphop, &trap }) r.insert (r.end(), b->begin(), b->end()); return r; }(); return m; }
         case G_AfroHouse: return afrohouse;
+        // ---- v2.7 batch 3 genres
+        case G_Kizomba:       { static const std::vector<std::string> v = { "R.....R.R.......", "R..f..R.........", "R.....f...R.....", "R.......o..f..a.", "R..R............", "R.....R.o...f..." }; return v; }
+        case G_Zouk:          { static const std::vector<std::string> v = { "R..f..R.R..f..R.", "R..R..f.R..f..a.", "R..f....R..o..f." }; static const auto m = [&] { auto r = v; r.insert (r.end(), zouk.begin(), zouk.end()); return r; }(); return m; }
+        case G_PrivateSchool: { static const std::vector<std::string> v = { "R.....R...f.....", "..R...R.....f...", "R..R......o.f...", "R.......t..f....", "....R.R.....f.a." }; return v; }
+        case G_Bacardi:       { static const std::vector<std::string> v = { "R.RR.R.RR.Rf.R.o", "R..R.RR.R.Rf.R.f", "RR.R.R.RR.R.f.Ro", "R.R.RR.R.RR.f.R.", "R..RR.R..RR.f.R." }; return v; }
+        case G_Sgija:         { static const std::vector<std::string> v = { "R..R..R...R.....", "R..R..R..R..f...", "R.....R.R..f....", "R..R......R..a..", "R..R..R.o...f..." }; return v; }
+        case G_JazzFunk:      { static const std::vector<std::string> v = { "R..R..Ro.R.R..f.", "R.gR..R..g.R.oRa", "R..g.RR.g.R..f.a", "Rg.R.gR.R.gRo.f." }; static const auto m = [&] { auto r = v; r.insert (r.end(), funk.begin(), funk.end()); return r; }(); return m; }
+        case G_SmoothJazz:    { static const std::vector<std::string> v = { "R.....R...f.R...", "R..f....R...t.a.", "R.....R.o...f...", "R...R...f...R.a." }; return v; }
+        case G_Bebop: case G_HardBop: case G_ModalJazz: case G_CoolJazz: return jazz;
+        case G_LatinJazz:     return bassCells (G_AfroCuban);
         default: return afrobeat;
     }
 }
@@ -247,7 +258,7 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
     const double stepLen = m.barBeats / steps;
     auto at = [&] (double beat) -> const ChordSpan& { for (auto& c : chords) if (beat + 1e-6 >= c.start && beat < c.end - 1e-6) return c; return chords.back(); };
     const double swingAmt = gi.fixedSwing >= 0 ? std::clamp (gi.fixedSwing + st.swing * 0.1, 0.0, 1.0) : st.swing;
-    const bool walking = (S.genre == G_Swing) || st.name.rfind ("Ron Carter", 0) == 0 || st.name.rfind ("Blues Shuffle", 0) == 0;
+    const bool walking = (baseGenre (S.genre) == G_Swing) || st.name.rfind ("Ron Carter", 0) == 0 || st.name.rfind ("Blues Shuffle", 0) == 0;
 
     // groove lock (a drum / bass / keys loop of the project) and style reference (a bass recording whose rhythm is borrowed)
     GrooveView gv;
@@ -277,11 +288,21 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
     };
 
     const int phrase = gi.phraseBars > 0 ? gi.phraseBars : 4;
-    const bool claveOn = S.clave > 0 && (S.genre == G_Salsa || S.genre == G_AfroCuban) && m.simpleFour;
+    const bool claveOn = S.clave > 0 && (baseGenre (S.genre) == G_Salsa || baseGenre (S.genre) == G_AfroCuban) && m.simpleFour;
     auto pickSide = [&] (bool three) -> std::string { const auto& b = bassCellsSide (S.genre, three); return b[(size_t) rng.i (0, (int) b.size() - 1)]; };
     std::string mainCell = claveOn ? pickSide (true) : pickCell(), varCell = claveOn ? pickSide (true) : pickCell();
     std::string mainCell2 = claveOn ? pickSide (false) : std::string(), varCell2 = claveOn ? pickSide (false) : std::string();
     int prevPitch = rootPitchOf (chords.front().rootPc, lo);
+
+    // ---- v2.7 Amapiano log-drum phrasing: two-bar call and response, a fill at the end of every 4-bar phrase, new pairs now and then
+    const bool amapiano = isAmapianoFamily (S.genre) && m.simpleFour && steps == 16;
+    static const std::vector<std::string> amaCall = {
+        "R..R..R...R..o..", "R..R...R..R.f...", "R.....R.R..R..f.", "R..R..o...R..R..", "R...R..R..R.R...", "R..R..R..R....f." };
+    static const std::vector<std::string> amaResp = {
+        ".R..R..R..R.f...", "R..f..R...o..R..", "..R..R.R...R.f..", "R.....f.R..R.a..", "...R..R...R..o..", "R..R....R.R..f.." };
+    static const std::vector<std::string> amaFill = {
+        "R..R..R.R.R.fo.a", "R..R..RRo..R.f.a", "R..R.R..R.o.o.fa", "R.R..R..R..R.o.R" };
+    int amaPair = rng.i (0, (int) amaCall.size() - 1);
 
     for (int bar = 0; bar < S.bars; ++bar)
     {
@@ -292,6 +313,16 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
         const bool threeSide = ((bar % 2 == 0) == (S.clave != 2));        // clave 1 = 3-2 (bar 1 is the 3 side), clave 2 = 2-3
         std::string cell = (claveOn && ! threeSide) ? mainCell2 : mainCell;
         if (! phraseStart && rng.chance (std::clamp (0.55 - (double) S.repeat * 0.5 - st.motif * 0.25, 0.04, 0.6))) cell = (claveOn && ! threeSide) ? varCell2 : varCell;
+        if (amapiano)
+        {
+            if (phraseStart && bar > 0 && rng.chance (std::clamp (0.6 - (double) S.repeat * 0.5, 0.1, 0.7))) amaPair = rng.i (0, (int) amaCall.size() - 1);
+            // the sub-genres answer with their own cells: Private School fills rarely, Bacardi often, Sgija repeats its call
+            const double fillP = S.genre == G_PrivateSchool ? 0.35 : S.genre == G_Bacardi ? 0.9 : 0.75;
+            if (bar % 4 == 3 && rng.chance (fillP)) cell = amaFill[(size_t) rng.i (0, (int) amaFill.size() - 1)];
+            else if (S.genre != G_Amapiano) cell = (bar % 2 == 0 || S.genre == G_Sgija) ? mainCell : varCell;
+            else if (bar % 2 == 0) cell = amaCall[(size_t) amaPair];
+            else cell = rng.chance (0.8) ? amaResp[(size_t) amaPair] : amaResp[(size_t) rng.i (0, (int) amaResp.size() - 1)];
+        }
 
         // style reference: borrow the rhythm of the recording
         bool fromRef = false;
@@ -440,7 +471,7 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
             std::vector<H> hits;
             for (int i = 0; i < steps; ++i) if (c2[(size_t) i] != '.') hits.push_back ({ i, c2[(size_t) i] });
             // Latin anticipation: the hit on the "and of 4" plays the root of the NEXT chord, a beat-and-a-half before it arrives (the tumbao way)
-            if ((S.genre == G_Salsa || S.genre == G_AfroCuban || S.genre == G_Caribbean || S.genre == G_AfroBrazilian) && steps >= 16 && nextBarChord.rootPc != at (b0 + m.barBeats - 0.01).rootPc && rng.chance (0.8))
+            if ((baseGenre (S.genre) == G_Salsa || baseGenre (S.genre) == G_AfroCuban || baseGenre (S.genre) == G_Caribbean || baseGenre (S.genre) == G_AfroBrazilian) && steps >= 16 && nextBarChord.rootPc != at (b0 + m.barBeats - 0.01).rootPc && rng.chance (0.8))
                 for (auto& hh : hits) if (hh.step >= 13 && hh.step <= 14 && hh.ch != 'g') hh.ch = 'n';
             // tiny rhythm safety: never an empty bar
             if (hits.empty()) hits.push_back ({ 0, 'R' });

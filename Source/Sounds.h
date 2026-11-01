@@ -31,7 +31,8 @@ constexpr float kPi = 3.14159265358979f, kTwoPi = 6.28318530717959f;
 constexpr int kArtSlap = 27;              // Enoch Bass only (A_Slap)
 constexpr int kInstGuitar = 0, kInstSax = 1, kInstViolin = 2, kInstPiano = 3, kInstTrumpet = 4, kInstBass = 5;
 
-enum Kind { K_Piano = 0, K_Rhodes, K_Wurli, K_FMEP, K_Organ, K_Poly, K_Pluck, K_Sax, K_Brass, K_Bow, K_Sub, K_Log, K_Lead, K_Classic };
+enum Kind { K_Piano = 0, K_Rhodes, K_Wurli, K_FMEP, K_Organ, K_Poly, K_Pluck, K_Sax, K_Brass, K_Bow, K_Sub, K_Log, K_Lead, K_LogDrum, K_Classic,
+           K_BowPM, K_SaxPM, K_BrassPM };      // v2.7 batch 2: physical models (bowed string, reed + bore, lip + bore)
 constexpr int kNumP = 28;
 
 struct Patch
@@ -130,6 +131,15 @@ inline const std::vector<Patch>& patchList (int inst)
             P ("Smooth tenor (breathy, subtone)", K_Sax, { 0.f, .65f, .17f, 0.f, .8f, 1.3f, .06f }, 1),
             P ("R&B tenor (growly, hot reed)", K_Sax, { 0.f, 1.3f, .06f, .35f, 1.7f, .8f, .05f }),
         });
+        // v2.7: physical models (reed + conical bore waveguide, then the body formants), appended after Classic: older sound numbers stay the same
+        //  K_SaxPM: p0 formant set, p1 brightness, p2 breath, p3 reed stiffness, p4 reed opening, p5 attack scale, p6 auto vibrato, p7 blow position
+        grp = "Saxophones (physical model)";
+        for (auto& pt : std::vector<Patch> {
+            P ("Tenor sax (reed + bore model)",    K_SaxPM, { 0.f, 1.f, .05f, .30f, .70f, 1.f, .05f, .20f }, 0, 0, 0, 0, 1.f),
+            P ("Alto sax (reed + bore model)",     K_SaxPM, { 1.f, 1.1f, .05f, .32f, .68f, 1.f, .05f, .21f }, 0, 0, 0, 0, 1.f),
+            P ("Soprano sax (reed + bore model)",  K_SaxPM, { 2.f, 1.2f, .04f, .34f, .66f, .9f, .05f, .22f }, 0, 0, 0, 0, 1.f),
+            P ("Baritone sax (reed + bore model)", K_SaxPM, { 3.f, .85f, .06f, .28f, .72f, 1.2f, .04f, .19f }, 0, 0, 0, 0, 1.f),
+            P ("Breathy ballad tenor (model)",     K_SaxPM, { 0.f, .7f, .14f, .26f, .74f, 1.3f, .06f, .20f }, 1, 0, 0, 0, 1.f) }) a[kInstSax].push_back (pt);
 
         // ---------------- violin family
         grp = "Strings";
@@ -139,6 +149,13 @@ inline const std::vector<Patch>& patchList (int inst)
             P ("Fiddle (bright, edgy)", K_Bow, { 1.f, 1.35f, .09f, .7f, .05f, 1.3f }),
             P ("Cello", K_Bow, { .55f, .8f, .07f, 1.4f, .08f, 1.f }),
         });
+        //  K_BowPM: p0 body scale, p1 brightness, p2 bow noise, p3 attack scale, p4 auto vibrato, p5 bow pressure 0..1, p6 bow position (fraction of the string)
+        grp = "Strings (bowed string model)";
+        for (auto& pt : std::vector<Patch> {
+            P ("Violin (bowed string model)",      K_BowPM, { 1.f, 1.f, .04f, 1.f, .07f, .45f, .127f }, 0, 0, 0, 0, 1.f),
+            P ("Viola (bowed string model)",       K_BowPM, { .82f, .9f, .05f, 1.1f, .07f, .50f, .135f }, 0, 0, 0, 0, 1.f),
+            P ("Cello (bowed string model)",       K_BowPM, { .55f, .85f, .05f, 1.3f, .08f, .55f, .14f }, 0, 0, 0, 0, 1.f),
+            P ("Fiddle (bowed string model)",      K_BowPM, { 1.f, 1.3f, .08f, .7f, .05f, .58f, .125f }, 0, 0, 0, 0, 1.f) }) a[kInstViolin].push_back (pt);
 
         // ---------------- piano / keys
         grp = "Acoustic pianos";
@@ -175,6 +192,12 @@ inline const std::vector<Patch>& patchList (int inst)
             P ("Muted trumpet (Harmon)", K_Brass, { .9f, 1.f, 1.f, 1.f, 1.f, .06f, .04f }),
             P ("Lead trumpet (bright, brassy)", K_Brass, { 1.5f, 1.15f, 0.f, .8f, 1.5f, .05f, .04f }),
         });
+        //  K_BrassPM: p0 brightness, p1 formant scale, p2 mute, p3 attack scale, p4 lip tension (cents), p5 breath, p6 auto vibrato
+        grp = "Brass (lip + bore model)";
+        for (auto& pt : std::vector<Patch> {
+            P ("Trumpet (lip + bore model)",       K_BrassPM, { 1.f, 1.f, 0.f, 1.f, 0.f, .05f, .05f }, 0, 0, 0, 0, 1.f),
+            P ("Flugelhorn (lip + bore model)",    K_BrassPM, { .6f, .8f, 0.f, 1.3f, 0.f, .07f, .05f }, 0, 0, 0, 0, 1.f),
+            P ("Muted trumpet (lip + bore model)", K_BrassPM, { .9f, 1.f, 1.f, 1.f, 0.f, .05f, .04f }, 0, 0, 0, 0, 1.f) }) a[kInstTrumpet].push_back (pt);
 
         // ---------------- bass (Enoch Bass)
         std::vector<Patch> bs;
@@ -210,12 +233,45 @@ inline const std::vector<Patch>& patchList (int inst)
             P ("Acid 303 bass",                   K_Lead, { 0, -1, 0, 0, 0, 0, 0, .5f, 0, 350, 3.0f, 3.0f, .3f, .002f, .2f, .05f, .06f, .2f, 0, .06f, 0, 2.0f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 2.6f),
             P ("Sine sub bass (clean)",           K_Lead, { 3, -1, 0, 0, 0, 0, 0, .5f, 0, 8000, 0, 0, 0, .003f, .3f, 1.f, .1f, .3f, 1.f, .02f, 0, .6f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.4f),
             P ("808 sub bass", K_Sub, { 1.5f, 1.4f, 1.8f, 0.f }, 0, 0, 0, 0, 1.0f),
-            P ("808 long (slides)", K_Sub, { 2.8f, 1.0f, 2.2f, 0.f }, 0, 0, 0, 0, 1.0f),
+            P ("808 long (slides)", K_Sub, { 2.8f, 1.0f, 2.2f, 0.f }, 0, 0, 0, 0, 1.0f) }) bs.push_back (pt);
+        grp = "Legacy log drums (v2.6)";
+        for (auto& pt : std::vector<Patch> {
             P ("Log drum (amapiano)", K_Log, { .55f, .9f, 1.58f }, 0, 0, 0, 0, 1.1f),
             P ("Log drum deep (long)", K_Log, { .9f, .6f, 1.5f }, 0, 0, 0, 0, 1.1f),
             P ("Log drum short (knock)", K_Log, { .3f, 1.3f, 1.62f }, 0, 0, 0, 0, 1.2f) }) bs.push_back (pt);
         bs.push_back (classic());
+        // ---- v2.7: the rebuilt Amapiano log drums (appended after Classic so every older sound keeps its number)
+        grp = "Amapiano log drums";
+        //   K_LogDrum: p0 decay s, p1 drop st, p2 drop time s, p3 click, p4 punch, p5 sub, p6 body (wood modes), p7 tone Hz, p8 drive, p9 width,
+        //              p10 hybrid sustain, p11 glide s, p12 attack s, p13 sub decay ratio, p14 mode-2 ratio, p15 mode-3 ratio
+        for (auto& pt : std::vector<Patch> {
+            P ("Log drum: Classic Amapiano",  K_LogDrum, { .50f,  9.f, .035f, .35f, .60f, .55f, .50f, 1800.f, .25f, .20f, 0.f,  .06f, .0005f, 1.3f, 2.f, 3.f }, 0, 0, 0, 0, 1.0f),
+            P ("Log drum: Punchy Club",       K_LogDrum, { .32f, 12.f, .022f, .60f, 1.0f, .40f, .70f, 2600.f, .45f, .25f, 0.f,  .04f, .0003f, 1.0f, 2.f, 3.f }, 0, 0, 0, 0, 0.95f),
+            P ("Log drum: Deep Soulful",      K_LogDrum, { .85f,  6.f, .060f, .15f, .30f, .70f, .35f, 1200.f, .15f, .15f, 0.f,  .09f, .0020f, 1.5f, 2.f, 3.f }, 0, 0, 0, 0, 1.05f),
+            P ("Log drum: Sub-Heavy",         K_LogDrum, { .60f,  8.f, .040f, .30f, .55f, 1.0f, .30f, 1400.f, .30f, .10f, 0.f,  .07f, .0008f, 1.6f, 2.f, 3.f }, 0, 0, 0, 0, 0.95f),
+            P ("Log drum: Percussive",        K_LogDrum, { .20f, 14.f, .018f, .70f, .90f, .25f, .80f, 3000.f, .35f, .30f, 0.f,  .03f, .0003f, 0.8f, 2.f, 3.f }, 0, 0, 0, 0, 1.05f),
+            P ("Log drum: Hybrid Log / Bass", K_LogDrum, { .55f,  8.f, .035f, .35f, .55f, .70f, .45f, 1600.f, .30f, .15f, .70f, .08f, .0008f, 2.0f, 2.f, 3.f }, 0, 0, 0, 0, 0.95f) }) bs.push_back (pt);
         a[kInstBass] = bs;
+        // ---- v2.7 batch 2: more lead synths for every Enoch Solo instrument (appended: older sound numbers do not move)
+        grp = "Lead synths (v2.7)";
+        //                                       A    B    Bst  Bct  Blv  sub  nz   pw   pwm  cut     res   fenv  key  A      D     S     R     fD    fS    glide vib   drv   echo eT    vow  sync fb   vRate
+        const std::vector<Patch> leads2 = {
+            P ("Analog mono lead (warm, drifting)", K_Lead, { 0, 0, 0, 4, .9f, .3f, 0, .5f, 0, 1800, .3f, 1.6f, .5f, .006f, .4f, .85f, .15f, .45f, .5f, .04f, .12f, 1.4f, .10f, .30f, 0, 0, .25f, 5.4f }, 0, 0, 0, 0, 1.0f),
+            P ("Wah lead (filter sweep)",           K_Lead, { 0, 1, 0, 6, .6f, .2f, 0, .5f, 0, 600, 1.4f, 3.2f, .5f, .004f, .6f, .7f, .18f, .7f, .2f, .03f, .10f, 1.6f, .10f, .30f, 0, 0, .25f, 5.4f }, 0, 0, 0, 0, 1.1f),
+            P ("Hollow square lead (woody)",        K_Lead, { 1, -1, 0, 0, 0, 0, .04f, .5f, 0, 2200, .2f, .6f, .5f, .02f, .3f, .9f, .15f, .4f, .7f, .04f, .14f, .8f, .15f, .33f, 0, 0, .25f, 5.0f }, 0, 0, 0, 0, 1.2f),
+            P ("Vocal synth lead (aah)",            K_Lead, { 0, 2, 12, 0, .4f, 0, .02f, .5f, 0, 3500, .1f, .6f, .4f, .03f, .4f, .9f, .18f, .5f, .6f, .05f, .20f, 1.0f, .18f, .33f, .7f, 0, .25f, 5.6f }, 0, 0, 0, 0, 1.3f),
+            P ("Highlife synth lead (bright pulse)", K_Lead, { 1, 1, 12, 5, .4f, 0, 0, .3f, .2f, 3200, .25f, 1.2f, .5f, .003f, .35f, .75f, .12f, .35f, .4f, .02f, .08f, 1.1f, .20f, .25f, 0, 0, .30f, 5.6f }, 1, 0, 0, 0, 1.1f),
+        };
+        for (int i = 0; i < 5; ++i) a[(size_t) i].insert (a[(size_t) i].end(), leads2.begin(), leads2.end());
+        // ---- v2.7 batch 2: more synth basses (Enoch Bass)
+        grp = "Synth basses (v2.7)";
+        for (auto& pt : std::vector<Patch> {
+            P ("Amapiano soft sub (round sine + octave)", K_Lead, { 3, 3, 12, 0, .22f, 0, 0, .5f, 0, 5000, 0, 0, 0, .006f, .4f, .9f, .12f, .4f, 1.f, .05f, 0, 1.1f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.3f),
+            P ("Funk Minimoog bass (plucky)",            K_Lead, { 0, 0, 0, 0, 0, .5f, 0, .5f, 0, 380, .7f, 3.2f, .3f, .001f, .18f, .2f, .06f, .15f, 0, .02f, 0, 2.0f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.0f),
+            P ("Deep house organ bass",                  K_Lead, { 1, 1, 12, 0, .5f, 0, 0, .5f, 0, 900, .2f, .8f, .3f, .002f, .3f, .8f, .08f, .3f, .5f, 0, 0, 1.2f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 0.9f),
+            P ("Reese growl (moving)",                   K_Lead, { 4, 0, 0, 25, .8f, .4f, 0, .5f, .3f, 650, .35f, .6f, .3f, .01f, .5f, .9f, .12f, .4f, .8f, .02f, 0, 2.4f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 0.7f),
+            P ("Trap 808 glide (long)",                  K_Sub,  { 3.2f, 1.2f, 2.6f, 0.f }, 0, 0, 0, 0, 1.0f),
+            P ("Afro-house pluck bass",                  K_Lead, { 1, 0, 0, 7, .5f, .3f, 0, .4f, 0, 700, .5f, 2.4f, .4f, .001f, .22f, .1f, .08f, .2f, .05f, 0, 0, 1.4f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.1f) }) a[kInstBass].push_back (pt);
         return a;
     }();
     return all[(size_t) std::clamp (inst, 0, 5)];
@@ -290,6 +346,7 @@ struct Chorus
 {
     std::vector<float> bl, br; int w = 0, size = 4096; float ph = 0, rate = 0.45f, depth = 0.f, mix = 0.f, sr = 44100.f;
     void prepare (float s) { sr = s; size = 1 << (int) std::ceil (std::log2 (s * 0.06f)); bl.assign ((size_t) size, 0.f); br.assign ((size_t) size, 0.f); w = 0; }
+    void clear() { std::fill (bl.begin(), bl.end(), 0.f); std::fill (br.begin(), br.end(), 0.f); }
     void set (int mode) { depth = mode == 0 ? 0.f : (mode == 1 ? 0.0016f : 0.0030f); mix = mode == 0 ? 0.f : (mode == 1 ? 0.35f : 0.5f); rate = mode == 2 ? 0.38f : 0.62f; }
     static float tap (const std::vector<float>& b, int w, int size, float d)
     {
@@ -324,6 +381,7 @@ public:
         sr = (float) rate;
         if (voices.empty()) voices.resize (kVoices);
         chorus.prepare (sr);
+        monoHzSet = -1.f; setLogControls (logc);
         echoL.assign ((size_t) (sr * 1.1f), 0.f); echoR.assign ((size_t) (sr * 1.1f), 0.f); echoW = 0;
         reset();
         applyEq();
@@ -340,15 +398,58 @@ public:
         applyEq();
     }
     bool usesClassic() const { return cur.kind == K_Classic; }
+    /** the log drum control panel (EnochBass). Relative controls: 1 = the selected type's own value */
+    struct LogCtl
+    {
+        float tune = 0.f, dropMul = 1.f, dropTimeMul = 1.f, attack = 0.0005f, punchMul = 1.f, decayMul = 1.f, subDb = 0.f, bodyMul = 1.f,
+              tone = 0.f, drive = 0.f, width = 0.2f, velResp = 0.6f, glide = 0.06f, human = 0.3f, outDb = 0.f, monoHz = 120.f;
+        bool scSafe = true;
+    };
+    void setLogControls (const LogCtl& c) { logc = c; if (std::abs (c.monoHz - monoHzSet) > 0.5f) { monoHzSet = c.monoHz; monoLpL.lowpass (std::max (20.f, c.monoHz), 0.707f, sr); monoLpR = monoLpL; } }
+    bool logDrumActive() const { return cur.kind == K_LogDrum; }
+    /** v2.7 global sound controls (both plugins). 0.5 = the natural / previous amount where it says so */
+    struct GlobalCtl
+    {
+        float realism = 0.6f;      // model detail: mechanical noises, resonances, per-note variation
+        float human = 0.3f;        // how different each note is (pitch drift, level, attack)
+        float dynamics = 0.5f;     // velocity range: 0 = even, 0.5 = as played, 1 = wide
+        float exprResp = 0.5f;     // how much expression (CC11) moves level and tone: 0.5 = as before
+        float bright = 0.f;        // -1 dark .. +1 bright (tilt)
+        float mech = 0.5f;         // mechanical noise amount (0.5 = natural)
+        float mic = 0.35f;         // 0 close .. 1 far (0.35 = neutral)
+        float glideTime = 0.2f;    // 0 fast and subtle .. 1 slow
+        int glideMode = 1;         // 0 off, 1 legato glide, 2 always glide, 3 overlap glide, 4 portamento
+        bool humanPlay = true;     // phrasing engine
+        uint32_t seed = 1;
+    };
+    void setGlobal (const GlobalCtl& g)
+    {
+        const bool tone = (g.bright != gc.bright || g.mic != gc.mic || ! toneInit);
+        gc = g;
+        if (tone) setTone();
+    }
+    const GlobalCtl& global() const { return gc; }
+    /** v2.7 batch 3: modulation matrix (4 slots) and creative effects */
+    enum ModSrc { MS_Off = 0, MS_Lfo1, MS_Lfo2, MS_Velocity, MS_ModWheel, MS_Aftertouch, MS_Expression, MS_Key, MS_Envelope, MS_Random, MS_Count };
+    enum ModDst { MD_Pitch = 0, MD_Bright, MD_Level, MD_Pan, MD_Vibrato, MD_Drive, MD_Count };
+    struct ModSlot { int src = 0, dst = 0; float amt = 0.f; };
+    struct ModCtl { std::array<ModSlot, 4> slot {}; float lfo1Hz = 5.f, lfo2Hz = 0.3f; int fx = 0; float fxAmt = 0.5f; };
+    void setMod (const ModCtl& m) { mmc = m; mmOn = false; for (auto& sl : m.slot) mmOn |= (sl.src != MS_Off && std::fabs (sl.amt) > 1e-4f); }
     const Patch& patch() const { return cur; }
 
     void reset()
     {
         for (auto& v : voices) v.active = false;
+        chorus.clear();
         std::fill (echoL.begin(), echoL.end(), 0.f); std::fill (echoR.begin(), echoR.end(), 0.f);
         lastLeadNote.fill (-1);
         bend.fill (0.f); mod.fill (0.f); aft.fill (0.f); expr.fill (100.f / 127.f); exprT.fill (100.f / 127.f); pedal.fill (false);
-        orderCounter = 0;
+        orderCounter = 0; noteCounter = 0; clock = 0.0;
+        for (auto& p : phr) p = Phrase();
+        lastMono.fill (-1);
+        for (auto& m : mech) m.a = 0.f;
+        resReset(); toneReset();
+        std::fill (fxL.begin(), fxL.end(), 0.f); std::fill (fxR.begin(), fxR.end(), 0.f); for (auto& b : fxBq) b.reset(); fxSet = -1;
         eqReset();
     }
     void setBend (int ch, float semis) { bend[(size_t) clampCh (ch)] = semis; }
@@ -358,6 +459,7 @@ public:
     void setPedal (int ch, bool down)
     {
         ch = clampCh (ch);
+        if (pedal[(size_t) ch] != down && (cur.kind == K_Piano || cur.kind == K_Rhodes || cur.kind == K_Wurli)) mechEvent (0.008f * mechMul(), 130.f, 1.f, 0.07f, 0.5f);
         pedal[(size_t) ch] = down;
         if (! down) for (auto& v : voices) if (v.active && v.ch == ch && v.heldByPedal) { v.heldByPedal = false; release (v); }
     }
@@ -371,43 +473,89 @@ public:
     {
         ch = clampCh (ch);
         if (cur.kind == K_Classic) return;
+        ++noteCounter;
         const bool lead = (cur.kind == K_Lead);
-        const bool mono = lead || (cur.kind == K_Sax || cur.kind == K_Brass || cur.kind == K_Bow || cur.kind == K_Sub || (cur.kind == K_Poly && instIdx == kInstBass));
+        const bool logd = (cur.kind == K_LogDrum);
+        const bool mono = lead || logd || (cur.kind == K_Sax || cur.kind == K_Brass || cur.kind == K_Bow || cur.kind == K_Sub || isPM (cur.kind) || (cur.kind == K_Poly && instIdx == kInstBass));
         const bool legatoArt = (art == A_Legato || art == A_HammerOn || art == A_PullOff || art == A_Slide || art == A_Gliss);
         const bool plucked = (cur.kind == K_Pluck);
         const bool pluckLeg = plucked && (art == A_HammerOn || art == A_PullOff || art == A_Slide);
+        const bool slideArt = (art == A_Slide || art == A_Gliss);
+        // phrasing engine + dynamics + humanisation shape the velocity (and leave hints for the voice in 'pend')
+        vel = shapeNote (ch, note, vel, art, legatoArt);
+        const int gm = gc.glideMode;
+        const float k = glideScale();
         if (mono || pluckLeg)
             for (auto& v : voices)
-                if (v.active && v.ch == ch && v.held && ! v.releasing && v.kind == cur.kind && (lead || (mono ? legatoArt : true)) && (lead || std::abs (v.note - note) <= 7))
+            {
+                if (! (v.active && v.ch == ch && v.kind == cur.kind)) continue;
+                const bool heldNow = v.held && ! v.releasing;
+                const bool ringing = v.releasing && v.env > 0.002f && (clock - phr[(size_t) ch].lastOff) < 0.25f;
+                bool connect = false;
+                if (logd) connect = (heldNow || (art == A_Slide && v.t < 2.f)) && logc.glide > 0.0005f;
+                else
                 {
-                    v.note = note; v.vel = vel;                       // same voice, new pitch: no new attack
-                    const float gt = lead ? std::max (0.004f, cur.p[19] * (art == A_Slide || art == A_Gliss ? 2.5f : 1.f))
-                                          : (art == A_Slide || art == A_Gliss ? 0.075f : (plucked ? 0.006f : 0.014f));
-                    v.glideCoef = 1.f - std::exp (-1.f / (gt * sr));
-                    if (plucked && (art == A_HammerOn || art == A_PullOff)) v.pluckBoost = art == A_HammerOn ? 0.55f : 0.f;
-                    return;
+                    const bool artConnect = mono ? legatoArt : pluckLeg;
+                    const int maxJump = (gm == 2 || gm == 3) ? 12 : 7;
+                    if (gm == 3)      connect = heldNow && (mono || pluckLeg);                     // overlap glide: any overlap connects
+                    else if (gm == 2) connect = (heldNow || (ringing && mono)) && (mono || pluckLeg); // always: overlaps and notes that just ended
+                    else              connect = heldNow && (lead || artConnect);                   // off / legato / portamento: the articulation decides (as before)
+                    if (! lead && std::abs (v.note - note) > maxJump) connect = false;
                 }
-        if (mono) for (auto& v : voices) if (v.active && v.ch == ch && v.held && v.kind == cur.kind) { v.held = false; release (v, 0.03f); }
+                if (! connect) continue;
+                const int from = v.note;
+                v.note = note; v.vel = vel;                                  // same voice, new pitch: no new attack
+                if (logd || ! heldNow) { v.held = true; v.releasing = false; }
+                if (! logd && v.releasing == false && ! heldNow) v.relCoef = 1.f;
+                float gt = logd ? std::max (0.004f, logc.glide)
+                         : lead ? std::max (0.004f, cur.p[19] * (slideArt ? 2.5f : 1.f) * k)
+                                : (slideArt ? std::max (0.075f, 0.075f * k) : (plucked ? 0.006f : 0.014f) * k);
+                if (gm == 0 && ! slideArt && ! logd) gt = 0.f;                // glide off: legato notes change pitch at once (slides still slide)
+                v.glideCoef = gt <= 0.f ? 1.f : 1.f - std::exp (-1.f / (gt * sr));
+                if (plucked && (art == A_HammerOn || art == A_PullOff)) v.pluckBoost = art == A_HammerOn ? 0.55f : 0.f;
+                // mechanics of the change: sax / trumpet keys and valves, a finger sliding on a string
+                if (cur.kind == K_Sax || cur.kind == K_SaxPM) mechEvent (0.0045f * mechMul(), 2300.f, 2.f, 0.007f, 0.5f);
+                if (cur.kind == K_Brass || cur.kind == K_BrassPM) mechEvent (0.0025f * mechMul(), 1500.f, 2.f, 0.006f, 0.5f);
+                if (plucked && slideArt && std::abs (from - note) >= 2) mechEvent (0.006f * mechMul(), 2700.f, 1.5f, 0.05f, 0.5f);
+                lastMono[(size_t) ch] = note;
+                return;
+            }
+        if (mono) for (auto& v : voices) if (v.active && v.ch == ch && (v.held || logd || (gm == 2 && v.kind == cur.kind)) && v.kind == cur.kind) { v.held = false; release (v, logd ? 0.012f : 0.03f); }
         Voice* slot = nullptr;
         for (auto& v : voices) if (! v.active) { slot = &v; break; }
         if (! slot) { long long best = -1; for (auto& v : voices) { const long long score = v.age + (v.releasing ? 1000000LL : 0); if (score > best) { best = score; slot = &v; } } }
         start (*slot, ch, note, vel, art);
+        const int last = lastMono[(size_t) ch];
         if (lead)
         {
             // portamento: long-glide sounds slide in from the last note even when the notes do not overlap
-            const int last = lastLeadNote[(size_t) ch];
-            if (cur.p[19] >= 0.08f && last >= 0 && last != note)
-            { slot->curSemis = (float) last; slot->glideCoef = 1.f - std::exp (-1.f / (cur.p[19] * sr)); }
+            const int lastL = lastLeadNote[(size_t) ch];
+            if (cur.p[19] >= 0.08f && lastL >= 0 && lastL != note && gm != 0)
+            { slot->curSemis = (float) lastL; slot->glideCoef = 1.f - std::exp (-1.f / (cur.p[19] * k * sr)); }
             lastLeadNote[(size_t) ch] = note;
         }
+        if (gm == 4 && mono && ! logd && last >= 0 && last != note && std::abs (last - note) <= 12)
+        {   // portamento mode: every new note slides in from the previous one (with its own attack)
+            slot->curSemis = (float) last;
+            slot->glideCoef = 1.f - std::exp (-1.f / (std::max (0.02f, 0.03f * k) * sr));
+        }
+        lastMono[(size_t) ch] = note;
     }
     void noteOff (int ch, int note)
     {
         ch = clampCh (ch);
+        phr[(size_t) ch].lastOff = clock;
         for (auto& v : voices)
             if (v.active && v.ch == ch && v.note == note && v.held)
             {
                 v.held = false;
+                // dampers / fingers leaving the string
+                if (! pedal[(size_t) ch])
+                {
+                    if (v.kind == K_Piano) mechEvent (0.0035f * mechMul() * (0.5f + (float) v.vel / 254.f), 420.f, 1.2f, 0.045f, v.pan);
+                    else if (v.kind == K_Rhodes || v.kind == K_Wurli) mechEvent (0.005f * mechMul(), 260.f, 1.4f, 0.04f, 0.5f);
+                }
+                if (v.kind == K_Pluck && v.t > 0.08f && v.art != A_PalmMute && v.art != A_Mute) mechEvent (0.0025f * mechMul(), 1900.f, 1.f, 0.02f, 0.5f);
                 if (pedal[(size_t) ch] && (v.kind == K_Piano || v.kind == K_Rhodes || v.kind == K_Wurli || v.kind == K_FMEP || (v.kind == K_Poly && instIdx == kInstPiano))) v.heldByPedal = true;
                 else release (v);
             }
@@ -422,19 +570,54 @@ public:
         {
             for (int c = 0; c < 16; ++c) expr[(size_t) c] += (exprT[(size_t) c] - expr[(size_t) c]) * exprSm;
             float oL = 0, oR = 0;
+            if (mmOn) { lfo1Ph += mmc.lfo1Hz / sr; if (lfo1Ph >= 1.f) lfo1Ph -= 1.f; lfo2Ph += mmc.lfo2Hz / sr; if (lfo2Ph >= 1.f) lfo2Ph -= 1.f; }
             for (auto& v : voices)
             {
                 if (! v.active) continue;
                 float sl = 0, sr_ = 0;
+                if (! mmOn) { if (! tick (v, sl, sr_)) { v.active = false; continue; } oL += sl; oR += sr_; continue; }
+                // modulation matrix: sources -> pitch / brightness / level / pan / vibrato / drive
+                float d[MD_Count] = {};
+                for (auto& m : mmc.slot) if (m.src != MS_Off && m.dst >= 0 && m.dst < MD_Count) d[m.dst] += m.amt * modSource (v, m.src);
+                v.pm[15] = v.baseDetune + 2.f * d[MD_Pitch] + 0.6f * d[MD_Vibrato] * std::sin (kTwoPi * 5.5f * v.t);
                 if (! tick (v, sl, sr_)) { v.active = false; continue; }
-                oL += sl; oR += sr_;
+                if (d[MD_Bright] != 0.f)
+                {
+                    v.mmLpL += (sl - v.mmLpL) * 0.12f; v.mmLpR += (sr_ - v.mmLpR) * 0.12f;
+                    const float k = 1.f + std::clamp (d[MD_Bright], -1.f, 1.5f);
+                    sl = v.mmLpL + k * (sl - v.mmLpL); sr_ = v.mmLpR + k * (sr_ - v.mmLpR);
+                }
+                if (d[MD_Drive] > 0.f) { const float dr = 1.f + 5.f * d[MD_Drive]; const float mk = (1.f + 0.5f * d[MD_Drive]) / dr; sl = std::tanh (sl * dr) * mk; sr_ = std::tanh (sr_ * dr) * mk; }
+                const float g = std::max (0.f, 1.f + d[MD_Level]);
+                const float pn = std::clamp (d[MD_Pan], -1.f, 1.f);
+                oL += sl * g * std::min (1.f, 1.f - pn); oR += sr_ * g * std::min (1.f, 1.f + pn);
             }
             oL *= gain * cur.level; oR *= gain * cur.level;
             chorus.process (oL, oR);
             if (cur.kind == K_Lead && cur.p[22] > 0.f) echoProcess (oL, oR);
             eqProcess (oL, oR);
+            if (cur.kind == K_Piano) resProcess (oL, oR);
+            mechRender (oL, oR);
+            toneProcess (oL, oR);
+            if (mmc.fx != 0) fxProcess (oL, oR);
+            if (cur.kind == K_LogDrum)
+            {
+                if (logc.monoHz > 0.f)                                               // everything under the mono point in the middle
+                {
+                    const float lL = monoLpL.process (oL), lR = monoLpR.process (oR), m = 0.5f * (lL + lR);
+                    oL = oL - lL + m; oR = oR - lR + m;
+                }
+                const float g = dbToLin (logc.outDb);
+                oL *= g; oR *= g;
+                if (logc.scSafe)                                                     // clean ceiling at -1 dBFS, no DC: safe to side-chain and to bus
+                {
+                    auto soft = [] (float x) { const float c = 0.891f; return std::abs (x) < 0.7f * c ? x : std::copysign (0.7f * c + 0.3f * c * std::tanh ((std::abs (x) - 0.7f * c) / (0.3f * c)), x); };
+                    oL = soft (oL); oR = soft (oR);
+                }
+            }
             L[i] += oL; if (R) R[i] += oR;
         }
+        clock += (double) num / sr;
         if ((blockCount++ & 15) == 0) for (auto& v : voices) if (v.active && v.nOsc > 0) compact (v);
     }
 
@@ -467,6 +650,8 @@ private:
         int wp = 0, hp = 0; float D = 100.f, loopG = 0.999f, loopD = 0.4f, filt = 0, pluckBoost = 0.f, tick_ = 0, tickDec = 0.99f, hpz = 0;
         std::array<float, kBuf> buf {};
         std::array<float, kHist> hist {};
+        float pm[16] = {};                                           // physical-model state (see startSaxPM / startBrassPM / startBowPM)
+        float mmLpL = 0, mmLpR = 0, mmRand = 0, baseDetune = 0;    // modulation matrix state
     };
 
     //---------------------------------------------------------------- helpers
@@ -489,7 +674,10 @@ private:
                 case K_Organ: rel = 0.03f; break; case K_Poly: rel = std::max (0.02f, v.pt.p[7]); break; case K_Lead: rel = std::max (0.02f, v.pt.p[16]); break;
                 case K_Pluck: rel = (v.art == A_PalmMute || v.art == A_Mute) ? 0.04f : (instIdx == kInstBass ? 0.09f : 0.16f); break;     // finger / palm damps the string
                 case K_Sax: rel = 0.07f; break; case K_Brass: rel = 0.06f; break; case K_Bow: rel = 0.12f; break;
-                case K_Sub: rel = 0.25f; break; case K_Log: rel = 0.12f; break; default: rel = 0.1f;
+                case K_SaxPM: rel = 0.08f; break; case K_BrassPM: rel = 0.07f; break; case K_BowPM: rel = 0.14f; break;
+                case K_Sub: rel = 0.25f; break; case K_Log: rel = 0.12f; break;
+                case K_LogDrum: rel = v.pt.p[10] > 0.f ? 0.12f : 2.0f; break;     // a log drum rings out after note-off (a hybrid's sustain stops)
+                default: rel = 0.1f;
             }
         }
         v.relCoef = std::exp (-6.9f / (rel * sr));
@@ -501,7 +689,7 @@ private:
         v = Voice();
         v.active = true; v.held = true; v.ch = ch; v.note = note; v.vel = vel; v.art = art; v.kind = cur.kind;
         v.pt = cur;
-        if (cur.kind == K_Bow && (art == A_Pizz || art == A_ColLegno)) { v.pt = pizzPatch (art == A_ColLegno); v.kind = K_Pluck; }
+        if ((cur.kind == K_Bow || cur.kind == K_BowPM) && (art == A_Pizz || art == A_ColLegno)) { v.pt = pizzPatch (art == A_ColLegno); v.kind = K_Pluck; }
         v.curSemis = (float) note; v.glideCoef = 1.f; v.t = 0; v.env = 0;
         v.nz = 0;
         Noise nzr; nzr.s = 0x9e3779b9u * (uint32_t) (note * 131 + vel * 17 + (int) (orderCounter++ & 1023) * 7919 + 12345);
@@ -519,10 +707,20 @@ private:
             case K_Lead: startLead (v, fv); break;
             case K_Pluck: startPluck (v, fv, art); break;
             case K_Sax: case K_Brass: case K_Bow: startWind (v, fv, art); break;
+            // physical models: the classic set-up gives the formants / body, vibrato and attack; then the waveguide is initialised
+            case K_SaxPM:   v.kind = K_Sax;   startWind (v, fv, art); v.kind = K_SaxPM;   startSaxPM (v, fv); break;
+            case K_BrassPM: v.kind = K_Brass; startWind (v, fv, art); v.kind = K_BrassPM; startBrassPM (v, fv); break;
+            case K_BowPM:   v.kind = K_Bow;   startWind (v, fv, art); if (note <= 88) { v.kind = K_BowPM; startBowPM (v, fv, art); } break;   // above E6 the classic engine plays (a very short string does not speak reliably)
             case K_Sub: startSub (v, fv); break;
             case K_Log: startLog (v, fv); break;
+            case K_LogDrum: startLogDrum (v, fv); break;
             default: break;
         }
+        // per-note humanisation: a few cents of intonation (more on the winds, which a player bends into tune), bow direction
+        const bool windy = (v.kind == K_Sax || v.kind == K_Brass || v.kind == K_Bow || isPM (v.kind));
+        if (v.kind != K_LogDrum && v.kind != K_Piano) v.pm[15] = gc.human * (windy ? 0.07f : 0.03f) * hashSigned (noteCounter * 7u + 3u);
+        if ((v.kind == K_Bow || v.kind == K_BowPM) && pend.bowUp) v.attackInc *= 0.75f;      // up-bow: a slightly softer start
+        v.baseDetune = v.pm[15]; v.mmRand = hashSigned (noteCounter * 13u + 5u);
     }
 
     static Patch pizzPatch (bool colLegno)
@@ -725,7 +923,7 @@ private:
         const float onset = std::min (1.f, std::max (0.f, (v.t - v.vibDelay) / 0.45f));
         const float modAmt = std::min (1.f, mod[(size_t) ch] + aft[(size_t) ch] * 0.8f);
         v.drift += (rng.next() * 0.5f - v.drift) * 0.0005f;
-        const float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (v.autoVib * onset + modAmt * 0.5f) + v.drift * 0.05f;
+        const float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (v.autoVib * onset + modAmt * 0.5f) + v.drift * 0.05f * (0.5f + gc.realism) + v.pm[15];
         const float f = f0Of (semis);
         if (f > 0.45f * sr) return false;
         const float dt = f / sr;
@@ -788,6 +986,9 @@ private:
         float t60 = p.p[0] * std::min (3.f, std::max (0.25f, std::pow (110.f / f0, 0.35f)));
         if (mute) t60 *= 0.22f;
         if (ghost) t60 *= 0.05f;
+        // fretboard (Human Play): thicker strings higher up the neck are darker and shorter, open strings ring longer
+        t60 *= 1.f + (pend.t60Mul - 1.f) * gc.realism;
+        v.loopD = std::min (0.95f, v.loopD + pend.dampAdd * gc.realism);
         v.loopG = std::min (0.99996f, std::pow (10.f, -3.f / (t60 * f0)));
         v.D = std::max (4.f, sr / f0 - v.loopD / (1.f - v.loopD) - 0.5f);
         const int N = (int) std::ceil (v.D) + 2;
@@ -868,6 +1069,93 @@ private:
         v.par[0] = v.pt.p[0];
         if (v.pt.p[3] > 0.f) v.lad.set (v.pt.p[3], 0.f, sr);
     }
+    //---------------------------------------------------------------- v2.7 Amapiano log drum (tuned modal drum, separate layers)
+    void startLogDrum (Voice& v, float vel)
+    {
+        const auto& P = v.pt.p;
+        // seeded per-note humanisation: tiny pitch, level, decay and click differences (the same seed gives the same result)
+        const float h = logc.human;
+        v.par[5] = (rnd() - 0.5f) * 2.f * 0.06f * h;                   // semitones (up to +/- 6 cents)
+        const float lvlVar = dbToLin ((rnd() - 0.5f) * 3.f * h);
+        v.par[6] = 1.f + (rnd() - 0.5f) * 0.24f * h;                  // decay
+        v.par[7] = 1.f + (rnd() - 0.5f) * 0.4f * h;                   // click
+        const float vr = std::clamp (logc.velResp, 0.f, 1.f);
+        const float vg = (1.f - vr) + vr * std::pow (std::max (0.05f, vel), 1.2f);
+        // even level across the keyboard: low notes carry more energy
+        const float f0 = f0Of ((float) v.note + logc.tune);
+        v.gain = 0.62f * vg * lvlVar * std::pow (std::max (20.f, f0) / 82.f, 0.18f);
+        v.par[0] = vel;
+        v.par[1] = std::clamp ((float) (v.note - 36) / 36.f, -1.f, 1.5f);   // key position for decay scaling
+        v.ph[0] = 0.f; v.ph[1] = 0.f; v.ph[2] = 0.f; v.ph[3] = 0.f;      // all modes start together at zero phase: no click, no cancellation
+        v.attackInc = 1.f / (std::max (0.0002f, logc.attack) * sr);
+        v.tick_ = std::clamp (P[3] * v.par[7] * (0.4f + 0.6f * vel * (0.4f + 0.6f * vr)), 0.f, 1.5f); v.tickDec = std::exp (-1.f / (0.0028f * sr));
+        v.bq[0].bandpass (2400.f, 1.2f, sr);                            // strike noise
+        v.bq[1].bandpass (std::clamp (f0 * 4.5f, 280.f, 1800.f), 3.f, sr); // the hollow wood knock
+        v.bq[2].set (1, 0, 0, 1, 0, 0);
+        v.lp[0] = v.lp[1] = 0.f;
+        v.wp = 0;
+    }
+    bool tickLogDrum (Voice& v, float& oL, float& oR, float env)
+    {
+        const auto& P = v.pt.p;
+        const int ch = v.ch;
+        v.curSemis += ((float) v.note - v.curSemis) * v.glideCoef;
+        const float tAtk = v.t;                                           // time since the strike (a glide keeps it running)
+        const float drop = P[1] * logc.dropMul, dropT = std::max (0.004f, P[2] * logc.dropTimeMul);
+        // the drop lands exactly on pitch after 3 drop-times (an exponential that is pulled down to zero), so the note is in tune, not "nearly"
+        const float e3 = 0.0497871f;
+        const float dropShape = std::max (0.f, (std::exp (-tAtk / dropT) - e3) / (1.f - e3));
+        const float semis = v.curSemis + logc.tune + bend[(size_t) ch] + v.par[5] + drop * dropShape;
+        const float f = f0Of (semis);
+        if (f > 0.45f * sr) return false;
+        const float dt = f / sr;
+        const float keyDecay = std::exp2 (-v.par[1] * 0.9f);
+        const float tau = std::max (0.03f, P[0] * logc.decayMul * v.par[6] * keyDecay) / 6.9f;
+        const float subTau = tau * std::max (0.3f, P[13]);
+        float envB = std::exp (-tAtk / tau);
+        if (P[10] > 0.f && v.held) envB = std::max (envB, P[10] * 0.6f);         // hybrid: a bass tone that sustains while the key is held
+        float envS = std::exp (-tAtk / subTau);
+        if (P[10] > 0.f && v.held) envS = std::max (envS, P[10] * 0.7f);
+        const float punch = 1.f + std::clamp (P[4] * logc.punchMul, 0.f, 2.f) * 1.1f * std::exp (-tAtk / 0.012f);
+        // phases: the fundamental and the harmonic wood modes share one pitch, so they stay locked
+        v.ph[0] += dt; if (v.ph[0] >= 1.f) v.ph[0] -= 1.f;
+        const float s1 = std::sin (kTwoPi * v.ph[0]);
+        const float s2 = std::sin (kTwoPi * std::fmod (v.ph[0] * P[14], 1.f));
+        const float s3 = std::sin (kTwoPi * std::fmod (v.ph[0] * P[15], 1.f));
+        const float subLvl = std::clamp (P[5], 0.f, 1.5f) * dbToLin (logc.subDb);
+        const float body = std::clamp (P[6] * logc.bodyMul, 0.f, 2.f);
+        const float fund = s1 * (envB * punch * 0.75f + subLvl * envS * 0.6f);
+        float harm = body * (0.42f * s2 * std::exp (-tAtk / (tau * 0.32f)) + 0.18f * s3 * std::exp (-tAtk / (tau * 0.16f))) * punch;
+        // strike: band-limited noise + the wooden knock resonance, a few ms long
+        float strike = 0.f;
+        if (v.tick_ > 1e-4f)
+        {
+            const float n = rng.next();
+            strike = v.tick_ * (0.55f * v.bq[0].process (n) + 1.4f * v.bq[1].process (n));
+            v.tick_ *= v.tickDec;
+        }
+        // tone: a low-pass on everything above the fundamental (the fundamental itself is never filtered)
+        const float tone = std::clamp (P[7] * std::exp2 (logc.tone * 1.5f), 200.f, 12000.f);
+        const float k = 1.f - std::exp (-kTwoPi * tone / sr);
+        v.lp[0] += ((harm + strike) - v.lp[0]) * k;
+        float upper = v.lp[0];
+        // drive: one smooth curve over the whole note; everything is harmonic, so it adds weight without mud
+        float x = fund + upper;
+        const float drv = std::clamp (P[8] + logc.drive, 0.f, 1.2f);
+        if (drv > 0.01f) { const float d = 1.f + 4.f * drv; x = std::tanh (d * x) / std::tanh (d); }
+        // stereo width only above the fundamental (the low end stays mono)
+        const float w = std::clamp (logc.width, 0.f, 1.f);
+        v.buf[(size_t) (v.wp & (kBuf - 1))] = upper;
+        const int dly = std::max (1, (int) (0.0007f * sr));
+        const float upD = v.buf[(size_t) ((v.wp - dly) & (kBuf - 1))];
+        ++v.wp;
+        const float side = w * 0.5f * (upper - upD);
+        const float a = v.gain * env * (1.f + 0.f * fund);
+        oL = (x + side) * a; oR = (x - side) * a;
+        if (envB < 0.0004f && envS < 0.0004f && v.tick_ < 1e-4f) return false;
+        return true;
+    }
+
     void startLog (Voice& v, float vel)
     {
         v.gain = 0.5f * (0.3f + 0.7f * vel); v.attackInc = 1.f / (0.0008f * sr); v.ph[0] = v.ph[1] = 0.f;
@@ -885,7 +1173,7 @@ private:
         else { v.env = std::min (1.f, v.env + v.attackInc); env = v.env; }
         v.t += 1.f / sr; ++v.age;
         const float fv = (float) v.vel / 127.f;
-        const float ex = expr[(size_t) ch];
+        const float ex = exprExp == 1.f ? expr[(size_t) ch] : std::pow (std::max (0.f, expr[(size_t) ch]), exprExp);
         switch (v.kind)
         {
             case K_Piano:
@@ -996,6 +1284,7 @@ private:
             case K_Pluck: return tickPluck (v, oL, oR, env, fv);
             case K_Lead: return tickLead (v, oL, oR, ex);
             case K_Sax: case K_Brass: case K_Bow: return tickWind (v, oL, oR, env, fv, ex);
+            case K_SaxPM: case K_BrassPM: case K_BowPM: return tickPM (v, oL, oR, env, fv, ex);
             case K_Sub:
             {
                 v.curSemis += ((float) v.note - v.curSemis) * v.glideCoef;
@@ -1009,6 +1298,7 @@ private:
                 const float y = x * v.gain * env * (v.held ? std::max (dec, 0.f) : dec);
                 oL = oR = y; return dec > 0.0004f || v.held;
             }
+            case K_LogDrum: return tickLogDrum (v, oL, oR, env);
             default:   // K_Log
             {
                 const float f = f0Of ((float) v.note);
@@ -1032,7 +1322,7 @@ private:
         v.lfo += 5.4f / sr; if (v.lfo >= 1.f) v.lfo -= 1.f;
         const float onset = std::min (1.f, std::max (0.f, (v.t - v.vibDelay) / 0.4f));
         const float modAmt = std::min (1.f, mod[(size_t) ch] + aft[(size_t) ch] * 0.8f);
-        const float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (modAmt * 0.5f + v.autoVib) * onset;
+        const float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (modAmt * 0.5f + v.autoVib) * onset + v.pm[15];
         const float f0 = f0Of (semis);
         if (f0 > 0.2f * sr || f0 < 15.f) return false;
         const float Dt = std::max (4.f, sr / f0 - v.loopD / (1.f - v.loopD) - 0.5f);
@@ -1085,7 +1375,7 @@ private:
         // slow random fluctuation: no two periods are quite alike
         v.jitT -= 1.f; if (v.jitT <= 0.f) { v.jitT = sr / 28.f; v.jit1 = (rng.next()) * 0.045f; v.jitV = rng.next() * 0.05f; }
         v.jit2 += (v.jit1 - v.jit2) * 0.003f; v.jitA += (v.jitV - v.jitA) * 0.004f;
-        float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (modAmt * 0.6f + v.autoVib * (v.kind == K_Bow ? 1.f : 1.f)) * onset + v.jit2;
+        float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (modAmt * 0.6f + v.autoVib * (v.kind == K_Bow ? 1.f : 1.f)) * onset + v.jit2 + v.pm[15];
         if (v.art == A_Trill || v.art == A_Shake) { const float rate = v.art == A_Shake ? 7.f : 11.f; if (std::fmod (v.t * rate, 1.f) > 0.5f && v.t > 0.1f) semis += (v.art == A_Shake ? 2.f : 1.5f); }
         semis -= v.scoop * std::exp (-v.t / 0.03f);
         const float f0 = f0Of (semis);
@@ -1150,6 +1440,209 @@ private:
         return ! (v.releasing && v.env < 0.0004f);
     }
 
+
+    //---------------------------------------------------------------- v2.7 physical models
+    static bool isPM (int k) { return k == K_SaxPM || k == K_BrassPM || k == K_BowPM; }
+    // fractional delay read (linear) from a circular line written at index w (the last write is at w - 1)
+    template <size_t N> static float dRead (const std::array<float, N>& b, int w, float d)
+    {
+        const float rp = (float) w - std::max (1.f, d);
+        const int i0 = (int) std::floor (rp); const float fr = rp - (float) i0; const int m = (int) N - 1;
+        return b[(size_t) (i0 & m)] * (1.f - fr) + b[(size_t) ((i0 + 1) & m)] * fr;
+    }
+    // pitch of a waveguide note: semitones with vibrato, jitter, bend (shared by the three models)
+    float pmSemis (Voice& v, float rate)
+    {
+        const int ch = v.ch;
+        v.curSemis += ((float) v.note - v.curSemis) * v.glideCoef;
+        v.lfo += rate / sr; if (v.lfo >= 1.f) v.lfo -= 1.f;
+        const float onset = std::min (1.f, std::max (0.f, (v.t - v.vibDelay) / 0.4f));
+        const float modAmt = std::min (1.f, mod[(size_t) ch] + aft[(size_t) ch] * 0.8f);
+        v.jitT -= 1.f; if (v.jitT <= 0.f) { v.jitT = sr / 28.f; v.jit1 = rng.next() * 0.035f * (0.4f + 1.2f * gc.human); v.jitV = rng.next() * 0.04f; }
+        v.jit2 += (v.jit1 - v.jit2) * 0.003f; v.jitA += (v.jitV - v.jitA) * 0.004f;
+        float semis = v.curSemis + bend[(size_t) ch] + std::sin (kTwoPi * v.lfo) * (modAmt * 0.6f + v.autoVib) * onset + v.jit2 + v.pm[15];
+        if (v.art == A_Trill || v.art == A_Shake) { const float r = v.art == A_Shake ? 7.f : 11.f; if (std::fmod (v.t * r, 1.f) > 0.5f && v.t > 0.1f) semis += (v.art == A_Shake ? 2.f : 1.5f); }
+        semis -= v.scoop * std::exp (-v.t / 0.03f);
+        return semis;
+    }
+
+    //  reed + conical bore (after Cook's Saxofony): two delay lines split at the blow position, reed table, one-zero bore loss
+    void startSaxPM (Voice& v, float vel)
+    {
+        std::fill (v.buf.begin(), v.buf.end(), 0.f); std::fill (v.hist.begin(), v.hist.end(), 0.f);
+        v.wp = v.hp = 0;
+        const Patch& p = v.pt;
+        v.pm[0] = 0.f;                                                // one-zero filter memory
+        v.pm[1] = 0.55f + 0.30f * vel;                                // breath pressure target
+        v.pm[2] = p.p[7] > 0.f ? p.p[7] : 0.2f;                       // blow position
+        v.pm[3] = std::max (0.15f, p.p[3]);                           // reed slope
+        v.pm[4] = std::max (0.4f, p.p[4]);                            // reed offset (rest opening)
+        v.pm[5] = 0.f;                                                // last output
+        v.gain = 0.42f;
+    }
+    //  lip + bore (after Cook's Brass): lip resonance tuned to the note, one bore delay of two periods, dc blocker
+    void startBrassPM (Voice& v, float vel)
+    {
+        std::fill (v.buf.begin(), v.buf.end(), 0.f);
+        v.wp = 0;
+        v.pm[0] = 0.75f + 0.45f * vel;                                // max blowing pressure
+        v.pm[1] = v.pm[2] = 0.f;                                      // dc blocker
+        v.pm[3] = v.pm[4] = v.pm[5] = v.pm[6] = 0.f;                  // lip filter state
+        v.pm[7] = -1.f;
+        v.gain = 0.62f;
+    }
+    //  bowed string (after Smith / McIntyre-Woodhouse): neck + bridge delays, friction table at the bow, lossy bridge reflection, then the body
+    void startBowPM (Voice& v, float vel, int art)
+    {
+        std::fill (v.buf.begin(), v.buf.end(), 0.f); std::fill (v.hist.begin(), v.hist.end(), 0.f);
+        v.wp = v.hp = 0;
+        const Patch& p = v.pt;
+        v.pm[0] = std::clamp (p.p[6] > 0.f ? p.p[6] : 0.127f, 0.05f, 0.4f);        // bow position
+        v.pm[1] = 5.f - 4.f * std::clamp (p.p[5] + (art == A_Marcato ? 0.15f : 0.f), 0.f, 1.f);   // friction slope (less = more pressure)
+        v.pm[2] = 0.f;                                                // bridge filter memory
+        v.pm[3] = 0.03f + 0.22f * vel;                                // max bow velocity
+        v.pm[4] = 2.5f + 4.f * (1.f - vel);                           // bow length in seconds before a bow change
+        v.pm[5] = -10.f;                                              // time of the last bow change
+        v.gain = 1.7f;
+    }
+
+    bool tickPM (Voice& v, float& oL, float& oR, float env, float fv, float ex)
+    {
+        const float lvl = std::min (1.f, ex * (0.45f + 0.55f * fv));
+        float y = 0.f;
+        if (v.kind == K_SaxPM)
+        {
+            const float semis = pmSemis (v, 5.3f);
+            const float f0 = f0Of (semis);
+            if (f0 > 0.2f * sr || f0 < 20.f) return false;
+            const float total = std::max (8.f, sr / f0 * pmSaxCal (f0) - 0.6f);
+            const float d0 = total * (1.f - v.pm[2]), d1 = total * v.pm[2];
+            // the reed only speaks above a threshold pressure: soft playing = lower pressure inside the speaking range (+ darker tone, lower level below)
+            float breath = env * (0.62f + 0.25f * fv * std::pow (std::min (1.f, 260.f / f0), 2.f)) * (0.9f + 0.1f * ex);
+            breath += breath * (0.12f + v.pt.p[2] * 0.6f) * rng.next() * 0.25f;
+            // embouchure: a little energy at the written pitch keeps the bore in the right register (the player 'voices' the note)
+            v.ph[1] += f0 / sr; if (v.ph[1] >= 1.f) v.ph[1] -= 1.f;
+            breath += 0.08f * env * std::sin (kTwoPi * v.ph[1]);
+            const float o0 = dRead (v.buf, v.wp, d0), o1 = dRead (v.hist, v.hp, d1);
+            const float temp = -0.95f * 0.5f * (o0 + v.pm[0]); v.pm[0] = o0;
+            const float out = temp - o1;
+            const float pd = breath - out;
+            float reed = v.pm[4] + v.pm[3] * pd; reed = std::clamp (reed, -1.f, 1.f);
+            v.hist[(size_t) (v.hp++ & (kHist - 1))] = temp;
+            v.buf[(size_t) (v.wp++ & (kBuf - 1))] = breath - pd * reed - temp;
+            // body: tone filter that opens with the dynamic, formants of the horn, breath noise
+            const float fc = std::min (9000.f, std::max (500.f, f0 * (3.f + 6.f * lvl) * v.pt.p[1]));
+            v.lp[0] += (out - v.lp[0]) * (1.f - std::exp (-kTwoPi * fc / sr));
+            const float x = v.lp[0];
+            y = x * 0.6f + 0.8f * v.bq[0].process (x) + 0.6f * v.bq[1].process (x) + 0.3f * v.bq[2].process (x);
+            y += (v.pt.p[2] * (0.6f + mechMul()) + 0.08f * std::exp (-v.t / 0.04f)) * v.bq[3].process (rng.next()) * (0.4f + 0.6f * ex) * 0.6f;
+            if (v.art == A_Growl) { y *= 1.f - 0.3f * (0.5f + 0.5f * std::sin (kTwoPi * 38.f * v.t)); y = std::tanh (y * 1.8f) * 0.8f; }
+            if (v.art == A_Flutter) y *= (std::fmod (v.t * 24.f, 1.f) < 0.5f) ? 1.f : 0.25f;
+            y *= (1.f + v.jitA) * std::pow (ex, 0.8f) * (0.2f + 0.8f * std::pow (fv, 1.3f)) * 1.35f;   // pp .. ff: about 10 dB between velocity 40 and 120
+        }
+        else if (v.kind == K_BrassPM)
+        {
+            // hybrid: band-limited lip pulse (narrower and brighter when played louder) -> waveguide bore -> brassy steepening -> bell + formants
+            const float semis = pmSemis (v, 5.3f);
+            const float f0 = f0Of (semis);
+            if (f0 > 0.2f * sr || f0 < 30.f) return false;
+            const float dph = f0 / sr;
+            v.ph[0] += dph; if (v.ph[0] >= 1.f) v.ph[0] -= 1.f;
+            const float pw = std::clamp (0.48f - 0.30f * lvl * (0.6f + 0.4f * v.pt.p[0]), 0.12f, 0.48f);
+            float ph2 = v.ph[0] + pw; if (ph2 >= 1.f) ph2 -= 1.f;
+            const float sawA = 2.f * v.ph[0] - 1.f - polyBlep (v.ph[0], dph), sawB = 2.f * ph2 - 1.f - polyBlep (ph2, dph);
+            float src = 0.5f * (sawA - sawB);
+            src += v.pt.p[5] * rng.next() * 0.15f * (0.5f + lvl);                       // air through the lips
+            // bore: one-period waveguide loop with a lossy, level dependent reflection
+            const float pole = 0.55f - 0.35f * lvl;
+            const float P = std::max (4.f, sr / f0 - pole / (1.f - pole));
+            const float back = dRead (v.buf, v.wp, P);
+            v.pm[1] = (1.f - pole) * back + pole * v.pm[1];
+            const float g = (0.50f + 0.30f * lvl) * env;
+            const float bore = src + g * v.pm[1];
+            v.buf[(size_t) (v.wp++ & (kBuf - 1))] = bore;
+            float x = bore * (1.f - g * 0.6f);
+            const float k = 0.9f * lvl * lvl * v.pt.p[0];                             // non-linear steepening in the bore: the "blat" of a loud note
+            x = std::tanh (x + k * x * std::fabs (x));
+            const float fc = std::min (12000.f, std::max (600.f, f0 * (2.5f + 12.f * lvl * lvl * v.pt.p[0])));
+            v.lp[0] += (x - v.lp[0]) * (1.f - std::exp (-kTwoPi * fc / sr));
+            const float bell = v.lp[0] - v.pm[2]; v.pm[2] += bell * (1.f - std::exp (-kTwoPi * 220.f / sr));   // bell: the lows do not radiate
+            const float mute = v.pt.p[2];
+            y = (mute > 0.5f ? 0.15f : 0.6f) * bell + 0.7f * v.bq[0].process (bell) + 0.4f * v.bq[1].process (bell);
+            if (mute > 0.5f) y += 1.3f * v.bq[2].process (bell);
+            y += (v.pt.p[5] * (0.5f + mechMul()) + 0.08f * std::exp (-v.t / 0.02f)) * v.bq[3].process (rng.next()) * 0.5f;
+            if (v.art == A_Growl) y *= 0.6f + 0.4f * std::sin (kTwoPi * 34.f * v.t);
+            if (v.art == A_Flutter) y *= (std::fmod (v.t * 22.f, 1.f) < 0.5f) ? 1.f : 0.3f;
+            y = v.bq[4].process (y);
+            y = std::tanh (1.4f * y) * (1.f + v.jitA);
+            y *= std::pow (ex, 0.8f) * (0.2f + 0.8f * std::pow (fv, 1.3f)) * 1.25f * (mute > 0.5f ? 0.85f : 1.f) * env;
+        }
+        else   // K_BowPM
+        {
+            const float semis = pmSemis (v, 5.8f);
+            const float f0 = f0Of (semis);
+            if (f0 > 0.12f * sr || f0 < 30.f) return false;
+            const float pole = std::clamp (0.75f - 0.2f * 22050.f / sr + 0.1f * (1.f - v.pt.p[1]), 0.3f, 0.9f);
+            const float wv = kTwoPi * f0 / sr;
+            const float pDelay = std::atan2 (pole * std::sin (wv), 1.f - pole * std::cos (wv)) / wv;     // the bridge filter's own delay at this pitch
+            const float base = std::max (8.f, sr / f0 - pDelay + 0.25f);
+            const float beta = std::min (0.45f, v.pm[0] * (1.f + 0.f * std::max (0.f, f0 - 500.f) / 1000.f));   // higher up the string the bow sits relatively further from the bridge
+            const float neckOut = dRead (v.buf, v.wp, base * (1.f - beta)), bridgeOut = dRead (v.hist, v.hp, base * beta);
+            // lossy bridge reflection (one-pole), rigid nut
+            v.pm[2] = 0.95f * (1.f - pole) * bridgeOut + pole * v.pm[2];
+            const float bridgeRefl = -v.pm[2], nutRefl = -neckOut;
+            const float stringVel = bridgeRefl + nutRefl;
+            // bow: velocity follows the envelope and the dynamic; a bow change dips through zero
+            if (v.held && v.t - std::max (0.f, v.pm[5]) > v.pm[4] && v.t > 0.5f) { v.pm[5] = v.t; mechEvent (0.012f * mechMul(), 4200.f, 1.2f, 0.03f, 0.5f); }
+            const float sinceChange = v.t - v.pm[5];
+            const float dip = sinceChange < 0.08f ? 1.f - 0.85f * std::exp (-std::pow ((sinceChange - 0.03f) / 0.02f, 2.f)) : 1.f;
+            const float hiAdj = std::pow (std::min (1.f, 500.f / f0), 1.5f);          // short strings need a slower bow (or they break into a raucous sub-harmonic)
+            const float bowVel = v.pm[3] * hiAdj * env * (0.5f + 0.5f * lvl) * dip * (v.releasing ? env : 1.f);
+            const float vd = bowVel - stringVel;
+            float bt = std::pow (std::fabs (vd * v.pm[1]) + 0.75f, -4.f); bt = std::clamp (bt, 0.01f, 1.f);
+            const float nv = vd * bt;
+            v.buf[(size_t) (v.wp++ & (kBuf - 1))] = bridgeRefl + nv;
+            v.hist[(size_t) (v.hp++ & (kHist - 1))] = nutRefl + nv;
+            const float x = bridgeOut;
+            v.lp[0] += (x - v.lp[0]) * (1.f - std::exp (-kTwoPi * std::min (12000.f, 2500.f + 7000.f * v.pt.p[1] * lvl) / sr));
+            const float s = v.lp[0];
+            y = s * 0.5f + 0.6f * v.bq[0].process (s) + 0.5f * v.bq[1].process (s) + 0.45f * v.bq[2].process (s) + 0.2f * v.bq[3].process (s) + 0.25f * v.bq[4].process (s);
+            y += (v.pt.p[2] * (0.4f + mechMul()) * 0.7f) * v.bq[5].process (rng.next()) * (bowVel * 6.f);
+            if (v.art == A_Tremolo) y *= (std::fmod (v.t * 13.f, 1.f) < 0.55f) ? 1.f : 0.2f;
+            y *= (1.f + v.jitA * 0.6f) * (0.5f + 0.5f * std::pow (ex, 0.8f));
+            if (v.releasing) y *= std::min (1.f, v.env * 3.f);
+        }
+        oL = oR = y * v.gain;
+        return ! (v.releasing && v.env < 0.0004f);
+    }
+    // tuning corrections of the waveguides (measured: the loops' filters add delay that depends on the pitch)
+    static float pmSaxCal (float)   { return 1.f; }
+    static float pmLipCal (float)   { return 1.f; }
+    static float pmBoreCal (float)  { return 1.f; }
+    static float pmBowCal (float)   { return 1.f; }
+
+    //---------------------------------------------------------------- v2.7 mechanical noises (keys, fingers, dampers, bow changes): short filtered noise bursts
+    struct MechEv { float a = 0, dec = 0, pan = 0.5f; Biquad bq; };
+    std::array<MechEv, 8> mech {};
+    float mechMul() const { return gc.mech * 2.f * (0.4f + 0.6f * gc.realism); }      // 0.5 = the natural amount
+    void mechEvent (float amp, float freq, float q, float decayS, float pan)
+    {
+        if (amp <= 1e-5f) return;
+        MechEv* e = &mech[0];
+        for (auto& m : mech) if (m.a < e->a) e = &m;
+        e->a = amp; e->dec = std::exp (-1.f / (std::max (0.002f, decayS) * sr)); e->pan = pan;
+        e->bq.reset(); e->bq.bandpass (std::min (0.45f * sr, freq), q, sr);
+    }
+    void mechRender (float& L, float& R)
+    {
+        for (auto& m : mech)
+        {
+            if (m.a < 1e-6f) continue;
+            const float n = m.bq.process (rng.next()) * m.a; m.a *= m.dec;
+            L += n * std::cos (m.pan * kPi * 0.5f) * 1.4f; R += n * std::sin (m.pan * kPi * 0.5f) * 1.4f;
+        }
+    }
+
     void compact (Voice& v)
     {
         if (v.kind != K_Piano && v.kind != K_Rhodes && v.kind != K_Wurli) return;
@@ -1158,6 +1651,210 @@ private:
         v.nOsc = w;
         if (v.nOsc == 0 && (v.releasing || v.kind != K_Piano)) v.active = false;
         if (v.nOsc == 0 && v.kind == K_Piano) v.active = false;
+    }
+
+
+    //---------------------------------------------------------------- v2.7 global controls, phrasing engine, tone
+    GlobalCtl gc; bool toneInit = false; float exprExp = 1.f;
+    struct Pend { float t60Mul = 1.f, dampAdd = 0.f; bool bowUp = false, newPhrase = false; };
+    Pend pend;
+    struct Phrase { bool first = true; double start = 0, lastOn = -10, lastOff = -10; float avgLen = 2.5f; int n = 0; bool bowUp = false; int pos = 2, lastString = -1; };
+    std::array<Phrase, 16> phr {};
+    std::array<int, 16> lastMono = [] { std::array<int, 16> a; a.fill (-1); return a; }();
+    uint32_t noteCounter = 0; double clock = 0.0;
+    float glideScale() const { return 0.4f * std::pow (100.f, gc.glideTime) / 1.0047f; }    // 1 at the default (0.2), 0.4 .. 40 over the range
+    float hashSigned (uint32_t x) const                                                      // seeded: the same take sounds the same every time
+    {
+        x ^= gc.seed * 0x9e3779b9u; x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+        return (float) (x & 0xffffff) / 8388607.5f - 1.f;
+    }
+    int shapeNote (int ch, int note, int vel, int art, bool legatoArt)
+    {
+        pend = Pend();
+        exprExp = std::max (0.05f, 2.f * gc.exprResp);
+        auto& ph = phr[(size_t) ch];
+        bool overlap = false;
+        for (auto& v : voices) if (v.active && v.ch == ch && v.held && ! v.releasing) { overlap = true; break; }
+        const double gap = overlap ? 0.0 : clock - ph.lastOff;
+        const bool newPhrase = ph.first || (! overlap && gap > 0.30);
+        if (newPhrase)
+        {
+            if (! ph.first) ph.avgLen = 0.7f * ph.avgLen + 0.3f * (float) std::clamp (ph.lastOff - ph.start, 0.8, 12.0);
+            ph.start = clock; ph.n = 0; ph.first = false; pend.newPhrase = true;
+        }
+        float fv = (float) vel / 127.f;
+        fv = std::clamp (0.62f + (fv - 0.62f) * (0.3f + 1.4f * gc.dynamics), 0.04f, 1.f);
+        const int k = cur.kind;
+        const bool wind = (k == K_Sax || k == K_Brass || k == K_SaxPM || k == K_BrassPM);
+        const bool bowed = (k == K_Bow || k == K_BowPM);
+        if (gc.humanPlay && k != K_LogDrum)
+        {
+            const float tp = (float) (clock - ph.start), L = std::max (1.f, ph.avgLen);
+            const float arc = std::sin (kPi * std::min (1.f, tp / L));
+            float mul = 1.f + 0.10f * (arc - 0.35f);                         // a phrase rises to its middle and settles at its end
+            if (ph.n == 0) mul += 0.04f;                                     // the opening note speaks
+            if (tp > 1.4f * L) mul -= std::min (0.08f, 0.02f * (tp - 1.4f * L));   // a very long phrase runs out of air / bow
+            if (! newPhrase && clock - ph.lastOn < 0.11) mul -= 0.04f;       // fast runs are a little lighter
+            if (bowed && art != A_Pizz && art != A_ColLegno)
+            {
+                if (! legatoArt || newPhrase) { ph.bowUp = newPhrase ? false : ! ph.bowUp; if (! newPhrase) mechEvent (0.005f * mechMul(), 3800.f, 1.f, 0.025f, 0.5f); }
+                if (ph.bowUp) mul -= 0.03f;                                  // up-bow is lighter than down-bow
+                pend.bowUp = ph.bowUp;
+            }
+            if (wind && newPhrase) mechEvent (0.016f * mechMul(), 1300.f, 0.7f, 0.06f, 0.5f);   // the breath that starts a phrase
+            if (k == K_Pluck && (instIdx == kInstGuitar || instIdx == kInstBass)) fretboard (ph, note, art);
+            fv *= mul;
+        }
+        fv *= 1.f + gc.human * 0.10f * hashSigned (noteCounter);
+        ph.n++; ph.lastOn = clock;
+        return std::clamp ((int) std::lround (fv * 127.f), 1, 127);
+    }
+    // string and fret choice like a player's hand: stay in a position, prefer short moves, open strings when they fit
+    void fretboard (Phrase& ph, int note, int art)
+    {
+        static const int gtr[] = { 40, 45, 50, 55, 59, 64 }, bas[] = { 28, 33, 38, 43 };
+        const int* open = instIdx == kInstBass ? bas : gtr; const int nS = instIdx == kInstBass ? 4 : 6;
+        int best = -1, bestF = 0; float bestC = 1e9f;
+        for (int st = 0; st < nS; ++st)
+        {
+            const int f = note - open[st];
+            if (f < 0 || f > 22) continue;
+            float c = (f < ph.pos - 1 ? (float) (ph.pos - 1 - f) : f > ph.pos + 4 ? (float) (f - ph.pos - 4) : 0.f);
+            c += (f == 0 ? -0.3f : 0.f) + 0.15f * (ph.lastString < 0 ? 0.f : (float) std::abs (st - ph.lastString)) + 0.02f * (float) f;
+            if (c < bestC) { bestC = c; best = st; bestF = f; }
+        }
+        if (best < 0) return;
+        int dist = 0;
+        if (bestF > 0 && (bestF < ph.pos - 1 || bestF > ph.pos + 4)) { const int np = std::clamp (bestF - 1, 0, 19); dist = std::abs (np - ph.pos); ph.pos = np; }
+        ph.lastString = best;
+        const float thick = (float) (nS - 1 - best) / (float) (nS - 1);
+        pend.dampAdd = 0.10f * thick * std::min (1.f, (float) bestF / 12.f);
+        pend.t60Mul = bestF == 0 ? 1.15f : 1.f - 0.25f * std::min (1.f, (float) bestF / 15.f) * (0.5f + 0.5f * thick);
+        const bool mute = (art == A_PalmMute || art == A_Mute);
+        if (dist >= 3 && clock - ph.lastOn < 0.4 && ! mute) mechEvent (0.009f * mechMul(), 2400.f + 600.f * (1.f - thick), 2.f, 0.06f, 0.5f);   // hand shift: the string squeaks
+    }
+
+    // global tone: brightness tilt + microphone distance (proximity bass close, air loss and early reflections far)
+    Biquad toneLo[2], toneHi[2]; bool toneOn = false; float erMix = 0.f;
+    std::vector<float> erBuf; int erW = 0;
+    void setTone()
+    {
+        toneInit = true;
+        const float close = std::max (0.f, (0.35f - gc.mic) / 0.35f), far = std::max (0.f, (gc.mic - 0.35f) / 0.65f);
+        const float lo = -2.f * gc.bright + 2.5f * close - 2.f * far, hi = 6.f * gc.bright + 1.5f * close - 5.f * far;
+        toneOn = std::fabs (lo) > 0.05f || std::fabs (hi) > 0.05f;
+        for (int c = 0; c < 2; ++c) { toneLo[c].lowShelf (180.f, lo, sr); toneHi[c].highShelf (2600.f, hi, sr); }
+        erMix = 0.3f * far;
+        if (erBuf.empty()) erBuf.assign ((size_t) (sr * 0.04f) + 4, 0.f);
+    }
+    void toneReset() { for (int c = 0; c < 2; ++c) { toneLo[c].reset(); toneHi[c].reset(); } std::fill (erBuf.begin(), erBuf.end(), 0.f); }
+    void toneProcess (float& L, float& R)
+    {
+        if (toneOn) { L = toneHi[0].process (toneLo[0].process (L)); R = toneHi[1].process (toneLo[1].process (R)); }
+        if (erMix > 0.001f && ! erBuf.empty())
+        {
+            const int n = (int) erBuf.size();
+            erBuf[(size_t) erW] = 0.5f * (L + R);
+            auto tap = [&] (float ms) { int r = erW - (int) (ms * 0.001f * sr); while (r < 0) r += n; return erBuf[(size_t) r]; };
+            const float a = tap (7.3f), b = tap (11.9f), c = tap (17.1f), d = tap (23.7f);
+            L += erMix * (0.6f * a + 0.35f * c); R += erMix * (0.6f * b + 0.35f * d);
+            erW = (erW + 1) % n;
+        }
+    }
+    // piano: with the pedal down the undamped strings and the soundboard bloom (realism)
+    std::array<std::vector<float>, 4> resBuf; std::array<int, 4> resW {}; std::array<float, 4> resLp {};
+    void resReset() { for (auto& b : resBuf) std::fill (b.begin(), b.end(), 0.f); resLp.fill (0.f); }
+    void resProcess (float& L, float& R)
+    {
+        bool anyPedal = false; for (bool b : pedal) anyPedal |= b;
+        static const int len[4] = { 1116, 1188, 1277, 1356 };
+        if (resBuf[0].empty()) for (int i = 0; i < 4; ++i) resBuf[(size_t) i].assign ((size_t) std::max (8, (int) ((float) len[i] * sr / 44100.f)), 0.f);
+        const float in = 0.5f * (L + R) * (anyPedal ? 0.12f : 0.025f) * gc.realism;
+        float o0 = 0, o1 = 0;
+        for (int i = 0; i < 4; ++i)
+        {
+            auto& b = resBuf[(size_t) i]; const int n = (int) b.size(); int& w = resW[(size_t) i];
+            const float y = b[(size_t) w];
+            resLp[(size_t) i] = y * 0.6f + resLp[(size_t) i] * 0.4f;
+            b[(size_t) w] = in + resLp[(size_t) i] * (anyPedal ? 0.82f : 0.6f);
+            w = (w + 1) % n;
+            (i & 1 ? o1 : o0) += y;
+        }
+        L += o0 * 0.5f; R += o1 * 0.5f;
+    }
+
+
+    //---------------------------------------------------------------- v2.7 batch 3: modulation matrix + creative effects
+    ModCtl mmc; bool mmOn = false; float lfo1Ph = 0.f, lfo2Ph = 0.f;
+    float modSource (const Voice& v, int src) const
+    {
+        switch (src)
+        {
+            case MS_Lfo1: return std::sin (kTwoPi * lfo1Ph);
+            case MS_Lfo2: return std::sin (kTwoPi * lfo2Ph);
+            case MS_Velocity: return (float) v.vel / 127.f;
+            case MS_ModWheel: return mod[(size_t) v.ch];
+            case MS_Aftertouch: return aft[(size_t) v.ch];
+            case MS_Expression: return expr[(size_t) v.ch];
+            case MS_Key: return std::clamp (((float) v.note - 60.f) / 24.f, -1.f, 1.f);
+            case MS_Envelope: return std::exp (-v.t / 0.4f);
+            case MS_Random: return v.mmRand;
+            default: return 0.f;
+        }
+    }
+    std::vector<float> fxL, fxR; int fxW = 0; float fxPh = 0.f, fxPh2 = 0.f, fxHoldL = 0.f, fxHoldR = 0.f, fxCnt = 0.f; Biquad fxBq[4];
+    int fxSet = -1;
+    void fxProcess (float& L, float& R)
+    {
+        const float a = std::clamp (mmc.fxAmt, 0.f, 1.f);
+        if (fxL.empty()) { fxL.assign ((size_t) (sr * 0.06f) + 8, 0.f); fxR = fxL; }
+        if (fxSet != mmc.fx)
+        {
+            fxSet = mmc.fx; for (auto& b : fxBq) b.reset();
+            if (mmc.fx == 2) { fxBq[0].lowpass (5200.f, 0.7f, sr); fxBq[1].lowpass (5200.f, 0.7f, sr); }
+            if (mmc.fx == 4) { fxBq[0].bandpass (1100.f, 0.9f, sr); fxBq[1].bandpass (1100.f, 0.9f, sr); fxBq[2].highpass (320.f, 0.7f, sr); fxBq[3].highpass (320.f, 0.7f, sr); }
+        }
+        const int n = (int) fxL.size();
+        fxL[(size_t) fxW] = L; fxR[(size_t) fxW] = R;
+        auto rd = [&] (const std::vector<float>& b, float dSamp) { float rp = (float) fxW - dSamp; while (rp < 0.f) rp += (float) n; const int i0 = (int) rp; const float fr = rp - (float) i0; return b[(size_t) (i0 % n)] * (1.f - fr) + b[(size_t) ((i0 + 1) % n)] * fr; };
+        switch (mmc.fx)
+        {
+            case 1:   // tape wobble: slow wow + fast flutter on a short delay (pitch drifts like an old tape)
+            {
+                fxPh += 0.55f / sr; if (fxPh >= 1.f) fxPh -= 1.f; fxPh2 += 6.5f / sr; if (fxPh2 >= 1.f) fxPh2 -= 1.f;
+                const float dly = sr * (0.006f + a * (0.004f * std::sin (kTwoPi * fxPh) + 0.0004f * std::sin (kTwoPi * fxPh2)));
+                L = rd (fxL, dly); R = rd (fxR, dly * 1.01f);
+                break;
+            }
+            case 2:   // lo-fi: lower sample rate and bit depth, dull top
+            {
+                const float hold = 1.f + a * 10.f;
+                if ((fxCnt += 1.f) >= hold) { fxCnt -= hold; const float q = std::exp2 (16.f - a * 10.f); fxHoldL = std::round (L * q) / q; fxHoldR = std::round (R * q) / q; }
+                L = fxBq[0].process (fxHoldL); R = fxBq[1].process (fxHoldR);
+                break;
+            }
+            case 3:   // wide: Haas delay on one side + more side signal
+            {
+                const float dR = rd (fxR, sr * (0.004f + 0.014f * a));
+                const float m = 0.5f * (L + dR), sd = 0.5f * (L - dR) * (1.f + a), g = 1.f / (1.f + 0.35f * a);
+                L = (m + sd) * g; R = (m - sd) * g;
+                break;
+            }
+            case 4:   // telephone / radio: band-limited and a little crunchy
+            {
+                const float wl = std::tanh (2.f * fxBq[2].process (fxBq[0].process (L))), wr = std::tanh (2.f * fxBq[3].process (fxBq[1].process (R)));
+                L = L * (1.f - a) + wl * a * 1.0f; R = R * (1.f - a) + wr * a * 1.0f;
+                break;
+            }
+            case 5:   // warm saturation
+            {
+                const float dr = 1.f + 6.f * a;
+                const float mk = (1.f + 0.6f * a) / dr; L = std::tanh (L * dr) * mk; R = std::tanh (R * dr) * mk;
+                break;
+            }
+            default: break;
+        }
+        fxW = (fxW + 1) % n;
     }
 
     //---------------------------------------------------------------- global EQ
@@ -1186,6 +1883,9 @@ private:
     std::array<bool, 16> pedal {};
     Chorus chorus;
     std::array<float, kBuf> scratch {};
+    LogCtl logc;
+    float monoHzSet = -1.f;
+    Biquad monoLpL, monoLpR;
     std::array<int, 16> lastLeadNote = [] { std::array<int, 16> a; a.fill (-1); return a; }();
     // ping-pong echo for the lead synths
     std::vector<float> echoL, echoR; int echoW = 0;

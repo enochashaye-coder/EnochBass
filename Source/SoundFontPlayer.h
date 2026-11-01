@@ -23,12 +23,68 @@ public:
         tsf* old = nullptr;
         {
             const juce::SpinLock::ScopedLockType sl (lock);
-            old = font; font = t; programApplied = -1; sr = sampleRate;
+            old = font; font = t; programApplied = -1; appliedPreset = -2; sr = sampleRate;
         }
         if (old) tsf_close (old);
-        name = f.getFileName(); loaded = true;
+        name = f.getFileName(); path = f.getFullPathName(); loaded = true;
         message = juce::String();
         return true;
+    }
+
+    /** shares the sample data of a SoundFont another instrument already loaded (no second copy in memory) */
+    bool loadCopyOf (SoundFontPlayer& src, double sampleRate)
+    {
+        tsf* t = nullptr;
+        {
+            const juce::SpinLock::ScopedLockType sl (src.lock);
+            if (src.font == nullptr) return false;
+            t = tsf_copy (src.font);
+        }
+        if (t == nullptr) return false;
+        tsf_set_output (t, TSF_STEREO_UNWEAVED, (int) sampleRate, 0.0f);
+        tsf_set_max_voices (t, 48);
+        tsf* old = nullptr;
+        {
+            const juce::SpinLock::ScopedLockType sl (lock);
+            old = font; font = t; programApplied = -1; appliedPreset = -2; sr = sampleRate;
+        }
+        if (old) tsf_close (old);
+        name = src.name; path = src.path; loaded = true;
+        return true;
+    }
+    juce::String path;                                      // file it came from (set by the owner)
+
+    /** the presets inside the file, for the preset menu (message thread) */
+    juce::StringArray presetNames()
+    {
+        juce::StringArray r;
+        const juce::SpinLock::ScopedLockType sl (lock);
+        if (font) for (int i = 0; i < tsf_get_presetcount (font); ++i) r.add (juce::String (i + 1) + ": " + juce::String (tsf_get_presetname (font, i)));
+        return r;
+    }
+    /** -1 = automatic (the General MIDI program of the instrument), otherwise the preset index to use */
+    void setPreset (int index) { wantPreset = index; }
+    int getPreset() const { return wantPreset.load(); }
+    /** true when "automatic" is chosen and the file has no preset for the instrument's General MIDI program */
+    bool programMissing() const { return missing.load(); }
+    /** worked out on any thread: would the current settings find a preset? */
+    bool canPlay()
+    {
+        const juce::SpinLock::ScopedTryLockType sl (lock);
+        if (! sl.isLocked()) return ! missing.load();
+        if (! font) return false;
+        const int pr = wantPreset.load();
+        if (pr >= 0) return pr < tsf_get_presetcount (font);
+        const bool ok = tsf_get_presetindex (font, 0, wantProgram.load()) >= 0;
+        missing = ! ok;
+        return ok;
+    }
+    void soundsOff()
+    {
+        const juce::SpinLock::ScopedTryLockType sl (lock);
+        if (! sl.isLocked() || ! font) return;
+        for (int c = 0; c < 16; ++c) tsf_channel_sounds_off_all (font, c);
+        tsf_reset (font); programApplied = -1; appliedPreset = -2;
     }
 
     void unload()
@@ -37,7 +93,7 @@ public:
         { const juce::SpinLock::ScopedLockType sl (lock); old = font; font = nullptr; }
         loaded = false;
         if (old) tsf_close (old);
-        name = juce::String();
+        name = juce::String(); path = juce::String(); missing = false;
     }
 
     bool isLoaded() const { return loaded.load(); }
@@ -61,6 +117,7 @@ public:
         const juce::SpinLock::ScopedTryLockType sl (lock);
         if (! sl.isLocked() || ! font) return;
         applyProgram();
+        if (missing.load()) return;
         tsf_channel_note_on (font, ch, key, (float) vel / 127.0f);
     }
     void noteOff (int ch, int key)
@@ -120,12 +177,23 @@ public:
 private:
     void applyProgram()      // lock held
     {
-        const int gm = wantProgram.load();
-        if (gm == programApplied) return;
-        for (int c = 0; c < 16; ++c)
-            if (! tsf_channel_set_presetnumber (font, c, gm, 0)) tsf_channel_set_presetindex (font, c, 0);   // not in this file: use its first instrument
-        programApplied = gm;
+        const int gm = wantProgram.load(), pr = wantPreset.load();
+        if (gm == programApplied && pr == appliedPreset) return;
+        bool ok = true;
+        if (pr >= 0 && pr < tsf_get_presetcount (font))
+            for (int c = 0; c < 16; ++c) tsf_channel_set_presetindex (font, c, pr);
+        else
+        {
+            // never fall back to the file's first instrument: a missing program is reported and the built-in engine plays instead
+            ok = tsf_get_presetindex (font, 0, gm) >= 0;
+            if (ok) for (int c = 0; c < 16; ++c) tsf_channel_set_presetnumber (font, c, gm, 0);
+        }
+        missing = ! ok;
+        programApplied = gm; appliedPreset = pr;
     }
+    std::atomic<int> wantPreset { -1 };
+    std::atomic<bool> missing { false };
+    int appliedPreset = -2;
 
     juce::SpinLock lock;
     tsf* font = nullptr;

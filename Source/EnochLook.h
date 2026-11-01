@@ -111,12 +111,16 @@ struct EnochTextures
 };
 
 //==============================================================================
-/** Look and feel with one LED colour per instrument (guitar = amber, sax = rose, violin = violet, piano = ice blue, trumpet = emerald, bass = ember). */
+/** Look and feel with one LED colour per instrument (guitar = amber, sax = rose, violin = violet, piano / synth = ice blue, trumpet = emerald, bass = ember, log drum = magenta). */
 struct EnochLookAndFeel : public juce::LookAndFeel_V4
 {
     struct Theme { juce::Colour accent, bg, panel, panel2, border, accent2; };
 
     static juce::Colour text()  { return juce::Colour (0xffece6d8); }    // silkscreen ink
+    // section colours (the same in both plugins): generate = the instrument colour, sound = teal, edit = azure, play & export = gold
+    static juce::Colour secSound()  { return juce::Colour (0xff2fd3c1); }
+    static juce::Colour secEdit()   { return juce::Colour (0xff5b9dff); }
+    static juce::Colour secExport() { return juce::Colour (0xffffc857); }
     static juce::Colour dim()   { return juce::Colour (0xffa39d90); }
     static juce::Colour green() { return juce::Colour (0xff3ddc97); }
     static juce::Colour red()   { return juce::Colour (0xffff5a5f); }
@@ -133,7 +137,8 @@ struct EnochLookAndFeel : public juce::LookAndFeel_V4
     {
         auto mk = [] (juce::uint32 led, juce::uint32 led2)
         {
-            return Theme { juce::Colour (led), juce::Colour (0xff141518), juce::Colour (0xff24262b), juce::Colour (0xff34373e), juce::Colour (0xff4a4e57), juce::Colour (led2) };
+            // v2.7 premium redesign: deep charcoal / midnight base under the instrument colour
+            return Theme { juce::Colour (led), juce::Colour (0xff0e1117), juce::Colour (0xff1a1f29), juce::Colour (0xff262d3a), juce::Colour (0xff3b4558), juce::Colour (led2) };
         };
         switch (inst)
         {
@@ -142,6 +147,7 @@ struct EnochLookAndFeel : public juce::LookAndFeel_V4
             case 3:  return mk (0xff5cc8ff, 0xff2f9be0);   // piano: ice blue
             case 4:  return mk (0xff45e3a6, 0xff1fb582);   // trumpet: emerald
             case 5:  return mk (0xffff9447, 0xffe0662a);   // bass: ember
+            case 6:  return mk (0xffff4fd8, 0xffc93bb0);   // log drum: hot magenta (Enoch Bass, when an Amapiano log drum is the sound)
             default: return mk (0xffffb84d, 0xffeb8b26);   // guitar: amber
         }
     }

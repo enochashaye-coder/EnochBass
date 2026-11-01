@@ -38,6 +38,9 @@ struct Settings
     bool chordTrack = false;        // also write a block-chord pad track
     float busy = 0.5f;              // 0 lazy .. 1 very busy (rapid 16ths); the default already plays a little busier than before
     std::vector<float> barBusy;     // per-bar override of 'busy' picked in the editor (< 0 = follow the global value)
+    int speed = 0;                  // v2.7: 0 normal, 1 double time
+    int subdiv = 0;                 // v2.7: 0 auto (style), 1 1/16, 2 1/16 triplets, 3 1/32, 4 1/32 triplets
+    std::vector<int> barSpeed;      // v2.7: per-bar speed override (-1 = follow the global speed, 0 normal, 1 double time)
     // reference recording / MIDI that steers the rhythm, feel and shape of the generated notes (not the notes themselves)
     std::shared_ptr<const RefProfile> refProfile;
     float refAmount = 0.7f;         // 0 = ignore .. 1 = follow closely
@@ -167,6 +170,30 @@ inline std::vector<std::string> cellsFor (int genre)
     static const std::vector<std::string> soukous  = { "x.xx.xx.x.xx.xx.", "xxxx.xxxx.xx.xx.", "x.xxx.xx.xxx.xx.", "x.xx.x.xx.xx.x.x" };
     static const std::vector<std::string> ethio    = { "x..x..x..x..x..x", "x.x..x.x..x.x..x", "x..x.x..x..x.x..", "x.x..x..x.x..x.." };
     static const std::vector<std::string> township = { "x.x.xx.x.x.xx.x.", "x.x.x.xx.x.x.x.x", "x..xx.x.x..xx.x.", "x.x.x.x.x.x.x.x." };
+    // v2.7 batch 3 genres with their own rhythm cells (the others use the genre they build on)
+    static const std::vector<std::string> bebop    = { "x.x.x.x.x.x.x.x.", ".x.x.x.x.x.x.x.x", "x.x.x.x.x.x.....", "..x.x.x.x.x.x.x.", "x.x.x.x...x.x.x." };
+    static const std::vector<std::string> modal    = { "x.......x.x.....", "x.....x.....x...", "..x.....x.x.x...", "x...x.......x.x.", "x.x.x...........", "x.......x......." };
+    static const std::vector<std::string> jfunk    = { "x..x..x.x.xx.x..", "x.xx..x..x.x..x.", "..x.xx.x..x.xx.x", "x..x.x.xx..x.x.x", "xx.x..x.x.x..x.x" };
+    static const std::vector<std::string> smooth   = { "x...x.x...x.x...", "..x.x...x.x.....", "x.....x.x...x.x.", "x..x....x..x....", "....x.x.x.x....." };
+    static const std::vector<std::string> kizomba  = { "x.....x.x.......", "x..x..x.........", "x.....x...x.....", "x.......x..x..x.", "x..x............", "......x.x...x..." };
+    static const std::vector<std::string> zouk     = { "x..x..x.x..x..x.", "x..x..x...x.x...", "x..x....x..x..x.", "..x..x..x..x.x..", "x..x..x.x......." };
+    static const std::vector<std::string> privsch  = { "x.....x...x.....", "..x...x.....x...", "x..x......x.x...", "x.......x..x....", "....x.x.....x.x." };
+    static const std::vector<std::string> bacardi  = { "x.xx.x.xx.xx.x.x", "x..x.xx.x.xx.x.x", "xx.x.x.xx.x.x.xx", "x.x.xx.x.xx.x.x.", "x..xx.x..xx.x.x." };
+    static const std::vector<std::string> sgija    = { "x..x..x...x.....", "x..x..x..x..x...", "x.....x.x..x....", "x..x......x..x..", "x..x..x.x...x..." };
+    switch (genre)
+    {
+        case G_Bebop: case G_HardBop: { auto v = bebop; auto j = cellsJazz(); v.insert (v.end(), j.begin(), j.end()); return v; }
+        case G_ModalJazz: { auto v = modal; auto j = cellsJazz(); v.insert (v.end(), j.begin(), j.end()); return v; }
+        case G_JazzFunk: return jfunk;
+        case G_SmoothJazz: return smooth;
+        case G_Kizomba: return kizomba;
+        case G_Zouk: return zouk;
+        case G_PrivateSchool: return privsch;
+        case G_Bacardi: return bacardi;
+        case G_Sgija: return sgija;
+        default: break;
+    }
+    genre = baseGenre (genre);
     std::vector<std::string> r;
     auto add = [&] (const std::vector<std::string>& v) { r.insert (r.end(), v.begin(), v.end()); };
     switch (genre)
@@ -1166,24 +1193,24 @@ inline std::vector<Note> generateComp (const Settings& S, const Style& st, const
 
     // choose rhythm cells
     std::vector<std::string> bank;
-    if (inst == I_Violin || (detail::isWind (inst) && (S.genre == G_Ballad)))
+    if (inst == I_Violin || (detail::isWind (inst) && (baseGenre (S.genre) == G_Ballad)))
         bank = { "x...............", "x.......x.......", "x.......x...x..." };
-    else if (S.genre == G_Swing)
+    else if (baseGenre (S.genre) == G_Swing)
     {
         if (inst == I_Guitar) bank = { "x...x...x...x..." };
         else bank = { "x.....x.........", "..x.....x.....x.", "x.......x...x...", ".....x.....x....", "x.....x.x......." };
     }
     else bank = detail::cellsFor (S.genre);
-    if (inst == I_Piano && afro && S.genre != G_Amapiano) bank = { "x..x..x...x.x...", "..x..x..x..x..x.", "x.....x.x.x.....", ".x.x..x.x.x..x.x", "x..x.x..x..x.x.." };
-    if (inst == I_Guitar && S.genre == G_Highlife) bank = { "x.x.x.x.x.x.x.x." };
-    if (inst == I_Guitar && S.genre == G_Ballad)   bank = { "x.x.x.x.x.x.x.x." };
+    if (inst == I_Piano && afro && baseGenre (S.genre) != G_Amapiano) bank = { "x..x..x...x.x...", "..x..x..x..x..x.", "x.....x.x.x.....", ".x.x..x.x.x..x.x", "x..x.x..x..x.x.." };
+    if (inst == I_Guitar && baseGenre (S.genre) == G_Highlife) bank = { "x.x.x.x.x.x.x.x." };
+    if (inst == I_Guitar && baseGenre (S.genre) == G_Ballad)   bank = { "x.x.x.x.x.x.x.x." };
 
     const std::string cellA = rng.pick (bank), cellB = rng.pick (bank);
 
     for (int bar = 0; bar < S.bars; ++bar)
     {
         const std::string& cell = (bar % 4 == 3 && rng.chance (0.5)) ? cellB : cellA;
-        const bool scratchGuitar = (inst == I_Guitar && afro && S.genre != G_Highlife);
+        const bool scratchGuitar = (inst == I_Guitar && afro && baseGenre (S.genre) != G_Highlife);
         for (int s = 0; s < spb; ++s)
         {
             const bool hit = (m.simpleFour ? (cell[(size_t) s] == 'x') : (m.weight[(size_t) s] >= 0.6 || (s % 2 == 0 && rng.chance (0.3))));
@@ -1205,7 +1232,7 @@ inline std::vector<Note> generateComp (const Settings& S, const Style& st, const
             
             if (inst == I_Piano)
             {
-                const bool pad = (S.genre == G_Ballad) || (!afro && S.genre != G_Swing);
+                const bool pad = (baseGenre (S.genre) == G_Ballad) || (!afro && baseGenre (S.genre) != G_Swing);
                 const auto vo = voicing (c, pad ? 53 : 55, 3 + (rng.chance (0.4) ? 1 : 0));
                 const double len = pad ? std::min (room * 0.95, 4.0) : std::min (0.22 + (afro ? 0.0 : 0.15), room * 0.9);
                 const int art = pad ? A_Sustain : (w >= 0.8 ? A_Marcato : A_Staccato);
@@ -1221,7 +1248,7 @@ inline std::vector<Note> generateComp (const Settings& S, const Style& st, const
                     const bool acc = m.simpleFour ? (cell[(size_t) s] == 'x') : hit;
                     for (int p : vo) push (p, acc ? 0.2 : 0.09, acc ? vel : std::max (20, vel - 38), acc ? A_Staccato : A_Ghost);
                 }
-                else if (S.genre == G_Highlife || S.genre == G_Ballad)
+                else if (baseGenre (S.genre) == G_Highlife || baseGenre (S.genre) == G_Ballad)
                 {
                     // arpeggiated picking: root, 5th, 3rd, 5th
                     const auto vo = voicing (c, 52, 3);
@@ -1229,7 +1256,7 @@ inline std::vector<Note> generateComp (const Settings& S, const Style& st, const
                     const int idx = seq[(s / 2) % 4];
                     push (vo[(size_t) std::min ((int) vo.size() - 1, idx)] , 0.45, vel - 8, A_Sustain);
                 }
-                else if (S.genre == G_Rock)
+                else if (baseGenre (S.genre) == G_Rock)
                 {
                     int root = 40; while (root % 12 != c.rootPc % 12) ++root;
                     for (int p : { root, root + 7, root + 12 }) push (p, std::min (0.5, room * 0.8), vel, A_Strum);
@@ -1252,7 +1279,7 @@ inline std::vector<Note> generateComp (const Settings& S, const Style& st, const
                 const Range r = instRange (inst, st.variant);
                 const int center = (r.lo + r.hi) / 2;
                 int p = nearestPitchWithPc (center + rng.i (-3, 4), pcs[rng.i (0, 2)]);
-                if (S.genre == G_Ballad) push (p, std::min (room * 0.98, 4.0), vel - 14, A_Sustain);
+                if (baseGenre (S.genre) == G_Ballad) push (p, std::min (room * 0.98, 4.0), vel - 14, A_Sustain);
                 else push (p, afro ? 0.22 : 0.3, vel + 4, (w >= 0.6) ? A_Marcato : A_Staccato);
             }
         }
@@ -1279,8 +1306,9 @@ inline std::vector<ChordSpan> Generator::buildChords (const Settings& s, const M
     if (def.empty() && s.harmony == 1)
     {
         std::vector<const Prog*> cand;
-        for (auto& p : allProgressions()) if (p.genre == s.genre && p.family == fam) cand.push_back (&p);
-        if (cand.empty()) for (auto& p : allProgressions()) if (p.genre == s.genre) cand.push_back (&p);
+        const int pg = std::any_of (allProgressions().begin(), allProgressions().end(), [&] (const Prog& x) { return x.genre == s.genre; }) ? s.genre : baseGenre (s.genre);
+        for (auto& p : allProgressions()) if (p.genre == pg && p.family == fam) cand.push_back (&p);
+        if (cand.empty()) for (auto& p : allProgressions()) if (p.genre == pg) cand.push_back (&p);
         if (cand.empty()) for (auto& p : allProgressions()) if (p.family == fam) cand.push_back (&p);
         if (cand.empty()) for (auto& p : allProgressions()) cand.push_back (&p);
         const Prog& pr = *cand[(size_t) rng.i (0, (int) cand.size() - 1)];
@@ -1289,12 +1317,12 @@ inline std::vector<ChordSpan> Generator::buildChords (const Settings& s, const M
     if (def.empty())
     {
         // key vamp: one chord for the whole solo - the safest thing to play over almost any groove in that key
-        const bool jazzy = (s.genre == G_Swing || s.genre == G_Ballad || s.genre == G_AfroJazz || s.genre == G_Bossa || s.genre == G_Samba || s.genre == G_Gospel);
-        const bool triad = (s.genre == G_Pop || s.genre == G_Rock || s.genre == G_Flamenco || s.genre == G_Juju || s.genre == G_Soukous || s.genre == G_Township);
-        const bool nine  = (s.genre == G_Amapiano);
+        const bool jazzy = (baseGenre (s.genre) == G_Swing || baseGenre (s.genre) == G_Ballad || baseGenre (s.genre) == G_AfroJazz || baseGenre (s.genre) == G_Bossa || baseGenre (s.genre) == G_Samba || baseGenre (s.genre) == G_Gospel);
+        const bool triad = (baseGenre (s.genre) == G_Pop || baseGenre (s.genre) == G_Rock || baseGenre (s.genre) == G_Flamenco || baseGenre (s.genre) == G_Juju || baseGenre (s.genre) == G_Soukous || baseGenre (s.genre) == G_Township);
+        const bool nine  = isAmapianoFamily (s.genre) || s.genre == G_JazzFunk || s.genre == G_SmoothJazz;
         Quality q;
         if (fam == 1)      q = nine ? Quality::Min9 : (triad ? Quality::Min : Quality::Min7);
-        else if (fam == 2) q = nine ? Quality::Dom9 : (triad && s.genre == G_Flamenco ? Quality::Maj : Quality::Dom7);
+        else if (fam == 2) q = nine ? Quality::Dom9 : (triad && baseGenre (s.genre) == G_Flamenco ? Quality::Maj : Quality::Dom7);
         else               q = nine ? Quality::Maj9 : (triad ? Quality::Maj : (jazzy ? Quality::Maj7 : Quality::Dom7));
         def.push_back ({ 0, q, 4 });
         progName = std::string ("Key vamp: ") + kNoteNames[s.keyRoot % 12] + qualitySuffix (q);
@@ -1414,6 +1442,10 @@ inline Pattern Generator::makeShell (const Settings& sIn)
     return p;
 }
 
+} // namespace enochsolo
+#include "Rhythm.h"
+namespace enochsolo
+{
 inline Pattern Generator::generate (const Settings& sIn)
 {
     Settings s = sIn;
@@ -1463,6 +1495,7 @@ inline Pattern Generator::generate (const Settings& sIn)
     for (auto& n : p.raw) if (n.track != 2) n.pitch = std::clamp (n.pitch + 12 * s.octaveShift, 0, 127);
     if (p.hasSolo && s.voice2 != 0 && s.instrument != I_Bass) applySecondVoice (p, s, 12 * s.octaveShift);
     std::stable_sort (p.raw.begin(), p.raw.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+    rhythm::apply (p, s);                                            // v2.7: double time / fast subdivisions
     for (auto& n : p.raw) n.id = p.nextId++;
     finalize (p, s);
     return p;

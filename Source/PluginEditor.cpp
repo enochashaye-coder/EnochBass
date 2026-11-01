@@ -8,12 +8,12 @@ using LF = EnochLookAndFeel;
 
 namespace
 {
-constexpr float kBaseW = 1250.f, kBaseH = 970.f;
-constexpr int kEdge = 2, kWood = 16;
+constexpr float kBaseW = 1250.f, kBaseH = 1032.f;   // v2.7: +62 px for the SOUND SOURCE / NOW PLAYING rows
+constexpr int kEdge = 2, kWood = 16, kScrollW = 14;
 // surface textures, made once
-const juce::Image& texSheet()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff2b2d31), 1.0f, 3);  return i; }
-const juce::Image& texPlate()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff4a4d54), 0.9f, 5);  return i; }
-const juce::Image& texBlack()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff1f2023), 1.3f, 9);  return i; }
+const juce::Image& texSheet()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff141922), 0.55f, 3); return i; }   // v2.7: midnight charcoal
+const juce::Image& texPlate()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff252c39), 0.5f, 5);  return i; }
+const juce::Image& texBlack()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff0f131a), 0.8f, 9);  return i; }
 const juce::Image& texBadge()  { static const juce::Image i = EnochTextures::brushed (512, 256, juce::Colour (0xffb9bcc2), 0.6f, 13);  return i; }
 const juce::Image& texWood()   { static const juce::Image i = EnochTextures::walnut (48, 1024, 17);                                       return i; }
 }
@@ -163,6 +163,9 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
 {
     setLookAndFeel (&laf);
     juce::Component::addAndMakeVisible (body);
+    vScroll.setAutoHide (false);
+    vScroll.addListener (this);
+    juce::Component::addAndMakeVisible (vScroll);
     body.addChildComponent (advBg);
     advBg.paintFn = [this] (juce::Graphics& g)
     {
@@ -382,8 +385,34 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     saveBtn.setTooltip ("Save the MIDI file anywhere (you can also drag it)");
     addAndMakeVisible (saveBtn);
     advBtn.setClickingTogglesState (true);
-    advBtn.onClick = [this] { advanced = advBtn.getToggleState(); resized(); };
+    advBtn.onClick = [this] { advanced = advBtn.getToggleState(); if (advanced) { logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
     addAndMakeVisible (advBtn);
+    ldBtn.setClickingTogglesState (true);
+    ldBtn.setTooltip ("Open the Amapiano log drum panel: 6 log drum types, tuning, pitch drop, punch, sub, body, tone, drive, glide, mono low end");
+    ldBtn.onClick = [this] { logOpen = ldBtn.getToggleState(); if (logOpen) { advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
+    addAndMakeVisible (ldBtn);
+    ldPanel.paintPlate = [] (juce::Graphics& g, juce::Rectangle<float> b) { LF::plate (g, b, texPlate(), 7.f, true); };
+    addChildComponent (ldPanel);
+    feelBtn.setClickingTogglesState (true);
+    feelBtn.setTooltip ("Realism, humanize, dynamics, expression, brightness, mechanical noise, mic, room, glide, Human Play, speed and fastest notes");
+    feelBtn.onClick = [this]
+    {
+        feelOpen = feelBtn.getToggleState();
+        if (feelOpen) { advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); }
+        resized();
+    };
+    addAndMakeVisible (feelBtn);
+    feelPanel.paintPlate = [] (juce::Graphics& g, juce::Rectangle<float> b) { LF::plate (g, b, texPlate(), 7.f, true); };
+    addChildComponent (feelPanel);
+    barSpeedBox.addItem ("Speed: follow", 1); barSpeedBox.addItem ("Speed: normal", 2); barSpeedBox.addItem ("Speed: double time", 3);
+    barSpeedBox.setTooltip ("Speed of the SELECTED bars: follow the global Speed (SOUND & FEEL), normal, or double time. The bars are written again.");
+    barSpeedBox.onChange = [this]
+    {
+        if (updatingUi || roll.barSelFirst() < 0) return;
+        proc.applyBarSpeed (roll.barSelFirst(), roll.barSelLast(), barSpeedBox.getSelectedId() - 2, (uint64_t) juce::Random::getSystemRandom().nextInt64());
+        refreshBarPanel();
+    };
+    addAndMakeVisible (barSpeedBox);
 
     ksToggle.setTooltip ("ON: the MIDI contains articulation key-switches and expression.\n"
                          "OFF: key-switches are removed and the articulations are baked into the notes themselves (length, velocity, real ornament notes),\n"
@@ -452,12 +481,12 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     barInfo.setFont (juce::Font (juce::FontOptions (13.f, juce::Font::bold)));
     barInfo.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (barInfo);
-    styleLabel (lBarBusy, "BUSY OF SELECTED BARS  (lazy <-> rapid)", body);
-    lBarBusy.setTooltip ("Drag the slider to make the selected bar(s) lazier or busier. Click chord names above the roll to select bars.");
+    styleLabel (lBarBusy, "BAR NOTES DENSITY  (sparse <-> dense)", body);
+    lBarBusy.setTooltip ("Drag the slider to give the selected bar(s) fewer or more notes. The new notes follow each bar's chord, the scale, the genre's rhythm cells and the instrument (winds keep room to breathe). Click chord names above the roll to select bars.");
     barBusy.setSliderStyle (juce::Slider::LinearHorizontal);
     barBusy.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
     barBusy.setRange (0.0, 1.0, 0.01);
-    barBusy.setTooltip ("Make the SELECTED bars lazier or busier. The notes are rewritten over each bar's own chord. Drag right for rapid playing.");
+    barBusy.setTooltip ("Notes density of the SELECTED bars. The notes are rewritten over each bar's own chord and scale. Drag right for more notes (and more fast runs when FASTEST NOTES is set in SOUND & FEEL).");
     barBusy.onDragStart = [this] { proc.pushUndo(); busySeed = (uint64_t) juce::Random::getSystemRandom().nextInt64(); };
     barBusy.onValueChange = [this]
     {
@@ -560,6 +589,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
             pr->setValueNotifyingHost (pr->convertTo0to1 ((float) (soundBox.getSelectedId() - 1)));
     };
     addAndMakeVisible (soundBox);
+    addAndMakeVisible (srcBar);
 
     // ---- hardware knobs: the main sound-shaping controls (drag up / down, Shift = fine, double-click = default, wheel = step)
     makeHardwareKnob (intensity, "intensity", "CALM", "FIERY", 0);
@@ -651,6 +681,18 @@ void EnochSoloEditor::setChoiceParam (const char* id, int index)
         prm->setValueNotifyingHost (prm->convertTo0to1 ((float) index));
         prm->endChangeGesture();
     }
+}
+
+void EnochSoloEditor::scrollBarMoved (juce::ScrollBar*, double start)
+{
+    scrollY = (float) start;
+    body.setTransform (juce::AffineTransform::scale (scaleNow).translated ((float) kEdge, (float) kEdge - scrollY));
+    repaint();
+}
+void EnochSoloEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    if (! vScroll.isEnabled()) { juce::AudioProcessorEditor::mouseWheelMove (e, w); return; }
+    vScroll.setCurrentRangeStart (vScroll.getCurrentRangeStart() - w.deltaY * 220.0);
 }
 
 void EnochSoloEditor::applyTheme (int inst)
@@ -789,11 +831,12 @@ void EnochSoloEditor::refreshBarPanel()
     barInfo.setText (roll.barSelText(), juce::dontSendNotification);
     barInfo.setColour (juce::Label::textColourId, has ? LF::of (*this).accent : LF::dim());
     barBusy.setValue ((double) roll.busyOfSelection(), juce::dontSendNotification);
+    barSpeedBox.setSelectedId (has ? proc.barSpeedOf (roll.barSelFirst()) + 2 : 1, juce::dontSendNotification);
     updatingUi = false;
     barBusyText.setText (! has ? juce::String ("select a bar first")
                                : juce::String (juce::roundToInt (roll.busyOfSelection() * 100.f)) + (roll.selectionHasExplicitBusy() ? "%  (own value)" : "%  (follows global)"),
                          juce::dontSendNotification);
-    for (auto* c : std::initializer_list<juce::Component*> { &barBusy, &barAuto, &barReroll, &barCopy, &barClear })
+    for (auto* c : std::initializer_list<juce::Component*> { &barBusy, &barAuto, &barReroll, &barCopy, &barClear, &barSpeedBox })
         c->setEnabled (has);
     lBarBusy.setEnabled (has); lBarBusy.setAlpha (has ? 1.f : 0.5f);
     barAuto.setEnabled (has && roll.selectionHasExplicitBusy());
@@ -804,7 +847,16 @@ void EnochSoloEditor::timerCallback()
 {
     const int inst = juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load());
     const int a = juce::roundToInt (proc.apvts.getRawParameterValue ("artist")->load());
-    if (inst != shownInstrument) { refreshArtists(); applyTheme (inst); }
+    // v2.7: an Amapiano log drum as the sound turns the interface to the log drum colours
+    int themeKey = inst;
+    if (auto* sp = proc.apvts.getRawParameterValue ("sound" + juce::String (inst)))
+    {
+        const auto& pl = enochsolo::snd::patchList (inst);
+        const int si = juce::jlimit (0, (int) pl.size() - 1, juce::roundToInt (sp->load()));
+        if (pl[(size_t) si].kind == enochsolo::snd::K_LogDrum || pl[(size_t) si].kind == enochsolo::snd::K_Log) themeKey = 6;
+    }
+    if (inst != shownInstrument) { refreshArtists(); applyTheme (themeKey); shownTheme = themeKey; }
+    else if (themeKey != shownTheme) { shownTheme = themeKey; applyTheme (themeKey); }
     else if (artist.getNumItems() > 0 && artist.getSelectedItemIndex() != juce::jlimit (0, artist.getNumItems() - 1, a))
     { updatingUi = true; artist.setSelectedItemIndex (juce::jlimit (0, artist.getNumItems() - 1, a), juce::dontSendNotification); updatingUi = false; }
     for (int i = 0; i < instButtons.size(); ++i) instButtons[i]->setToggleState (i == inst, juce::dontSendNotification);
@@ -1093,7 +1145,7 @@ void EnochSoloEditor::saveMidi()
 
 void EnochSoloEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xff0c0c0d));
+    g.fillAll (juce::Colour (0xff07090c));
 }
 
 void EnochSoloEditor::renderChassis()
@@ -1101,7 +1153,7 @@ void EnochSoloEditor::renderChassis()
     const auto& T = LF::of (*this);
     const float sc = juce::jlimit (1.f, 3.f, juce::Component::getApproximateScaleFactorForComponent (&body));
     const int W = body.getWidth(), H = body.getHeight();
-    juce::String key; key << W << "x" << H << "@" << sc << T.accent.toString() << sideRect.toString() << headRect.toString() << deckRect.toString()
+    juce::String key; key << W << "x" << H << "@" << sc << T.accent.toString() << srcBar.getBounds().toString() << (int) srcBar.isVisible() << sideRect.toString() << headRect.toString() << deckRect.toString()
                          << toolRect.toString() << footRect.toString() << roll.getBounds().toString() << barPanelRect.toString() << photoRect.toString() << titleRect.toString();
     if (key == chassisKey && chassis.isValid()) return;
     chassisKey = key;
@@ -1172,7 +1224,39 @@ void EnochSoloEditor::renderChassis()
         LF::recess (g, roll.getBounds().toFloat().expanded (2.f), 6.f, juce::Colour (0xff060708), false);
     }
     // bar panel: a recessed strip in the editor plate
-    LF::recess (g, barPanelRect.toFloat(), 6.f, juce::Colour (0xff17181b), false);
+    LF::recess (g, barPanelRect.toFloat(), 6.f, juce::Colour (0xff10141b), false);
+
+    // v2.7 colour-coded sections: a lit strip along the top of each plate + its name
+    auto section = [&] (juce::Rectangle<float> r, juce::Colour c, const char* name)
+    {
+        if (r.isEmpty()) return;
+        auto strip = juce::Rectangle<float> (r.getX() + 14.f, r.getY() + 2.f, r.getWidth() - 28.f, 2.5f);
+        juce::Path sp; sp.addRoundedRectangle (strip, 1.2f);
+        juce::DropShadow (c.withAlpha (0.65f), 8, {}).drawForPath (g, sp);
+        g.setGradientFill (juce::ColourGradient (c.withAlpha (0.f), strip.getX(), 0.f, c.withAlpha (0.f), strip.getRight(), 0.f, false));
+        { juce::ColourGradient cg (c.withAlpha (0.15f), strip.getX(), 0.f, c.withAlpha (0.15f), strip.getRight(), 0.f, false); cg.addColour (0.12, c); cg.addColour (0.88, c); g.setGradientFill (cg); }
+        g.fillPath (sp);
+        if (name != nullptr)
+        {
+            const auto f = LF::fnt (8.5f, "Bold", 0.16f);
+            const float tw = (float) juce::GlyphArrangement::getStringWidthInt (f, name) + 12.f;
+            auto tag = juce::Rectangle<float> (r.getRight() - 18.f - tw, r.getY() + 5.f, tw, 12.f);
+            g.setColour (juce::Colour (0xff0b0e13).withAlpha (0.85f)); g.fillRoundedRectangle (tag, 3.f);
+            LF::ledText (g, name, tag, f, juce::Justification::centred, c);
+        }
+    };
+    section (sideRect.toFloat(), T.accent, nullptr);
+    if (! deckRect.isEmpty()) section (deckRect.toFloat(), T.accent, "GENERATE");
+    section (toolRect.toFloat(), LF::secEdit(), "EDIT");
+    section (footRect.toFloat(), LF::secExport(), nullptr);
+    // the sound row inside the deck: its own teal frame
+    if (srcBar.isVisible() && ! srcBar.getBounds().isEmpty())
+    {
+        auto sb = srcBar.getBounds().toFloat().expanded (6.f, 4.f);
+        LF::recess (g, sb, 6.f, juce::Colour (0xff0d1418), false);
+        g.setColour (LF::secSound().withAlpha (0.55f)); g.drawRoundedRectangle (sb.reduced (0.5f), 6.f, 1.f);
+        g.setColour (LF::secSound()); g.fillRoundedRectangle (sb.getX() + 1.f, sb.getY() + 6.f, 2.5f, sb.getHeight() - 12.f, 1.f);
+    }
 }
 
 void EnochSoloEditor::paintBody (juce::Graphics& g)
@@ -1254,11 +1338,23 @@ void EnochSoloEditor::resized()
 {
     if (instButtons.size() < I_Count) return;     // children not built yet
     edgeResizer.setBounds (getLocalBounds());
-    const float aw = (float) (getWidth() - 2 * kEdge), ah = (float) (getHeight() - 2 * kEdge);
-    const float s = juce::jlimit (0.55f, 2.6f, std::min (aw / kBaseW, ah / kBaseH));
-    body.setBounds (0, 0, (int) std::lround (aw / s), (int) std::lround (ah / s));
-    body.setTransform (juce::AffineTransform::scale (s).translated ((float) kEdge, (float) kEdge));
+    // v2.7: the interface scales to the window width; when the window is too short for it, it scrolls (the bar on the right is always there)
+    const float aw = (float) (getWidth() - 2 * kEdge - kScrollW - 7), ah = (float) (getHeight() - 2 * kEdge);   // 7 px: the window edge grip stays free
+    const float sW = aw / kBaseW, sH = ah / kBaseH;
+    const float s = juce::jlimit (0.55f, 2.6f, juce::jmin (sW, juce::jmax (sH, sW * 0.82f)));
+    const int bodyW = (int) std::lround (aw / s);
+    const int bodyH = juce::jmax ((int) std::lround (ah / s), (int) kBaseH);
+    const float contentH = (float) bodyH * s;
+    vScroll.setBounds (getWidth() - kEdge - kScrollW - 7, kEdge + 4, kScrollW, (int) ah - 8);
+    vScroll.setRangeLimits (0.0, juce::jmax ((double) ah, (double) contentH));
+    vScroll.setCurrentRange (juce::jlimit (0.0, juce::jmax (0.0, (double) contentH - ah), vScroll.getCurrentRangeStart()), (double) ah);
+    vScroll.setEnabled (contentH > ah + 1.f);
+    scrollY = (float) vScroll.getCurrentRangeStart();
+    scaleNow = s;
+    body.setBounds (0, 0, bodyW, bodyH);
+    body.setTransform (juce::AffineTransform::scale (s).translated ((float) kEdge, (float) kEdge - scrollY));
     layoutBody();
+    vScroll.toFront (false);
     edgeResizer.toFront (false);
     repaint();
 }
@@ -1396,6 +1492,8 @@ void EnochSoloEditor::layoutBody()
         libInfo.setBounds (lr2);
         r.removeFromTop (3);
     }
+    srcBar.setBounds (r.removeFromTop (58).reduced (3, 0));
+    r.removeFromTop (4);
     {
         auto sr = r.removeFromTop (28);
         songBtn.setBounds (sr.removeFromLeft (150).reduced (2, 0)); sr.removeFromLeft (6);
@@ -1461,7 +1559,8 @@ void EnochSoloEditor::layoutBody()
         barReroll.setBounds (l2.removeFromRight (98).reduced (2, 0));
         barAuto.setBounds (l2.removeFromRight (54).reduced (2, 0));
         barBusyText.setBounds (l2.removeFromRight (118));
-        lBarBusy.setBounds (l2.removeFromLeft (252));
+        barSpeedBox.setBounds (l2.removeFromRight (150).reduced (4, 0));
+        lBarBusy.setBounds (l2.removeFromLeft (232));
         barBusy.setBounds (l2);
     }
     r.removeFromTop (2);
@@ -1474,18 +1573,20 @@ void EnochSoloEditor::layoutBody()
     r.removeFromBottom (10);
     if (advanced)
     {
-        auto drawer = r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236));      // a drawer over the lower part of the roll: the roll keeps its size
+        auto drawer = r.withTrimmedTop (juce::jmax (0, r.getHeight() - 172));      // a drawer over the lower part of the roll: the roll keeps its size
         advBg.setBounds (drawer);
         auto ap = drawer.reduced (16, 10);
         ksText.setBounds (ap.removeFromTop (30));
         ap.removeFromTop (6);
-        ap = ap.removeFromTop (176);
+        ap = ap.removeFromTop (112);
+        if (false)   // v2.7: the one-shot / SoundFont rows moved to the SOUND SOURCE row on the main panel
         {
             auto smr = ap.removeFromBottom (30);
             smpLoadBtn.setBounds (smr.removeFromLeft (190).reduced (2, 2)); smpClearBtn.setBounds (smr.removeFromLeft (80).reduced (2, 2));
             smpOnT.setBounds (smr.removeFromLeft (130)); smpRootBox.setBounds (smr.removeFromLeft (84).reduced (2, 3)); smpLabel.setBounds (smr);
             ap.removeFromBottom (4);
         }
+        if (false)
         {
             auto sfr = ap.removeFromBottom (30);
             sfLoadBtn.setBounds (sfr.removeFromLeft (190).reduced (2, 2)); sfClearBtn.setBounds (sfr.removeFromLeft (80).reduced (2, 2));
@@ -1501,9 +1602,15 @@ void EnochSoloEditor::layoutBody()
         lBend.setBounds (ap.removeFromTop (14)); bendRange.setBounds (ap.removeFromTop (22));
         lVol.setBounds (ap.removeFromTop (14)); volume.setBounds (ap.removeFromTop (22));
     }
-    for (auto* c : std::initializer_list<juce::Component*> { &playerOn, &hostSync, &loopT, &midiOut, &emitKS, &emitBends, &emitCC, &realize, &ksBase, &bendRange, &volume, &lKs, &lBend, &lVol, &ksText, &sfLoadBtn, &sfClearBtn, &sfOnT, &sfLabel, &smpLoadBtn, &smpClearBtn, &smpOnT, &smpRootBox, &smpLabel })
+    for (auto* c : std::initializer_list<juce::Component*> { &playerOn, &hostSync, &loopT, &midiOut, &emitKS, &emitBends, &emitCC, &realize, &ksBase, &bendRange, &volume, &lKs, &lBend, &lVol, &ksText })
         c->setVisible (advanced);
+    for (auto* c : std::initializer_list<juce::Component*> { &sfLoadBtn, &sfClearBtn, &sfOnT, &sfLabel, &smpLoadBtn, &smpClearBtn, &smpOnT, &smpRootBox, &smpLabel })
+        c->setVisible (false);
     roll.setBounds (r);
+    feelPanel.setVisible (feelOpen);
+    if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); feelPanel.toFront (false); }
+    ldPanel.setVisible (logOpen);
+    if (logOpen) { ldPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 250))); ldPanel.toFront (false); }
     advBg.setVisible (advanced);
     if (advanced)
     {
@@ -1517,11 +1624,11 @@ void EnochSoloEditor::layoutBody()
         // rows that slid above the top are hidden; the others stay as they were
         std::initializer_list<juce::Component*> rows = { &lArtist, &artist, &lKey, &key, &lScale, &scale, &lGenre, &genre, &lTs, &timeSig, &lBars, &bars,
             &tryAnother, &lHarmony, &harmony, &lOct, &octave, &lIntensity, &intensity, &lBusy, &busyG, &lSpace, &space, &lRepeat, &repeat,
-            &chordBox, &hint, &lLib, &libBox, &libInfo, &lSound, &soundBox, &songBtn, &lGroove, &grooveAmt, &lClean, &trClean, &trGhostsT, &lClave, &claveBox, &songInfo };
+            &chordBox, &hint, &lLib, &libBox, &libInfo, &lSound, &soundBox, &songBtn, &lGroove, &grooveAmt, &lClean, &trClean, &trGhostsT, &lClave, &claveBox, &songInfo, &srcBar };
         for (auto* c : rows) if (! c->getBounds().isEmpty()) c->setVisible (c->getY() >= upperTopY - 1);
     }
 
-    drag.setBounds (bottom.removeFromRight (juce::jmin (260, juce::jmax (150, bottom.getWidth() - 690))).reduced (2, 2));
+    drag.setBounds (bottom.removeFromRight (juce::jmin (260, juce::jmax (140, bottom.getWidth() - 830))).reduced (2, 2));
     bottom.removeFromRight (8);
     play.setBounds (bottom.removeFromLeft (130).reduced (2, 8));
     bottom.removeFromLeft (8);
@@ -1532,6 +1639,12 @@ void EnochSoloEditor::layoutBody()
     auto kc = bottom.removeFromLeft (230);
     ksToggle.setBounds (kc.removeFromTop (28).reduced (2, 0)); kc.removeFromTop (4);
     exportBox.setBounds (kc.removeFromTop (28).reduced (2, 0));
+    bottom.removeFromLeft (10);
+    {
+        auto fc = bottom.removeFromLeft (128);
+        feelBtn.setBounds (fc.removeFromTop (28).reduced (2, 0)); fc.removeFromTop (4);
+        ldBtn.setBounds (fc.removeFromTop (28).reduced (2, 0));
+    }
     bottom.removeFromLeft (10);
     auto lc = bottom.removeFromLeft (juce::jmax (150, bottom.getWidth() - 8));
     liveBtn.setBounds (lc.removeFromTop (28).reduced (2, 0)); lc.removeFromTop (4);
