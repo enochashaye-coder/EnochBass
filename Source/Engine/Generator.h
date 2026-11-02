@@ -1,6 +1,7 @@
 // Enoch Bass - generation engine (header only, no JUCE dependency)
 #pragma once
 #include <vector>
+#include <array>
 #include <string>
 #include <map>
 #include <set>
@@ -52,6 +53,11 @@ struct Settings
     int grooveTempo = 0;            // 0 as detected, 1 twice as fast, 2 half as fast
     double grooveShift = 0;         // beats the loop's bar line is moved later
     std::shared_ptr<const Library> lib;      // instrument of choice (null = Enoch standard layout)
+    // v3.0 routing: one route per part (0 solo line, 1 accompaniment, 2 chord pad). Off by default = the old behaviour (channel = track).
+    struct RouteCfg { bool on = true; int channel = -1; std::shared_ptr<const Library> lib; int transpose = 0; int program = -1; };
+    RouteCfg routes[3];
+    bool routed = false;
+    bool dupToTrack1 = false;   // Enoch Bass: the log drum part plays a copy of the bass line on its own route
     int clave = 1;                  // Latin genres: 0 off, 1 = 3-2 clave, 2 = 2-3 clave
     int voice2 = 0;                 // second voice: 0 off, 1 third below, 2 third above, 3 horn section, 4 call and response
     int exportMode = 0;             // 0 full (key-switches + expression), 1 no key-switches (articulations baked into the notes),
@@ -70,6 +76,8 @@ struct Settings
 
     bool humanize = true;
     float hTiming = 0.5f, hVel = 0.5f, hLength = 0.5f, hFeel = 0.5f;
+    bool fills = false;             // v3.1 Output 'Fills': the solo line only plays fills at the ends of phrases (comping keeps going)
+    int feel = 0;                   // v3.1 timing-feel preset (see feelPreset in Expression.h); 0 = the style's own feel
     uint64_t hSeed = 1;
 };
 
@@ -87,7 +95,7 @@ struct Note
     int role = 0;       // bass: the job of the note (root, fifth, approach...), so a chord change keeps the line musical (see BassGen.h)
 };
 
-enum { EV_OFF = 0, EV_ON = 1, EV_CC = 2, EV_BEND = 3, EV_AT = 4 };
+enum { EV_OFF = 0, EV_ON = 1, EV_CC = 2, EV_BEND = 3, EV_AT = 4, EV_PC = 5 };   // EV_PC: program change (v3.0 routing)
 struct MidiEv
 {
     double t = 0;
@@ -96,6 +104,8 @@ struct MidiEv
     int track = 0;
     int ord = 2;        // ordering at identical times: 0 = note off, 1 = key-switch / cc / bend, 2 = note on
     int art = 0;        // articulation of the note this event belongs to (note events only)
+    bool ks = false;    // v3.0: a key-switch / mode key (never transposed or velocity-curved)
+    int ch = -1;        // v3.0: MIDI channel 0..15 set by the route (-1 = track number)
 };
 
 /** controller lanes the user can draw in the piano roll (always on the solo track) */

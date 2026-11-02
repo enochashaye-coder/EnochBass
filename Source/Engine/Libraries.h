@@ -7,6 +7,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 namespace enochsolo
 {
@@ -31,6 +33,18 @@ struct Library
     int ccExpr = 11, ccVib = 1;
     std::string note;             // one line shown under the dropdown
     std::string source;           // where the data came from
+    // ---- v3.0 external instrument driver (all optional; defaults change nothing)
+    int transpose = 0;            // semitones added to every played note (e.g. +12 for basses mapped an octave up)
+    int lo = 0, hi = 127;         // playable range after transposing: notes outside are folded in by octaves
+    double overlapMs = 0;         // legato: how far the previous note must overlap the next one (libraries that detect legato by overlap)
+    int repKey = -1;              // repetition key: played instead of every second fast repeat of the same pitch
+    std::vector<KsPress> init;    // mode keys sent once at the start (e.g. auto legato on, X-note mode off)
+    std::vector<int> tuning;      // open strings (sounding MIDI notes, low to high) for the string solver
+    std::vector<int> stringKeys;  // key-switch per string (same order as tuning): forces the string the solver chose
+    int maxFret = 22;
+    int program = -1, bankMsb = -1, bankLsb = -1;
+    int velMin = 1, velMax = 127; double velGamma = 1.0;   // velocity curve
+    int pedalCC = 64; bool halfPedal = false;             // sustain pedal: continuous (Pianoteq) or on/off
 };
 
 inline const LibArt* libFind (const Library& l, int art)
@@ -152,26 +166,64 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
     }
     else if (inst == I_Bass)
     {
-        // Toontrack EZbass: its key-switches sit below the lowest bass note (E1 = 28), so with C-1 = 0 they are the notes 0..20.
-        // Names: B-1 slap, A#-1 harmonics, E-1 ghost note, F#0 slide, G#0 legato (hammer-on / pull-off), C0 palm mute (newer EBX libraries).
+        // Toontrack EZbass. Toontrack names notes with middle C = C3 (= 60), so C0 = 24. The release notes give: palm mute C0,
+        // Slide Down / Slide Up keys F0 and G0, and "the legato control key (32)" = G#0. The key-switches therefore sit at 24..32 and the
+        // bass itself is played an octave above its sounding pitch (low E = E1 = 40). Ghost (E-1), harmonics (A#-1) and slap (B-1) come from help text only.
         Library m; m.name = "Toontrack EZbass"; m.maker = "Toontrack"; m.inst = I_Bass; m.verify = 1;
         m.arts = { la (A_Sustain, {}),
-                   la (A_Legato,   { { 20, 100 } }, true, true),     // G#0 legato (hold)
-                   la (A_HammerOn, { { 20, 100 } }, true, true),
-                   la (A_PullOff,  { { 20, 100 } }, true, true),
-                   la (A_Slide,    { { 18, 100 } }, true, true),     // F#0 slide to the next note played (hold)
-                   la (A_Ghost,    { {  4, 100 } }, true, true),     // E-1 ghost note
-                   la (A_PalmMute, { { 12, 100 } }, true, true),     // C0 palm mute (EBX libraries that have recorded palm mutes)
-                   la (A_Harmonic, { { 10, 100 } }, true, true),     // A#-1 harmonics
-                   la (A_Slap,     { { 11, 100 } }, true, true) };   // B-1 slap / pop
+                   la (A_Legato,   { { 32, 100 } }, true, true),     // G#0 legato control key (hold)
+                   la (A_HammerOn, { { 32, 100 } }, true, true),
+                   la (A_PullOff,  { { 32, 100 } }, true, true),
+                   la (A_Slide,    { { 31, 100 } }, true, true),     // G0 slide up (hold)
+                   la (A_Gliss,    { { 29, 100 } }, true, true),     // F0 slide down (hold)
+                   la (A_Ghost,    { { 16, 100 } }, true, true),     // E-1 ghost note
+                   la (A_PalmMute, { { 24, 100 } }, true, true),     // C0 palm mute (EBX libraries with recorded palm mutes)
+                   la (A_Harmonic, { { 22, 100 } }, true, true),     // A#-1 harmonics
+                   la (A_Slap,     { { 23, 100 } }, true, true) };   // B-1 slap / pop
         m.ccExpr = 11; m.ccVib = 1;
-        m.note = "Key-switches below the bass range: legato G#0, slide F#0, ghost E-1, palm mute C0, harmonic A#-1, slap B-1 (C-1 = note 0). Check one bar in EZbass.";
-        m.source = "Toontrack EZbass release notes (palm mute C0, slides F0/G0, key switch list) and Toontrack help text; notes are not in one official table";
+        m.transpose = 12; m.lo = 35; m.hi = 81; m.overlapMs = 15;
+        m.note = "Key-switches (Toontrack numbering, C3 = 60): legato G#0 (32), slide up G0, slide down F0, palm mute C0, ghost E-1, harmonic A#-1, slap B-1. Bass sent an octave up (low E = E1). Check one bar.";
+        m.source = "Toontrack EZbass release notes (palm mute C0, slide keys F0/G0, legato control key 32); ghost / harmonic / slap from help text";
         add (m);
         Library pl; pl.name = "Plain bass (any bass sampler, no key-switches)"; pl.maker = ""; pl.inst = I_Bass; pl.verify = 1; pl.noKeySwitches = true;
         pl.note = "Notes only: no key-switch notes are written. Ghost, slide and mute are still shown in the piano roll and in the MIDI as note length and velocity.";
         pl.source = "plain MIDI";
         add (pl);
+        // Ilya Efimov basses (Kontakt numbering, C3 = 60). Shared key-switch layout of the Modern, Classic and Fretless Bass manuals:
+        //   strings A-1 (B), B-1 (E), C0 (A), D0 (D), E0 (G); mode keys C#0 chord, D#0 open strings, F0 X-note, F#0 easy legato, G0 auto legato
+        //   (velocity 101-127 = on, 0-100 = off); G#0 FX gliss, A0 slap/pop hold, A#0 gliss key; E4 repetition, F4 repetition X-mute,
+        //   F#4 fingered, G4 legato hold, G#4 slap, A4 flageolet hold, A#4 palm mute, B4 slide-up hold.
+        auto ilyaBass = [&] (const char* name, const char* manual, bool fiveString, bool slap, int fingeredKey)
+        {
+            Library b; b.name = name; b.maker = "Ilya Efimov"; b.inst = I_Bass; b.verify = 1;
+            const KsPress xOff { 29, 40 }, fing { fingeredKey, 100 };
+            b.arts = { la (A_Sustain,  { fing, xOff }), la (A_Legato, { fing, xOff }), la (A_Staccato, { fing, xOff }), la (A_Marcato, { fing, xOff }),
+                       la (A_Ghost,    { { 29, 120 } }),                    // X-note mode on (dead notes) until the next articulation
+                       la (A_PalmMute, { { 82, 100 }, xOff }),
+                       la (A_Harmonic, { { 81, 100 } }, true, true),        // A4 flageolet (hold)
+                       la (A_Slide,    { { 83, 100 } }, true, true),        // B4 slide-up (hold)
+                       la (A_Gliss,    { { 34, 100 } }, true, true) };      // A#0 gliss key (hold)
+            if (slap) b.arts.push_back (la (A_Slap, { { 80, 100 }, xOff }));
+            b.init = { { 31, 120 }, { 30, 40 }, { 29, 40 }, { 27, 40 }, { 25, 40 } };   // auto legato on, easy legato / X-note / open strings / chord mode off
+            b.transpose = 12; b.hi = 75; b.overlapMs = 25; b.repKey = 76;
+            b.tuning = fiveString ? std::vector<int> { 23, 28, 33, 38, 43 } : std::vector<int> { 28, 33, 38, 43 };
+            b.stringKeys = fiveString ? std::vector<int> { 21, 23, 24, 26, 28 } : std::vector<int> { 23, 24, 26, 28 };
+            b.lo = fiveString ? 35 : 40; b.maxFret = 20;
+            b.ccExpr = 11; b.ccVib = 1;
+            b.note = std::string ("Strings, auto legato by overlap, X-notes for dead notes, repetition key E4, slide B4, flageolet A4") + (slap ? ", slap G#4" : "") + ". Sent an octave up.";
+            b.source = manual;
+            add (b);
+        };
+        ilyaBass ("Ilya Efimov Modern Bass", "Ilya Efimov Modern Bass manual (key-switch table)", true, true, 78);
+        ilyaBass ("Ilya Efimov Classic Bass", "Ilya Efimov Classic Bass manual (key-switch table)", false, true, 78);
+        ilyaBass ("Ilya Efimov Fretless Bass", "Ilya Efimov Fretless Bass manual (key-switch table; F#4 normal right hand)", true, false, 78);
+        ilyaBass ("Ilya Efimov Retro Bass", "assumed same layout as the Classic Bass manual (not checked)", false, false, 78);
+        ilyaBass ("Ilya Efimov Rock Bass", "assumed same layout as the Modern Bass manual (not checked)", true, true, 78);
+        // a DX10-style log drum in another plugin (FL Studio Fruity DX10, mda DX10 ...): it sounds an octave below the note played
+        Library dx; dx.name = "Log drum VST: DX10 style (one octave up)"; dx.inst = I_Bass; dx.verify = 1; dx.noKeySwitches = true; dx.transpose = 12;
+        dx.note = "Plain notes sent an octave up, because the DX10 'Log Drum' sounds an octave below the note it gets.";
+        dx.source = "mda DX10 source code (carrier at half the note frequency)";
+        add (dx);
     }
     return v;
 }
@@ -195,6 +247,11 @@ inline int articulationFromName (std::string s)
         { "subtone", A_Subtone }, { "shake", A_Shake }, { "trill", A_Trill }, { "tremolo", A_Tremolo }, { "pizzicato", A_Pizz }, { "pizz", A_Pizz }, { "gliss", A_Gliss },
         { "glissando", A_Gliss }, { "collegno", A_ColLegno }, { "arpeggio", A_Arpeggio }, { "mute", A_Mute }, { "harmon", A_Mute }, { "strum", A_Strum } };
     for (auto& e : t) if (k == e.n) return e.a;
+    for (int a = 0; a < (int) A_Count; ++a)                 // the full names Enoch shows ("Ghost / Dead Note", "Marcato / Accent" ...)
+    {
+        std::string n; for (const char* c = artName (a); *c; ++c) if (std::isalnum ((unsigned char) *c)) n += (char) std::tolower ((unsigned char) *c);
+        if (k == n) return a;
+    }
     return -1;
 }
 
@@ -225,6 +282,31 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
         else if (key == "expression_cc") l.ccExpr = std::clamp (std::atoi (val.c_str()), 0, 127);
         else if (key == "vibrato_cc") l.ccVib = std::clamp (std::atoi (val.c_str()), 0, 127);
         else if (key == "no_keyswitches") l.noKeySwitches = std::atoi (val.c_str()) != 0;
+        // ---- v3.0 driver settings
+        else if (key == "transpose") l.transpose = std::clamp (std::atoi (val.c_str()), -48, 48);
+        else if (key == "range") { int a2 = 0, b2 = 127; if (std::sscanf (val.c_str(), "%d - %d", &a2, &b2) >= 1 || std::sscanf (val.c_str(), "%d-%d", &a2, &b2) >= 1) { l.lo = std::clamp (a2, 0, 127); l.hi = std::clamp (b2, 0, 127); } }
+        else if (key == "overlap_ms") l.overlapMs = std::clamp (std::atof (val.c_str()), 0.0, 500.0);
+        else if (key == "repetition_key") l.repKey = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "program") l.program = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "bank_msb") l.bankMsb = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "bank_lsb") l.bankLsb = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "vel_min") l.velMin = std::clamp (std::atoi (val.c_str()), 1, 127);
+        else if (key == "vel_max") l.velMax = std::clamp (std::atoi (val.c_str()), 1, 127);
+        else if (key == "vel_curve") l.velGamma = std::clamp (std::atof (val.c_str()), 0.2, 5.0);
+        else if (key == "half_pedal") l.halfPedal = std::atoi (val.c_str()) != 0;
+        else if (key == "max_fret") l.maxFret = std::clamp (std::atoi (val.c_str()), 5, 36);
+        else if (key == "init" || key == "tuning" || key == "string_keys")
+        {
+            std::istringstream ps (val); std::string tok;
+            while (std::getline (ps, tok, ','))
+            {
+                tok = trim (tok); if (tok.empty() || ! std::isdigit ((unsigned char) tok[0])) continue;
+                const int nt = std::clamp (std::atoi (tok.c_str()), 0, 127);
+                if (key == "init") { KsPress pr; pr.note = nt; pr.vel = 100; const size_t at = tok.find ('@'); if (at != std::string::npos) pr.vel = std::clamp (std::atoi (tok.c_str() + at + 1), 1, 127); l.init.push_back (pr); }
+                else if (key == "tuning") l.tuning.push_back (nt);
+                else l.stringKeys.push_back (nt);
+            }
+        }
         else if (key == "ks")
         {
             const size_t c = val.find (':'); if (c == std::string::npos) { error = "line " + std::to_string (lineNo) + ": ks needs 'Articulation: note@velocity'"; return false; }
@@ -241,7 +323,7 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
                 const size_t at = tok.find ('@'); if (at != std::string::npos) p.vel = std::clamp (std::atoi (tok.c_str() + at + 1), 1, 127);
                 a.press.push_back (p);
             }
-            if (a.press.empty()) { error = "line " + std::to_string (lineNo) + ": no key-switch note found"; return false; }
+            if (a.press.empty() && lower.find ("none") == std::string::npos) { error = "line " + std::to_string (lineNo) + ": no key-switch note found"; return false; }   // "none": played with no key press
             l.arts.push_back (a);
         }
         else { error = "line " + std::to_string (lineNo) + ": unknown setting '" + key + "'"; return false; }
@@ -251,5 +333,42 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
     l.source = "your file"; if (l.note.empty()) l.note = "From your own file.";
     out = std::move (l);
     return true;
+}
+/** v3.0: write a library / profile back as an .enochlib text file (the format parseLibraryText reads) */
+inline std::string libraryToText (const Library& l)
+{
+    static const char* instNames[] = { "guitar", "sax", "violin", "piano", "trumpet", "bass" };
+    std::ostringstream o;
+    o << "# Enoch mapping profile (saved by the profile editor)\n";
+    o << "name = " << l.name << "\n";
+    if (! l.maker.empty()) o << "maker = " << l.maker << "\n";
+    o << "instrument = " << instNames[std::clamp (l.inst, 0, 5)] << "\n";
+    if (! l.note.empty()) o << "note = " << l.note << "\n";
+    o << "expression_cc = " << l.ccExpr << "\nvibrato_cc = " << l.ccVib << "\nno_keyswitches = " << (l.noKeySwitches ? 1 : 0) << "\n";
+    if (l.transpose != 0) o << "transpose = " << l.transpose << "\n";
+    if (l.lo != 0 || l.hi != 127) o << "range = " << l.lo << "-" << l.hi << "\n";
+    if (l.overlapMs > 0) o << "overlap_ms = " << l.overlapMs << "\n";
+    if (l.repKey >= 0) o << "repetition_key = " << l.repKey << "\n";
+    if (l.program >= 0) o << "program = " << l.program << "\n";
+    if (l.bankMsb >= 0) o << "bank_msb = " << l.bankMsb << "\n";
+    if (l.bankLsb >= 0) o << "bank_lsb = " << l.bankLsb << "\n";
+    if (l.velMin != 1) o << "vel_min = " << l.velMin << "\n";
+    if (l.velMax != 127) o << "vel_max = " << l.velMax << "\n";
+    if (l.velGamma != 1.0) o << "vel_curve = " << l.velGamma << "\n";
+    if (l.halfPedal) o << "half_pedal = 1\n";
+    if (l.maxFret != 22) o << "max_fret = " << l.maxFret << "\n";
+    auto list = [&] (const char* k, const std::vector<int>& v) { if (v.empty()) return; o << k << " = "; for (size_t i = 0; i < v.size(); ++i) o << (i ? ", " : "") << v[i]; o << "\n"; };
+    list ("tuning", l.tuning); list ("string_keys", l.stringKeys);
+    if (! l.init.empty()) { o << "init = "; for (size_t i = 0; i < l.init.size(); ++i) o << (i ? ", " : "") << l.init[i].note << "@" << l.init[i].vel; o << "\n"; }
+    for (auto& a : l.arts)
+    {
+        o << "ks = " << artName (a.art) << ": ";
+        if (a.press.empty()) o << "none";
+        for (size_t i = 0; i < a.press.size(); ++i) o << (i ? ", " : "") << a.press[i].note << "@" << a.press[i].vel;
+        if (a.hold) o << " hold";
+        if (a.oneShot) o << " oneshot";
+        o << "\n";
+    }
+    return o.str();
 }
 } // namespace enochsolo

@@ -87,6 +87,9 @@ inline Range instRange (int inst, int variant)
 }
 
 //==============================================================================
+/** v3.1: the menu group of the Session Player Profiles */
+inline const char* const kSessionCat = "Session Players";
+
 struct Style
 {
     std::string name;
@@ -509,7 +512,7 @@ inline int categoryRank (const std::string& c)
 {
     static const char* order[] = { "African & Afrocentric", "Pop & Soul", "Rock & Blues", "Jazz", "Brazilian", "Spanish & Latin", "Caribbean & Reggae", "Funk, Hip-Hop & Dance", "Classical & Cinematic" };   // Enoch Bass: African styles first
     for (int i = 0; i < 9; ++i) if (c == order[i]) return i;
-    return 9;
+    return c == kSessionCat ? 10 : 9;     // v3.1: session players last in the numbering (the menu shows them first)
 }
 
 /** styles belonging to one instrument (indices into allStyles) */

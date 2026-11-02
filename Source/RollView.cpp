@@ -1439,6 +1439,30 @@ void RollView::applyBusyToSelection (float busy, uint64_t seed)
     refresh (true);
 }
 
+void RollView::clearAllNotes()
+{
+    if (raw.empty()) return;
+    selected.clear(); commit ({});
+}
+
+void RollView::clearSelectedBarNotes()
+{
+    const int a = barSelFirst(), b = barSelLast();
+    if (a < 0) return;
+    const double bb = snap ? std::max (0.5, snap->pattern.barBeats) : 4.0;
+    const double t0 = a * bb, t1 = (b + 1) * bb;
+    std::vector<Note> v;
+    for (auto& n : raw)
+    {
+        if (n.start >= t0 - 1e-6 && n.start < t1 - 1e-6) continue;              // starts in the bars: gone
+        Note k = n;
+        if (k.start < t0 && k.start + k.length > t0) k.length = std::max (0.05, t0 - k.start);   // a note held into the bars stops at the bar line
+        v.push_back (k);
+    }
+    if (v.size() == raw.size()) return;
+    selected.clear(); commit (std::move (v));
+}
+
 void RollView::rerollSelectedBars()
 {
     const int a = barSelFirst(), b = barSelLast();

@@ -36,7 +36,8 @@ public:
                                                "Portamento: every note slides in from the previous one. Articulations are never changed.");
         combo (outBox, "outMode", "OUTPUT", "Stereo or mono preview output");
         combo (speedBox, "speed", "SPEED", "Double time: notes of an 8th or longer are split and the line walks to the next note at twice the rate (per bar: bar panel)");
-        combo (subBox, "subdiv", "FASTEST NOTES", "Fast runs into the next note at 1/16 triplets, 1/32 or 1/32 triplets. How many follows each bar's Notes Density");
+        combo (subBox, "subdiv", "SUBDIVISION", "1/16T, 1/32, 1/32T: fast runs into the next note (how many follows each bar's Note Density). 1/4, 1/8, 1/8T: the line is re-phrased to move in quarters, eighths or eighth triplets");
+        combo (feelBox, "feel", "TIMING FEEL", "How the player sits on the beat: tight, laid back, pushed, Afrobeats pocket, Amapiano swing, gospel drag, neo-soul drunk, jazz swing, loose. Works with the HUMANIZE knobs");
         humanBtn.setTooltip ("Phrasing engine: phrase arcs, breaths for winds, bow direction for strings, string and fret choice for guitar and bass, "
                              "lighter fast runs. Seeded: the same take always plays the same way");
         if (auto* bp = proc.apvts.getParameter ("humanPlay")) btnAtt = std::make_unique<juce::ButtonParameterAttachment> (*bp, humanBtn);
@@ -134,8 +135,8 @@ public:
         }
         // left: 8 knobs; right: the five choice boxes in a column
         auto right = r.removeFromRight (juce::jmin (300, r.getWidth() / 3));
-        const int rowH = juce::jmin (34, right.getHeight() / 5);
-        for (auto* c : { &roomBox, &glideBox, &outBox, &speedBox, &subBox })
+        const int rowH = juce::jmin (34, right.getHeight() / 6);
+        for (auto* c : { &roomBox, &glideBox, &outBox, &speedBox, &subBox, &feelBox })
         {
             auto row = right.removeFromTop (rowH);
             auto& l = *labels.at (c);
@@ -160,7 +161,7 @@ private:
         for (auto& k : knobs) k->setVisible (p1);
         for (auto& l : klabels) l->setVisible (p1);
         for (auto& kv : labels) kv.second->setVisible (p1);
-        for (auto* c : { &roomBox, &glideBox, &outBox, &speedBox, &subBox }) c->setVisible (p1);
+        for (auto* c : { &roomBox, &glideBox, &outBox, &speedBox, &subBox, &feelBox }) c->setVisible (p1);
         humanBtn.setVisible (p1); hint.setVisible (p1); resetBtn.setVisible (p1);
         for (auto* row : rows) for (juce::Component* c : { (juce::Component*) &row->num, (juce::Component*) &row->src, (juce::Component*) &row->dst, (juce::Component*) &row->amt }) c->setVisible (! p1);
         for (juce::Component* c : { (juce::Component*) &lfo1, (juce::Component*) &lfo2, (juce::Component*) &fxAmtK, (juce::Component*) &lfo1L, (juce::Component*) &lfo2L, (juce::Component*) &fxAmtL, (juce::Component*) &fxBox, (juce::Component*) &fxLbl })
@@ -237,7 +238,7 @@ private:
     std::vector<std::unique_ptr<juce::Slider>> knobs;
     std::vector<std::unique_ptr<juce::Label>> klabels;
     std::vector<std::unique_ptr<juce::SliderParameterAttachment>> atts;
-    juce::ComboBox roomBox, glideBox, outBox, speedBox, subBox;
+    juce::ComboBox roomBox, glideBox, outBox, speedBox, subBox, feelBox;
     std::map<juce::ComboBox*, std::unique_ptr<juce::Label>> labels;
     std::vector<std::unique_ptr<juce::ComboBoxParameterAttachment>> catts;
     juce::ToggleButton humanBtn { "Human Play (phrasing engine)" };

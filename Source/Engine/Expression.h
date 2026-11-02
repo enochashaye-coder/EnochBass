@@ -1,3 +1,5 @@
+#include "Driver.h"
+#include "LogDrum.h"
 // Enoch Bass - ornament realisation, humanisation and MIDI event building (header only)
 // Included at the end of Generator.h
 #pragma once
@@ -85,11 +87,43 @@ inline double smoothNoise (uint64_t seed, double x)
     return a + (b - a) * u;
 }
 
+/** v3.1 timing-feel presets: how the player sits on the grid. ms are at 0.5 "Feel"; swing is the long/short split of each pair. */
+struct FeelPreset { const char* name; double jitter, laidMs, offbeatMs, swing16, swing8, accent24, styleLaid; };
+inline const std::vector<FeelPreset>& feelPresets()
+{
+    static const std::vector<FeelPreset> v = {
+        { "Style's own feel",             1.0,   0,  0, 0.50, 0.50, 0.0, 1.0 },
+        { "Tight studio grid",            0.35,  0,  0, 0.50, 0.50, 0.0, 0.2 },
+        { "Laid-back pocket",             0.9,  10,  6, 0.50, 0.50, 0.0, 1.0 },
+        { "Pushed / ahead of the beat",   0.8,  -8, -3, 0.50, 0.50, 0.0, 0.0 },
+        { "Afrobeats pocket",             0.8,   3,  7, 0.54, 0.50, 0.1, 0.8 },
+        { "Amapiano swing",               0.7,   2,  5, 0.58, 0.50, 0.0, 0.6 },
+        { "Gospel - behind the beat",     0.9,  14,  4, 0.53, 0.50, 0.5, 1.0 },
+        { "Neo-soul drunk",               1.5,  16, 10, 0.60, 0.50, 0.2, 1.0 },
+        { "Jazz swing (8ths)",            0.9,   4,  0, 0.50, 0.64, 0.4, 0.8 },
+        { "Live and loose",               1.7,   2,  3, 0.51, 0.50, 0.2, 1.0 },
+    };
+    return v;
+}
+/** the grid shift (in beats) a feel preset gives a note that sits at 'start' */
+inline double feelSwingShift (const FeelPreset& f, double start)
+{
+    const double inBeat = start - std::floor (start + 1e-9);
+    if (f.swing8 > 0.5 + 1e-6 && std::abs (inBeat - 0.5) < 0.04) return (f.swing8 - 0.5);                // the off-beat 8th moves late
+    if (f.swing16 > 0.5 + 1e-6)
+    {
+        const double in8 = inBeat - (inBeat >= 0.5 - 1e-6 ? 0.5 : 0.0);
+        if (std::abs (in8 - 0.25) < 0.03) return (f.swing16 - 0.5) * 0.5;                             // the 2nd 16th of each 8th
+    }
+    return 0.0;
+}
+
 inline void humanizeNotes (Pattern& p, std::vector<Note>& notes, const Settings& s)
 {
     const Style& st = styleFor (s.instrument, s.artist);
     const double msToBeats = s.bpm / 60000.0;
-    const double T = s.hTiming, V = s.hVel, L = s.hLength, F = s.hFeel;
+    const FeelPreset& fp = feelPresets()[(size_t) std::clamp (s.feel, 0, (int) feelPresets().size() - 1)];
+    const double T = s.hTiming * fp.jitter, V = s.hVel, L = s.hLength, F = s.hFeel;
     const uint64_t hs = s.hSeed * 7919ULL + 17ULL;
 
     std::stable_sort (notes.begin(), notes.end(), [] (const Note& a, const Note& b)
@@ -117,8 +151,13 @@ inline void humanizeNotes (Pattern& p, std::vector<Note>& notes, const Settings&
         const double drift = smoothNoise (hs + (uint64_t) cl.track * 131ULL, notes[cl.a].start * 0.35) * 1.4 * T;   // slow human tempo wander (ms)
         const double w = notes[cl.a].weight;
         double off = gauss (hs, nid) * 6.5 * T + drift;
-        off += st.laid * F * (w < 0.5 ? 1.0 : 0.45);                      // laid back more on off-beats
-        off = std::clamp (off, -28.0, 38.0);
+        off += st.laid * fp.styleLaid * F * (w < 0.5 ? 1.0 : 0.45);         // laid back more on off-beats
+        off += (fp.laidMs + (w < 0.5 ? fp.offbeatMs : 0.0)) * F * 2.0;        // the feel preset's pocket
+        off = std::clamp (off, -28.0, 45.0);
+        const double swingShift = feelSwingShift (fp, notes[cl.a].start);
+        const double beatIn = notes[cl.a].start - std::floor (notes[cl.a].start + 1e-9);
+        const int beatNo = (int) std::floor (notes[cl.a].start + 1e-9);
+        const double accent = (fp.accent24 > 0 && beatIn < 0.03 && (beatNo % 2) == 1) ? fp.accent24 * 8.0 : 0.0;   // backbeat accent
         for (size_t k = cl.a; k < cl.b; ++k)
         {
             Note& n = notes[k];
@@ -129,8 +168,8 @@ inline void humanizeNotes (Pattern& p, std::vector<Note>& notes, const Settings&
                 const double per = (n.track == 1) ? (s.instrument == I_Guitar ? 9.0 : 4.0) : 3.0;
                 spread = (double) (k - cl.a) * per * (0.3 + T);
             }
-            n.start = std::max (0.0, n.start + (off + spread) * msToBeats);
-            double v = n.vel + gauss (hs + 1, id) * 5.0 * V + (n.weight - 0.45) * 10.0 * V;
+            n.start = std::max (0.0, n.start + swingShift + (off + spread) * msToBeats);
+            double v = n.vel + gauss (hs + 1, id) * 5.0 * V + (n.weight - 0.45) * 10.0 * V + accent;
             n.vel = std::clamp ((int) std::lround (v), 1, 127);
             const double sc = std::clamp (1.0 + gauss (hs + 2, id) * 0.07 * L, 0.8, 1.2);
             n.length = std::max (0.05, n.length * sc);
@@ -257,7 +296,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
                     {
                         for (auto& pr : e->press)
                         {
-                            MidiEv on; on.t = t; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127); on.b = std::clamp (pr.vel, 1, 127); on.track = track; on.ord = 1;
+                            MidiEv on; on.t = t; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127); on.b = std::clamp (pr.vel, 1, 127); on.track = track; on.ord = 1; on.ks = true;
                             MidiEv off = on; off.t = e->hold ? n->start + 0.1 : t + 0.05; off.type = EV_OFF; off.b = 0; off.ord = 0;
                             out.push_back (on); out.push_back (off);
                         }
@@ -276,7 +315,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
                 if (idx >= 0 && art != last)
                 {
                     const double t = std::max (0.0, n->start - ksLead);
-                    MidiEv on; on.t = t; on.type = EV_ON; on.a = s.ksBase + idx; on.b = 100; on.track = track; on.ord = 1;
+                    MidiEv on; on.t = t; on.type = EV_ON; on.a = s.ksBase + idx; on.b = 100; on.track = track; on.ord = 1; on.ks = true;
                     MidiEv off = on; off.t = t + 0.05; off.type = EV_OFF; off.b = 0; off.ord = 0;
                     out.push_back (on); out.push_back (off);
                     last = art;
@@ -437,6 +476,35 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
 } // namespace detail
 
 //==============================================================================
+namespace detail
+{
+/** v3.1 articulation intelligence for fretted instruments: the line is laid out on the neck like a player would (driver::solveStrings),
+    and a hammer-on, pull-off or slide that would have to jump to another string becomes a plain legato note (a hand can't hammer across
+    strings); a hammer-on / pull-off wider than the fretting hand's reach (4 frets) becomes a slide. Main line only. */
+inline void fretCheck (std::vector<Note>& v, const Settings& s)
+{
+    const bool bass = (s.instrument == 5);
+    if (! bass && s.instrument != I_Guitar) return;
+    static const std::vector<int> gtr { 40, 45, 50, 55, 59, 64 }, bs4 { 28, 33, 38, 43 };
+    std::vector<size_t> idx;
+    for (size_t i = 0; i < v.size(); ++i) if (v[i].track == 0 && v[i].voice == 0) idx.push_back (i);
+    std::stable_sort (idx.begin(), idx.end(), [&] (size_t a, size_t b) { return v[a].start < v[b].start; });
+    if (idx.size() < 2) return;
+    std::vector<int> pitch; std::vector<double> start;
+    for (auto i : idx) { pitch.push_back (v[i].pitch); start.push_back (v[i].start); }
+    const auto& tun = bass ? bs4 : gtr;
+    const auto str = driver::solveStrings (pitch, start, tun, bass ? 20 : 22);
+    for (size_t k = 1; k < idx.size(); ++k)
+    {
+        Note& n = v[idx[k]];
+        if (n.art != A_HammerOn && n.art != A_PullOff && n.art != A_Slide) continue;
+        if (str[k] < 0 || str[k - 1] < 0) continue;
+        if (str[k] != str[k - 1]) { n.art = A_Legato; continue; }
+        if ((n.art == A_HammerOn || n.art == A_PullOff) && std::abs (pitch[k] - pitch[k - 1]) > 4) n.art = A_Slide;
+    }
+}
+}
+
 inline void Generator::finalize (Pattern& p, const Settings& sIn)
 {
     Settings s = sIn;
@@ -447,6 +515,7 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
         std::vector<Note> v; v.reserve (p.raw.size());
         for (auto& n : p.raw) if (! n.mute) v.push_back (n);
         if (realize) detail::realizeOrnaments (p, v, s);
+        detail::fretCheck (v, s);                                   // v3.1: no hammer-ons across strings
         if (s.humanize) detail::humanizeNotes (p, v, s);
         else std::stable_sort (v.begin(), v.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
         for (auto& n : v) { n.pitch = std::clamp (n.pitch, 0, 127); n.vel = std::clamp (n.vel, 1, 127); }
@@ -467,6 +536,39 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
         auto ne = prepare (true);
         detail::bakeArticulations (ne);
         detail::buildEvents (p, ne, se, p.events, s.exportMode != 2, true);
+    }
+    // v3.0: the external instrument driver (channel, profile, mode keys, legato overlap, strings, repetition keys, range, velocity curve)
+    if (s.routed)
+    {
+        if (s.dupToTrack1)
+        {
+            // v3.1: the log drum part is its own player, locked to the bass line (Engine/LogDrum.h)
+            std::vector<double> bassOn;
+            for (auto& e : p.events) if (e.track == 0 && ! e.ks && e.type == EV_ON) bassOn.push_back (e.t);
+            p.events.erase (std::remove_if (p.events.begin(), p.events.end(), [] (const MidiEv& e) { return e.track == 1; }), p.events.end());
+            const auto copy = logdrum::generate (p, s, bassOn);
+            p.events.insert (p.events.end(), copy.begin(), copy.end());
+            if (! copy.empty()) p.hasComp = true;           // the log drum part gets its own track in the exported file
+        }
+        std::array<driver::RouteSpec, 3> rs;
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto& rc = s.routes[i];
+            rs[(size_t) i].on = rc.on;
+            rs[(size_t) i].channel = rc.channel >= 0 ? rc.channel : i;
+            rs[(size_t) i].lib = rc.lib ? rc.lib.get() : (i == 0 ? s.lib.get() : nullptr);
+            rs[(size_t) i].transpose = rc.transpose;
+            rs[(size_t) i].program = rc.program;
+        }
+        driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS);
+    }
+    else if (s.lib && ! s.lib->standard && s.lib->inst == s.instrument)
+    {
+        // no routing set: the instrument of choice still gets its octave, range, legato overlap, string and repetition keys
+        // (the same file as a routed part, on the usual channels 1 / 2 / 3)
+        std::array<driver::RouteSpec, 3> rs;
+        for (int i = 0; i < 3; ++i) { rs[(size_t) i].channel = i; rs[(size_t) i].lib = i == 0 ? s.lib.get() : nullptr; }
+        driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS);
     }
 }
 

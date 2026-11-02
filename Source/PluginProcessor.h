@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_devices/juce_audio_devices.h>   // v3.0: direct hardware MIDI port
 #include <juce_events/juce_events.h>
 #include <atomic>
 #include <memory>
@@ -136,6 +137,22 @@ public:
     void setSoundFontPreset (int index);                        // -1 = automatic (General MIDI program)
     /** what the audio engine is really playing (read back from the audio thread) */
     juce::String nowPlayingText (bool& matches, bool& warning) const;
+    // ---- v3.0 external instrument driver: one route per part, per instrument
+    enum RouteDest { RD_Builtin = 0, RD_External, RD_Both, RD_Hardware, RD_Off };
+    struct PartRoute { int dest = RD_Builtin; int channel = 1; juce::String profile; int program = -1; int transpose = 0; juce::String port; };
+    static constexpr int kParts = 3;
+    PartRoute getRoute (int slot, int part) const;
+    void setRoute (int slot, int part, const PartRoute& r);
+    static juce::StringArray partNames();
+    std::shared_ptr<const enochsolo::Library> libraryByName (int inst, const juce::String& name) const;
+    bool anyRouted (int slot) const;
+    juce::String routeText (int slot) const;                        // "Kontakt on ch 2 (Ilya Efimov Nylon Guitar)" for NOW PLAYING
+    void sendTest (const std::vector<juce::MidiMessage>& msgs);     // profile editor: test a key-switch / note on the part's channel
+    std::atomic<int> lastInNote { -1 }, lastInVel { 0 }; std::atomic<uint32_t> inNoteCount { 0 };   // Learn: last note played into the plugin
+    bool saveProfile (const enochsolo::Library& l, juce::String& message);   // writes an .enochlib file and reloads the libraries
+    juce::ValueTree routesToTree() const;
+    void routesFromTree (const juce::ValueTree& t);
+    void setParamFromUI (const char* id, float v) { setParam (id, v); }
     /** v2.7: per-bar speed (-1 follow the global Speed, 0 normal, 1 double time); the bars are written again */
     void applyBarSpeed (int bar0, int bar1, int speed, uint64_t seed);
     int barSpeedOf (int bar) const;
@@ -235,6 +252,14 @@ private:
     juce::String soundFontPath, bassSamplePath;                 // (pre-2.7 single paths, kept for reading old projects)
     std::array<juce::String, TestPlayer::kSlots> smpPaths, sfPaths;
     std::vector<int> barSpeed;                                 // v2.7 per-bar speed override
+    std::array<std::array<PartRoute, kParts>, TestPlayer::kSlots> routes;
+    mutable juce::SpinLock routeLock;
+    std::atomic<bool> routesChanged { false };
+    std::shared_ptr<juce::MidiOutput> hwOut; juce::String hwOpenId; juce::SpinLock hwLock;
+    juce::MidiBuffer testBuf; juce::SpinLock testLock;
+    void defaultRoutes();
+    void openHardwareFor (int slot);
+    void fillRoutes (enochsolo::Settings& s) const;
     std::array<std::atomic<int>, TestPlayer::kSlots> sfPresets {};
     std::array<std::atomic<uint32_t>, TestPlayer::kSlots> smpGen {}, sfGen {};
     std::array<std::atomic<float>*, TestPlayer::kSlots> soundParams {}, srcParams {};

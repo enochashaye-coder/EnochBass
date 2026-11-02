@@ -29,7 +29,7 @@ bool getB (const juce::AudioProcessorValueTreeState& a, const char* id) { return
 
 // parameters that change the notes (need a full regenerate with the same seed) / only the expression pass
 const char* kGenIds[] = { "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift", "speed", "subdiv" };
-const char* kFinIds[] = { "library", "humanize", "hTiming", "hVel", "hLength", "hFeel", "ksBase", "bendRange", "emitKS", "emitBends", "emitCC", "realize", "exportMode" };
+const char* kFinIds[] = { "library", "humanize", "hTiming", "hVel", "hLength", "hFeel", "feel", "ksBase", "bendRange", "emitKS", "emitBends", "emitCC", "realize", "exportMode" };
 }
 
 //==============================================================================
@@ -58,7 +58,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
     choice ("harmony", "Chords", juce::StringArray { "Key vamp (safest)", "Auto progression", "My chords" }, 0);
     flt ("space", "Space (busy to spacious)", 0.f, 1.f, 0.5f);
     flt ("repeat", "Repeat (new ideas to riffs)", 0.f, 1.f, 0.5f);
-    flt ("busy", "Busy (lazy to rapid)", 0.f, 1.f, 0.5f);
+    flt ("busy", "Note Density (sparse to dense)", 0.f, 1.f, 0.5f);
     boolean ("chordTrack", "Write Chord Pad Track", false);
     flt ("refAmount", "Reference Influence", 0.f, 1.f, 0.7f);
     choice ("refTempo", "Reference Tempo", juce::StringArray { "As detected", "Twice as fast", "Half as fast" }, 0);
@@ -179,7 +179,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
         l.add (std::make_unique<juce::AudioParameterBool> (P { "humanPlay", 1 }, "Human Play (phrasing engine)", true));
         l.add (std::make_unique<juce::AudioParameterChoice> (P { "speed", 1 }, "Speed", juce::StringArray { "Normal", "Double time (2x)" }, 0,
                                                              juce::AudioParameterChoiceAttributes().withAutomatable (false)));
-        l.add (std::make_unique<juce::AudioParameterChoice> (P { "subdiv", 1 }, "Fastest Subdivision", juce::StringArray { "Auto (style)", "1/16", "1/16 triplets", "1/32", "1/32 triplets" }, 0,
+        l.add (std::make_unique<juce::AudioParameterChoice> (P { "subdiv", 1 }, "Subdivision", juce::StringArray { "Auto (style)", "1/16", "1/16 triplets", "1/32", "1/32 triplets", "1/4", "1/8", "1/8 triplets" }, 0,
                                                              juce::AudioParameterChoiceAttributes().withAutomatable (false)));
     }
     // ---- v2.7 batch 3: modulation matrix (4 slots) + creative effect
@@ -199,6 +199,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
         l.add (std::make_unique<juce::AudioParameterChoice> (P { "fxMode", 1 }, "Creative Effect", juce::StringArray { "Off", "Tape wobble", "Lo-fi", "Wide", "Telephone / radio", "Warm saturation" }, 0));
         l.add (std::make_unique<juce::AudioParameterFloat> (P { "fxAmt", 1 }, "Creative Effect Amount", juce::NormalisableRange<float> (0.f, 100.f), 50.f, juce::AudioParameterFloatAttributes().withLabel ("%")));
     }
+    // ---- v3.1: timing-feel preset (humanize)
+    l.add (std::make_unique<juce::AudioParameterChoice> (P { "feel", 1 }, "Timing Feel", juce::StringArray { "Style's own feel", "Tight studio grid", "Laid-back pocket", "Pushed / ahead of the beat",
+                                                         "Afrobeats pocket", "Amapiano swing", "Gospel - behind the beat", "Neo-soul drunk", "Jazz swing (8ths)", "Live and loose" }, 0,
+                                                         juce::AudioParameterChoiceAttributes().withAutomatable (false)));
     return l;
 }
 
@@ -219,6 +223,7 @@ EnochSoloProcessor::EnochSoloProcessor()
       apvts (*this, nullptr, "ENOCHBASS", createLayout())
 {
     loadLibraries();
+    defaultRoutes();
     for (int i = 0; i < TestPlayer::kSlots; ++i)
     {
         sfPresets[(size_t) i] = -1;
@@ -276,7 +281,8 @@ Settings EnochSoloProcessor::currentSettings() const
     s.chordTrack = getB (apvts, "chordTrack");
     s.busy = getF (apvts, "busy");
     s.barBusy = barBusy;
-    s.speed = juce::jlimit (0, 1, getI (apvts, "speed")); s.subdiv = juce::jlimit (0, 4, getI (apvts, "subdiv")); s.barSpeed = barSpeed;
+    s.speed = juce::jlimit (0, 1, getI (apvts, "speed")); s.subdiv = juce::jlimit (0, 7, getI (apvts, "subdiv")); s.barSpeed = barSpeed;
+    fillRoutes (s);
     s.refProfile = refProfile;
     s.refAmount = getF (apvts, "refAmount");
     s.refTempo = juce::jlimit (0, 2, getI (apvts, "refTempo"));
@@ -306,6 +312,7 @@ Settings EnochSoloProcessor::currentSettings() const
     s.hVel = getF (apvts, "hVel");
     s.hLength = getF (apvts, "hLength");
     s.hFeel = getF (apvts, "hFeel");
+    s.feel = getI (apvts, "feel");
     s.bpm = hostBpm.load();
     s.seed = seed;
     s.hSeed = hSeed;
@@ -319,7 +326,7 @@ std::shared_ptr<EnochSoloProcessor::Snapshot> EnochSoloProcessor::makeSnapshot (
     snap->seed = p.s.seed;
     for (auto& e : p.events)
     {
-        const int ch = e.track + 1;
+        const int ch = e.ch >= 0 ? e.ch + 1 : e.track + 1;     // v3.0: a routed part plays on its own channel
         juce::MidiMessage m;
         switch (e.type)
         {
@@ -327,6 +334,7 @@ std::shared_ptr<EnochSoloProcessor::Snapshot> EnochSoloProcessor::makeSnapshot (
             case EV_OFF:  m = juce::MidiMessage::noteOff (ch, e.a); break;
             case EV_CC:   m = juce::MidiMessage::controllerEvent (ch, e.a, e.b); break;
             case EV_AT:   m = juce::MidiMessage::channelPressureChange (ch, e.a); break;
+            case EV_PC:   m = juce::MidiMessage::programChange (ch, e.a); break;
             default:      m = juce::MidiMessage::pitchWheel (ch, e.a); break;
         }
         snap->events.push_back ({ e.t, m });
@@ -408,6 +416,7 @@ Settings EnochSoloProcessor::editSettings() const
     s.harmony = m.harmony; s.chordText = m.chordText; s.space = m.space; s.repeat = m.repeat; s.chordTrack = m.chordTrack;
     s.busy = m.busy; s.barBusy = barBusy;
     s.speed = m.speed; s.subdiv = m.subdiv; s.barSpeed = barSpeed;
+    fillRoutes (s);
     s.refProfile = m.refProfile; s.refAmount = m.refAmount; s.refTempo = m.refTempo; s.refShift = m.refShift;
     s.grooveProfile = m.grooveProfile; s.grooveAmount = m.grooveAmount; s.grooveTempo = m.grooveTempo; s.grooveShift = m.grooveShift; s.voice2 = m.voice2; s.clave = m.clave;
     s.hSeed = hSeed;
@@ -742,7 +751,8 @@ bool EnochSoloProcessor::learnFromSolo (juce::String& message)
 // presets
 namespace
 {
-struct Preset { const char* name; int inst; const char* artist; int genre; int key; int scale; int harmony; float intensity; int bars; };
+struct Preset { const char* name; int inst; const char* artist; int genre; int key; int scale; int harmony; float intensity; int bars;
+                int mode = 0; int feel = 0; float busy = 0.5f; };      // v3.2: output mode, timing feel and note density (older presets keep the defaults)
 const Preset kPresets[] = {
     { "Afrobeat - Classic ostinato",              I_Bass, "Afrobeat Classic",             G_Afrobeat,  9, SC_Minor,       0, 0.75f, 3 },
     { "Afrobeat - Slap funk (Larry Graham style)",I_Bass, "Larry Graham Style",           G_Afrobeat,  4, SC_Dorian,      0, 0.80f, 3 },
@@ -791,6 +801,20 @@ const Preset kPresets[] = {
     { "Trap - 808 slides", I_Bass, "Trap 808 Slides", G_HipHop, 6, SC_Minor, 1, 0.60f, 3 },
     { "Afro-House - Rolling offbeat", I_Bass, "Afro-House Rolling Offbeat", G_AfroHouse, 9, SC_Minor, 1, 0.75f, 3 },
     { "Gqom - Dark bounce", I_Bass, "Gqom Dark Bounce", G_AfroHouse, 6, SC_Minor, 1, 0.45f, 3 },
+    // ---- v3.2 session presets (EZbass-style player profiles per genre; feel / density per genre)
+    { "Session - Funk",            I_Bass, "Funk Session Bass",               G_Funk,        4, SC_Dorian,     1, 0.80f, 3, 0, 1, 0.75f },
+    { "Session - Gospel",          I_Bass, "Gospel Session Bass",             G_Gospel,     10, SC_Major,      1, 0.70f, 3, 0, 6, 0.65f },
+    { "Session - Neo-soul",        I_Bass, "Neo-Soul & R&B Session Bass",     G_SmoothJazz,  3, SC_Dorian,     1, 0.50f, 3, 0, 7, 0.45f },
+    { "Session - R&B",             I_Bass, "Neo-Soul & R&B Session Bass",     G_SmoothJazz, 10, SC_Major,      1, 0.45f, 3, 0, 2, 0.40f },
+    { "Session - Afrobeats",       I_Bass, "Afrobeats Session Bass",          G_AfroFusion,  6, SC_Minor,      1, 0.55f, 3, 0, 4, 0.50f },
+    { "Session - Amapiano",        I_Bass, "Amapiano Session Bass",           G_Amapiano,    1, SC_Minor,      1, 0.55f, 3, 0, 5, 0.35f },
+    { "Session - Reggae",          I_Bass, "Reggae & Dancehall Session Bass", G_Reggae,      7, SC_Major,      1, 0.55f, 3, 0, 2, 0.40f },
+    { "Session - Dancehall",       I_Bass, "Reggae & Dancehall Session Bass", G_Reggae,      9, SC_Minor,      1, 0.70f, 3, 0, 1, 0.55f },
+    { "Session - Rock",            I_Bass, "Pop & Rock Session Bass",         G_Rock,        4, SC_MinPent,    1, 0.80f, 3, 0, 1, 0.65f },
+    { "Session - Pop",             I_Bass, "Pop & Rock Session Bass",         G_Pop,         0, SC_Major,      1, 0.60f, 3, 0, 1, 0.55f },
+    { "Session - Jazz",            I_Bass, "Jazz Walking Session Bass",       G_Swing,       5, SC_Major,      1, 0.60f, 3, 0, 8, 0.60f },
+    { "Session - Kizomba",         I_Bass, "Kizomba & Zouk Session Bass",     G_Kizomba,     9, SC_Minor,      1, 0.50f, 3, 0, 2, 0.45f },
+    { "Session - Zouk",            I_Bass, "Kizomba & Zouk Session Bass",     G_Zouk,        2, SC_Minor,      1, 0.50f, 3, 0, 2, 0.45f },
 };
 }
 
@@ -820,7 +844,7 @@ void EnochSoloProcessor::applyPreset (int i)
     setParam ("inst", (float) pr.inst); setParam ("artist", (float) artistIdx); setParam ("genre", (float) pr.genre);
     setParam ("key", (float) pr.key); setParam ("scale", (float) pr.scale); setParam ("harmony", (float) pr.harmony);
     setParam ("intensity", pr.intensity); setParam ("bars", (float) pr.bars);
-    setParam ("mode", 0.f); setParam ("space", 0.5f); setParam ("repeat", 0.5f); setParam ("busy", 0.5f);
+    setParam ("mode", (float) pr.mode); setParam ("space", 0.5f); setParam ("repeat", 0.5f); setParam ("busy", pr.busy); setParam ("feel", (float) pr.feel);
     barBusy.clear(); barSpeed.clear();
     loadingState = false;
     chordText = juce::String();
@@ -1006,6 +1030,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         cfg.inst = inst; cfg.sax = st.variant;
         if (auto* sp = soundParams[(size_t) slot]) cfg.sound = (int) std::lround (sp->load());
         if (auto* sp = srcParams[(size_t) slot]) cfg.src = (int) std::lround (sp->load());
+        { const auto rd = getRoute (slot, 0).dest; if (rd == RD_External || rd == RD_Hardware) cfg.src = TestPlayer::S_External; }   // v3.0: the routed instrument plays instead
         cfg.sfPreset = sfPresets[(size_t) slot].load();
         cfg.smpGen = smpGen[(size_t) slot].load(); cfg.sfGen = sfGen[(size_t) slot].load();
         player.setDesired (cfg);
@@ -1031,6 +1056,15 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         static const float monoHz[] = { 0.f, 80.f, 120.f, 160.f };
         lc.monoHz = monoHz[juce::jlimit (0, 3, getI (apvts, "ldMono"))]; lc.scSafe = getB (apvts, "ldSC");
         player.eng.setLogControls (lc);
+        // v3.0: a log drum one-shot plays with the same glide, drop and tune as the built-in log drum
+        {
+            enochsolo::BassSampler::LogMode lm;
+            const auto& pl = enochsolo::snd::patchList (5);
+            const int si = juce::jlimit (0, (int) pl.size() - 1, getI (apvts, "sound5"));
+            lm.on = enochsolo::snd::isLogKind (pl[(size_t) si].kind);
+            lm.glide = lc.glide; lm.tune = lc.tune; lm.drop = std::max (0.f, lc.dropMul - 1.f) * 3.f; lm.dropT = 0.03f * lc.dropTimeMul;
+            player.smp.setLogMode (lm);
+        }
     }
     // a log drum uses its own room amount (the panel's ROOM knob)
     {
@@ -1058,6 +1092,11 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     { const int ri = getI (apvts, "smpRoot"); player.smp.setRootOverride (ri > 0 ? 11 + ri : 0); }
 
     // notes auditioned from the piano roll join the incoming MIDI
+    for (const auto meta : midi)
+    {
+        const auto m = meta.getMessage();
+        if (m.isNoteOn()) { lastInNote = m.getNoteNumber(); lastInVel = (int) m.getVelocity(); inNoteCount.fetch_add (1); }
+    }
     juce::MidiBuffer auditionBuf;
     auditionState.processNextMidiBuffer (auditionBuf, 0, n, true);
     midi.addEvents (auditionBuf, 0, n, 0);
@@ -1077,7 +1116,18 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     const bool running = hostActive || internalPlaying.load();
     const bool useHost = hostActive;
     genBuffer.clear(); playBuffer.clear();
-    const bool sendMidiOut = getB (apvts, "midiOut") || player.effectiveSource() == TestPlayer::S_External;     // External source: your own instrument plays
+    // v3.0: which channels go to the DAW and which to a hardware port
+    bool liveCh[16] = {}, hwCh[16] = {}; bool anyLive = false, anyHw = false;
+    const bool routedNow = anyRouted (curSlot());
+    if (routedNow)
+        for (int part = 0; part < kParts; ++part)
+        {
+            const auto r = getRoute (curSlot(), part);
+            const int c = juce::jlimit (0, 15, r.channel - 1);
+            if (r.dest == RD_External || r.dest == RD_Both) { liveCh[c] = true; anyLive = true; }
+            if (r.dest == RD_Hardware) { hwCh[c] = true; anyHw = true; }
+        }
+    const bool sendMidiOut = getB (apvts, "midiOut") || player.effectiveSource() == TestPlayer::S_External || anyLive || anyHw;     // External: your own instrument plays
     if (sendMidiOut) genBuffer.addEvents (auditionBuf, 0, n, 0);        // clicked keys / notes also reach your instrument track
     auto flushHeld = [&]
     {
@@ -1087,6 +1137,18 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     };
     // a new pattern arrived (a knob was moved, notes edited, regenerated): notes and the sustain pedal of the old pattern would
     // otherwise never get their note-off / pedal-up, which is what left piano notes ringing on
+    // a route changed: every note, pedal and bend on every channel is released before the new routing plays
+    if (routesChanged.exchange (false))
+    {
+        player.allNotesOff();
+        flushHeld();
+        for (int ch = 1; ch <= 16; ++ch)
+        {
+            genBuffer.addEvent (juce::MidiMessage::controllerEvent (ch, 64, 0), 0);
+            genBuffer.addEvent (juce::MidiMessage::controllerEvent (ch, 123, 0), 0);
+            genBuffer.addEvent (juce::MidiMessage::pitchWheel (ch, 8192), 0);
+        }
+    }
     if (audioSnap.get() != (const void*) lastPlayedSnap)
     {
         if (lastPlayedSnap != nullptr && wasRunning)
@@ -1181,7 +1243,37 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (m.isNoteOn()) heldOut[m.getChannel() - 1][m.getNoteNumber()] = true;
             else if (m.isNoteOff()) heldOut[m.getChannel() - 1][m.getNoteNumber()] = false;
         }
-        midi.addEvents (genBuffer, 0, n, 0);
+        if (routedNow && (anyHw || ! getB (apvts, "midiOut")))
+        {
+            // split by channel: DAW parts stay on the plugin output, hardware parts go to the port (Built-in-only parts are not sent)
+            juce::MidiBuffer daw, hw;
+            for (const auto meta : genBuffer)
+            {
+                const auto m = meta.getMessage();
+                const int c = m.getChannel() - 1;
+                if (c < 0) continue;
+                if (hwCh[c]) hw.addEvent (m, meta.samplePosition);
+                if (liveCh[c]) daw.addEvent (m, meta.samplePosition);
+            }
+            midi.addEvents (daw, 0, n, 0);
+            if (anyHw && ! hw.isEmpty())
+            {
+                const juce::SpinLock::ScopedTryLockType lk (hwLock);
+                if (lk.isLocked() && hwOut) hwOut->sendBlockOfMessages (hw, juce::Time::getMillisecondCounterHiRes() + 2.0, getSampleRate());
+            }
+        }
+        else midi.addEvents (genBuffer, 0, n, 0);
+    }
+    {
+        // profile editor tests go out at once, on the part's own channel
+        const juce::SpinLock::ScopedTryLockType lk (testLock);
+        if (lk.isLocked() && ! testBuf.isEmpty())
+        {
+            midi.addEvents (testBuf, 0, n, 0);
+            const juce::SpinLock::ScopedTryLockType lh (hwLock);
+            if (lh.isLocked() && hwOut) hwOut->sendBlockOfMessages (testBuf, juce::Time::getMillisecondCounterHiRes() + 2.0, getSampleRate());
+            testBuf.clear();
+        }
     }
     wasSendingOut = sendMidiOut;
 }
@@ -1200,6 +1292,8 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("histIndex", histIndex, nullptr);
     state.setProperty ("chords", chordText, nullptr);
     state.setProperty ("preset", currentPreset, nullptr);
+    { auto old = state.getChildWithName ("ROUTES"); if (old.isValid()) state.removeChild (old, nullptr); state.appendChild (routesToTree(), nullptr); }
+    if (auto lib = currentLibrary()) state.setProperty ("libraryName", juce::String (lib->name), nullptr);
     if (auto snap = getSnapshot())
     {
         // the notes themselves (so piano-roll edits survive saving the project) and the per-bar chords
@@ -1209,6 +1303,7 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
                   << n.track << ',' << n.voice << ',' << juce::String (n.weight, 3) << ',' << n.bend << ',' << (n.vib ? 1 : 0) << ',' << (n.mute ? 1 : 0) << ',' << n.role << ';';
         state.setProperty ("notes", notes, nullptr);
         state.setProperty ("notesNextId", snap->pattern.nextId, nullptr);
+        state.setProperty ("notesCleared", snap->pattern.raw.empty(), nullptr);
         state.setProperty ("notesBars", snap->pattern.bars, nullptr);
         state.setProperty ("notesInst", snap->pattern.s.instrument, nullptr);
         juce::String cp, cr;
@@ -1379,6 +1474,19 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     uiRollGrow = juce::jlimit (0, 400, (int) vt.getProperty ("uiRollGrow", 0));
     uiLaneH = juce::jlimit (28.f, 900.f, (float) (double) vt.getProperty ("uiLaneH", 96.0));
     restoreSoundSlots (vt);
+    // v3.0: routes (older projects have none: every part stays on the built-in player, as before)
+    defaultRoutes();
+    routesFromTree (vt.getChildWithName ("ROUTES"));
+    // the instrument of choice by name (the list position can move when libraries are added)
+    {
+        const juce::String ln = vt.getProperty ("libraryName").toString();
+        if (ln.isNotEmpty())
+        {
+            const auto& ll = getLibraries (getI (apvts, "inst"));
+            for (size_t i = 0; i < ll.size(); ++i) if (juce::String (ll[i]->name) == ln) { setParam ("library", (float) i); break; }
+        }
+    }
+    openHardwareFor (curSlot());
     barBusy.clear(); barSpeed.clear();
     for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("barBusy").toString(), ",", "")) barBusy.push_back (tok.getFloatValue());
     barSpeed.clear();
@@ -1388,7 +1496,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     // restore the exact notes (including edits) when they were saved
     const juce::String notes = vt.getProperty ("notes").toString();
     needRegen = true;
-    if (notes.isNotEmpty())
+    if (notes.isNotEmpty() || (bool) vt.getProperty ("notesCleared", false))
     {
         Settings s = currentSettings();
         Pattern p = Generator::makeShell (s);
@@ -1405,7 +1513,8 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
             n.role = f.size() > 12 ? f[12].getIntValue() : 0;
             raw.push_back (n);
         }
-        if (! raw.empty() && (int) vt.getProperty ("notesBars", -1) == p.bars && (int) vt.getProperty ("notesInst", -1) == s.instrument)
+        const bool cleared = (bool) vt.getProperty ("notesCleared", false);     // v3.1: a roll you cleared on purpose stays blank
+        if ((! raw.empty() || cleared) && (int) vt.getProperty ("notesBars", -1) == p.bars && (int) vt.getProperty ("notesInst", -1) == s.instrument)
         {
             p.raw = std::move (raw);
             p.nextId = std::max ((int) vt.getProperty ("notesNextId", 1), 1);
@@ -1740,7 +1849,7 @@ juce::String EnochSoloProcessor::nowPlayingText (bool& matches, bool& warning) c
             if (pr >= 0) { auto names = pl.slotSF (ni).presetNames(); if (pr < names.size()) t << " > " << names[pr]; }
             break;
         }
-        case TestPlayer::S_External: t << "External instrument (MIDI out to your track)"; break;
+        case TestPlayer::S_External: { const auto rt = routeText (ni); t << (rt.isNotEmpty() ? "External: " + rt : juce::String ("External instrument (MIDI out to your track)")); break; }
         default:
             t << "Built-in: " << (ns >= 0 && ns < (int) pl2.size() ? juce::String (pl2[(size_t) ns].name) : juce::String ("?"));
             if (ni == enochsolo::I_Sax && ns == 0) t << "  ->  " << (pl.nowAlto.load() ? "alto" : "tenor") << " sax for this artist";
@@ -1948,3 +2057,162 @@ bool EnochSoloProcessor::installTranscription (juce::String& message)
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new EnochSoloProcessor(); }
+
+//==============================================================================
+// v3.0 external instrument driver: routes
+juce::StringArray EnochSoloProcessor::partNames() { return { "Bass line", "Log drum (own pattern)", "Chord pad" }; }
+
+void EnochSoloProcessor::defaultRoutes()
+{
+    const juce::SpinLock::ScopedLockType lk (routeLock);
+    // your rig from the plan: Piano 1, Guitar 2, Sax 3, Bass 4, Log drum 5; Violin 6, Trumpet 7; accompaniment 11, chord pad 12
+    static const int leadCh[TestPlayer::kSlots] = { 2, 3, 6, 1, 7, 4 };
+    for (int sl = 0; sl < TestPlayer::kSlots; ++sl)
+        for (int p = 0; p < kParts; ++p)
+        {
+            PartRoute r; r.dest = RD_Builtin;
+            r.channel = p == 0 ? leadCh[sl] : (p == 1 ? (sl == 5 ? 5 : 11) : 12);
+            if (sl == 5 && p == 1) r.dest = RD_Off;              // Enoch Bass: the log drum part is off until you route it
+            routes[(size_t) sl][(size_t) p] = r;
+        }
+}
+
+EnochSoloProcessor::PartRoute EnochSoloProcessor::getRoute (int slot, int part) const
+{
+    const juce::SpinLock::ScopedLockType lk (routeLock);
+    return routes[(size_t) juce::jlimit (0, TestPlayer::kSlots - 1, slot)][(size_t) juce::jlimit (0, kParts - 1, part)];
+}
+
+void EnochSoloProcessor::setRoute (int slot, int part, const PartRoute& r)
+{
+    {
+        const juce::SpinLock::ScopedLockType lk (routeLock);
+        routes[(size_t) juce::jlimit (0, TestPlayer::kSlots - 1, slot)][(size_t) juce::jlimit (0, kParts - 1, part)] = r;
+    }
+    openHardwareFor (slot);
+    routesChanged = true;
+    refinalize();
+}
+
+bool EnochSoloProcessor::anyRouted (int slot) const
+{
+    const juce::SpinLock::ScopedLockType lk (routeLock);
+    // v3.2: routing is on when a part leaves Enoch (external VST, both, hardware) or a part was switched Off. The Enoch Bass log drum
+    // row starts Off (there is no log drum until you route one), so on its own it does not switch routing on.
+    const int sl = juce::jlimit (0, TestPlayer::kSlots - 1, slot);
+    for (int part = 0; part < kParts; ++part)
+    {
+        const auto& r = routes[(size_t) sl][(size_t) part];
+        if (r.dest == RD_External || r.dest == RD_Both || r.dest == RD_Hardware) return true;
+        if (r.dest == RD_Off && ! (sl == 5 && part == 1)) return true;
+    }
+    return false;
+}
+
+std::shared_ptr<const enochsolo::Library> EnochSoloProcessor::libraryByName (int inst, const juce::String& name) const
+{
+    if (name.isEmpty()) return nullptr;
+    for (int i = 0; i < (int) enochsolo::I_Count; ++i)
+    {
+        if (inst >= 0 && i != inst) continue;
+        for (auto& l : libLists[(size_t) i]) if (juce::String (l->name) == name) return l;
+    }
+    return nullptr;
+}
+
+void EnochSoloProcessor::fillRoutes (enochsolo::Settings& s) const
+{
+    const int slot = curSlot();
+    s.routed = anyRouted (slot);
+    if (! s.routed) return;
+    for (int p = 0; p < kParts; ++p)
+    {
+        const auto r = getRoute (slot, p);
+        auto& rc = s.routes[p];
+        rc.on = r.dest != RD_Off;
+        rc.channel = juce::jlimit (0, 15, r.channel - 1);
+        rc.lib = r.profile.isNotEmpty() ? libraryByName (p == 2 ? -1 : s.instrument, r.profile) : (p == 0 ? s.lib : nullptr);
+        rc.transpose = r.transpose;
+        rc.program = r.program;
+    }
+    s.dupToTrack1 = (slot == 5) && s.routes[1].on;
+}
+
+void EnochSoloProcessor::openHardwareFor (int slot)
+{
+    juce::String want;
+    for (int p = 0; p < kParts; ++p) { const auto r = getRoute (slot, p); if (r.dest == RD_Hardware && r.port.isNotEmpty()) { want = r.port; break; } }
+    if (want == hwOpenId) return;
+    std::shared_ptr<juce::MidiOutput> dev;
+    if (want.isNotEmpty())
+        if (auto d = juce::MidiOutput::openDevice (want)) { d->startBackgroundThread(); dev = std::move (d); }
+    const juce::SpinLock::ScopedLockType lk (hwLock);
+    hwOut = dev; hwOpenId = dev ? want : juce::String();
+}
+
+void EnochSoloProcessor::sendTest (const std::vector<juce::MidiMessage>& msgs)
+{
+    const juce::SpinLock::ScopedLockType lk (testLock);
+    int pos = 0;
+    for (auto& m : msgs) testBuf.addEvent (m, pos++);
+}
+
+juce::String EnochSoloProcessor::routeText (int slot) const
+{
+    const auto r = getRoute (slot, 0);
+    if (r.dest == RD_Builtin) return {};
+    static const char* dn[] = { "built-in", "external VST", "external VST + built-in", "hardware", "off" };
+    juce::String prof = r.profile;
+    if (prof.isEmpty()) if (auto l = currentLibrary()) prof = l->name;
+    juce::String t; t << dn[juce::jlimit (0, 4, r.dest)] << " on MIDI ch " << r.channel;
+    if (prof.isNotEmpty()) t << " (" << prof << ")";
+    if (r.dest == RD_Hardware) t << (hwOpenId.isNotEmpty() ? juce::String (", port open") : juce::String (", no port open"));
+    return t;
+}
+
+juce::ValueTree EnochSoloProcessor::routesToTree() const
+{
+    juce::ValueTree t ("ROUTES");
+    const juce::SpinLock::ScopedLockType lk (routeLock);
+    for (int sl = 0; sl < TestPlayer::kSlots; ++sl)
+        for (int p = 0; p < kParts; ++p)
+        {
+            const auto& r = routes[(size_t) sl][(size_t) p];
+            juce::ValueTree c ("R");
+            c.setProperty ("slot", sl, nullptr); c.setProperty ("part", p, nullptr); c.setProperty ("dest", r.dest, nullptr); c.setProperty ("ch", r.channel, nullptr);
+            c.setProperty ("profile", r.profile, nullptr); c.setProperty ("program", r.program, nullptr); c.setProperty ("transpose", r.transpose, nullptr); c.setProperty ("port", r.port, nullptr);
+            t.appendChild (c, nullptr);
+        }
+    return t;
+}
+
+void EnochSoloProcessor::routesFromTree (const juce::ValueTree& t)
+{
+    if (! t.isValid()) return;
+    {
+        const juce::SpinLock::ScopedLockType lk (routeLock);
+        for (auto c : t)
+        {
+            const int sl = (int) c.getProperty ("slot", -1), p = (int) c.getProperty ("part", -1);
+            if (sl < 0 || sl >= TestPlayer::kSlots || p < 0 || p >= kParts) continue;
+            auto& r = routes[(size_t) sl][(size_t) p];
+            r.dest = juce::jlimit (0, 4, (int) c.getProperty ("dest", 0)); r.channel = juce::jlimit (1, 16, (int) c.getProperty ("ch", 1));
+            r.profile = c.getProperty ("profile").toString(); r.program = juce::jlimit (-1, 127, (int) c.getProperty ("program", -1));
+            r.transpose = juce::jlimit (-48, 48, (int) c.getProperty ("transpose", 0)); r.port = c.getProperty ("port").toString();
+        }
+    }
+    routesChanged = true;
+}
+
+bool EnochSoloProcessor::saveProfile (const enochsolo::Library& l, juce::String& message)
+{
+    const auto dir = librariesFolder();
+    if (! dir.createDirectory()) { message = "Could not create " + dir.getFullPathName(); return false; }
+    juce::String fn = juce::File::createLegalFileName (juce::String (l.name)).trim();
+    if (fn.isEmpty()) fn = "My profile";
+    const auto file = dir.getChildFile (fn + ".enochlib");
+    if (! file.replaceWithText (juce::String (enochsolo::libraryToText (l)))) { message = "Could not write " + file.getFullPathName(); return false; }
+    loadLibraries();
+    message = "Saved " + file.getFileName();
+    return true;
+}

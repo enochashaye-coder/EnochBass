@@ -16,7 +16,7 @@ namespace enochsolo
 {
 namespace rhythm
 {
-enum Subdiv { SD_Auto = 0, SD_16, SD_16T, SD_32, SD_32T };
+enum Subdiv { SD_Auto = 0, SD_16, SD_16T, SD_32, SD_32T, SD_4, SD_8, SD_8T };   // v3.1: 1/4, 1/8, 1/8T appended (saved indices unchanged)
 
 struct R
 {
@@ -134,6 +134,39 @@ inline void apply (Pattern& p, const Settings& s)
         main.swap (out); out.clear();
     }
 
+    // ---- 2b) v3.1 slower grids: the line moves in quarters, eighths or eighth triplets. Every note is moved to the nearest grid
+    //      point; two notes on one point keep the stronger (on the beat, longer, louder) one; each note then lasts until the next
+    //      (keeping the style's short notes short). A real re-phrasing, not a quantize of the 16th line.
+    if (s.subdiv == SD_4 || s.subdiv == SD_8 || s.subdiv == SD_8T)
+    {
+        const double q = s.subdiv == SD_4 ? 1.0 : s.subdiv == SD_8 ? 0.5 : 1.0 / 3.0;
+        std::vector<Note> kept;
+        for (auto n : main)
+        {
+            const double g = std::round (n.start / q) * q;
+            const double score = (std::abs (std::fmod (g, 1.0)) < 1e-6 ? 1.0 : 0.0) + n.length + n.vel / 254.0 + n.weight;
+            n.start = g;
+            if (! kept.empty() && std::abs (kept.back().start - g) < 1e-6)
+            {
+                const double ks = (std::abs (std::fmod (kept.back().start, 1.0)) < 1e-6 ? 1.0 : 0.0) + kept.back().length + kept.back().vel / 254.0 + kept.back().weight;
+                if (score > ks) kept.back() = n;
+                continue;
+            }
+            kept.push_back (n);
+        }
+        for (size_t i = 0; i < kept.size(); ++i)
+        {
+            auto& n = kept[i];
+            const double next = i + 1 < kept.size() ? kept[i + 1].start : n.start + std::max (q, n.length);
+            const double room = std::max (q * 0.5, next - n.start);
+            const bool shortNote = (n.art == A_Staccato || n.art == A_Ghost || n.art == A_PalmMute || n.art == A_Pizz);
+            n.length = shortNote ? std::min (room * 0.9, q * 0.6) : std::max (std::min (room, n.length + q), q * 0.9);
+            n.length = std::min (n.length, room - 0.02);
+            if (n.length < 0.05) n.length = 0.05;
+        }
+        main.swap (kept);
+    }
+
     // ---- 3) winds breathe: at least a 16th of air every two bars
     if (wind && ! main.empty())
     {
@@ -157,6 +190,54 @@ inline void apply (Pattern& p, const Settings& s)
     p.raw = rest;
     p.raw.insert (p.raw.end(), main.begin(), main.end());
     std::stable_sort (p.raw.begin(), p.raw.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+}
+
+/** v3.1 Output "Fills" (EZkeys-style fills mode): the solo line keeps only what falls in the fill windows -
+    the last beat and a half of every second bar (the end of each phrase) and the last beat of the final bar. */
+inline void fills (Pattern& p, const Settings& s)
+{
+    if (! s.fills) return;
+    const double bb = std::max (0.5, p.barBeats);
+    std::vector<Note> keep;
+    for (auto& n : p.raw)
+    {
+        if (n.track != 0) { keep.push_back (n); continue; }
+        const int bar = (int) std::floor (n.start / bb + 1e-9);
+        const double inBar = n.start - bar * bb;
+        const bool phraseEnd = (bar % 2) == 1 || bar == p.bars - 1;
+        if (phraseEnd && inBar >= bb - 1.5 - 1e-6) { Note k = n; k.length = std::min (k.length, (bar + 1) * bb - k.start + 0.25); keep.push_back (k); }
+    }
+    p.raw.swap (keep);
+}
+
+/** v3.1 two-hand piano (Solo + Accompaniment = EZkeys "Full"): the comping hand stays under the melody like one pianist's hands.
+    A comp note that sounds with a melody note and sits on it or above it (or within a semitone) moves down an octave; if it has
+    nowhere to go (below C2) or now doubles another note of its chord, it is left out. */
+inline void twoHands (Pattern& p, const Settings& s)
+{
+    if (s.instrument != I_Piano || s.mode != 2) return;
+    std::vector<const Note*> mel;
+    for (auto& n : p.raw) if (n.track == 0 && ! n.mute) mel.push_back (&n);
+    if (mel.empty()) return;
+    auto melodyOver = [&] (const Note& c)
+    {
+        int low = 999;
+        for (auto* m : mel) if (m->start < c.start + c.length - 0.01 && c.start < m->start + m->length - 0.01) low = std::min (low, m->pitch);
+        return low;
+    };
+    std::vector<Note> out;
+    for (auto& n : p.raw)
+    {
+        if (n.track != 1) { out.push_back (n); continue; }
+        Note c = n;
+        const int low = melodyOver (c);
+        if (low < 999) while (c.pitch >= low - 1 && c.pitch - 12 >= 36) c.pitch -= 12;
+        if (low < 999 && c.pitch >= low - 1) continue;                     // no room under the melody: the comping hand leaves it out
+        bool dup = false;
+        for (auto& o : out) if (o.track == 1 && o.pitch == c.pitch && std::abs (o.start - c.start) < 0.02) dup = true;
+        if (! dup) out.push_back (c);
+    }
+    p.raw.swap (out);
 }
 } // namespace rhythm
 } // namespace enochsolo

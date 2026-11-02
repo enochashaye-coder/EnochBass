@@ -32,7 +32,8 @@ constexpr int kArtSlap = 27;              // Enoch Bass only (A_Slap)
 constexpr int kInstGuitar = 0, kInstSax = 1, kInstViolin = 2, kInstPiano = 3, kInstTrumpet = 4, kInstBass = 5;
 
 enum Kind { K_Piano = 0, K_Rhodes, K_Wurli, K_FMEP, K_Organ, K_Poly, K_Pluck, K_Sax, K_Brass, K_Bow, K_Sub, K_Log, K_Lead, K_LogDrum, K_Classic,
-           K_BowPM, K_SaxPM, K_BrassPM };      // v2.7 batch 2: physical models (bowed string, reed + bore, lip + bore)
+           K_BowPM, K_SaxPM, K_BrassPM,
+           K_LogDX };   // v3.0: the Amapiano log drum built on the original DX10 'Log Drum' FM recipe      // v2.7 batch 2: physical models (bowed string, reed + bore, lip + bore)
 constexpr int kNumP = 28;
 
 struct Patch
@@ -66,6 +67,8 @@ struct Patch
 //            p3 osc B cents, p4 osc B level, p5 sub (square, octave down), p6 noise, p7 pulse width, p8 PWM depth, p9 cutoff Hz, p10 resonance 0..3.6,
 //            p11 filter env (octaves), p12 key-track, p13 A, p14 D, p15 S, p16 R, p17 filter D, p18 filter S, p19 glide (s), p20 auto vibrato (semis),
 //            p21 drive, p22 echo mix, p23 echo time (s), p24 talkbox vowel amount, p25 sync sweep (semis), p26 echo feedback, p27 vibrato rate (Hz, 0 = 5.4)
+inline bool isLogKind (int k) { return k == K_LogDrum || k == K_LogDX; }
+
 inline const std::vector<Patch>& patchList (int inst)
 {
     static const std::vector<std::vector<Patch>> all = []
@@ -272,6 +275,42 @@ inline const std::vector<Patch>& patchList (int inst)
             P ("Reese growl (moving)",                   K_Lead, { 4, 0, 0, 25, .8f, .4f, 0, .5f, .3f, 650, .35f, .6f, .3f, .01f, .5f, .9f, .12f, .4f, .8f, .02f, 0, 2.4f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 0.7f),
             P ("Trap 808 glide (long)",                  K_Sub,  { 3.2f, 1.2f, 2.6f, 0.f }, 0, 0, 0, 0, 1.0f),
             P ("Afro-house pluck bass",                  K_Lead, { 1, 0, 0, 7, .5f, .3f, 0, .4f, 0, 700, .5f, 2.4f, .4f, .001f, .22f, .1f, .08f, .2f, .05f, 0, 0, 1.4f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.1f) }) a[kInstBass].push_back (pt);
+        // ---- v3.0: Amapiano log drums on the original recipe. The amapiano log drum is the "Log Drum" factory preset of Paul Kellett's
+        // mda DX10 FM synth (FL Studio's Fruity DX10); its algorithm is MIT-licensed and reproduced here exactly, then extended with
+        // glide, a clean sub, drop, drive and the panel controls.
+        //  K_LogDX: p0..p15 = the 16 DX10 parameters (attack, decay, release, coarse, fine, mod init, mod dec, mod sus, mod rel, mod vel,
+        //           vibrato, octave, fine tune, waveform, mod thru, lfo rate); p16 sub, p17 drive, p18 drop st, p19 drop time s,
+        //           p21 width, p22 glide s
+        grp = "Amapiano log drums (DX10 recipe)";
+        //                                                 A    D     R    Crs   Fine  MInit MDec  MSus  MRel  MVel Vib  Oct  FT   Wave  Thru  LFO   sub   drv   drop dropT  -   width glide
+        for (auto& pt : std::vector<Patch> {
+            P ("Log drum: The Original (DX10 preset)",  K_LogDX, { 0, .30f, .5f, .32f, 0, .467f, .079f, .158f, .5f, .5f, 0, .4f, .5f, .151f, .02f, .5f,  0.f, .08f, 0, .03f, 0, .08f, .06f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Classic Amapiano (warm)",     K_LogDX, { 0, .32f, .5f, .32f, 0, .467f, .079f, .158f, .5f, .5f, 0, .4f, .5f, .151f, .02f, .5f,  .35f, .25f, 0, .03f, 0, .15f, .07f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Deep Soulful",                K_LogDX, { 0, .36f, .55f, .32f, 0, .38f, .10f, .12f, .5f, .45f, 0, .4f, .5f, .12f, .01f, .5f,  .50f, .15f, 0, .03f, 0, .12f, .09f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Punchy Club",                 K_LogDX, { 0, .26f, .45f, .32f, 0, .58f, .06f, .17f, .5f, .55f, 0, .4f, .5f, .17f, .03f, .5f,  .30f, .45f, 0, .03f, 0, .18f, .05f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Sub-Heavy",                   K_LogDX, { 0, .33f, .5f, .32f, 0, .42f, .08f, .14f, .5f, .5f, 0, .4f, .5f, .14f, .01f, .5f,  .90f, .20f, 0, .03f, 0, .10f, .07f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Percussive Knock",            K_LogDX, { 0, .20f, .4f, .32f, 0, .60f, .05f, .16f, .5f, .55f, 0, .4f, .5f, .16f, .03f, .5f,  .15f, .35f, 0, .03f, 0, .20f, .04f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Bacardi Bounce",              K_LogDX, { 0, .24f, .45f, .32f, 0, .52f, .07f, .16f, .5f, .55f, 0, .4f, .5f, .16f, .02f, .5f,  .25f, .30f, 3, .03f, 0, .15f, .05f }, 0, 0, 0, 0, 1.f),
+            P ("Log drum: Sgija Deep Drop",             K_LogDX, { 0, .38f, .6f, .32f, 0, .45f, .09f, .15f, .5f, .5f, 0, .4f, .5f, .14f, .01f, .5f,  .70f, .22f, 7, .06f, 0, .10f, .12f }, 0, 0, 0, 0, .62f) }) a[kInstBass].push_back (pt);
+        // ---- v3.2: more lead synths (every Enoch Solo instrument) and synth basses (Enoch Bass); appended, older sound numbers do not move
+        grp = "Lead synths (v3.2)";
+        //                                       A    B    Bst  Bct  Blv  sub  nz   pw   pwm  cut     res   fenv  key  A      D     S     R     fD    fS    glide vib   drv   echo eT    vow  sync fb   vRate
+        const std::vector<Patch> leads3 = {
+            P ("Afrobeats pluck lead (short, bright)", K_Lead, { 1, 0, 12, 4, .35f, 0, 0, .35f, 0, 3800, .25f, 2.2f, .5f, .002f, .22f, .15f, .10f, .18f, .1f, .0f, .04f, 1.1f, .22f, .25f, 0, 0, .30f, 5.4f }, 1, 0, 0, 0, 1.15f),
+            P ("Amapiano soft lead (sine, airy)",      K_Lead, { 3, 2, 12, 0, .25f, 0, .03f, .5f, 0, 4500, 0, .2f, .3f, .02f, .5f, .9f, .25f, .5f, .8f, .04f, .12f, .6f, .25f, .375f, 0, 0, .35f, 5.0f }, 1, 0, 0, 0, 1.2f),
+            P ("Neo-soul glide lead (round)",          K_Lead, { 2, 3, 0, 0, .5f, .2f, 0, .5f, 0, 2400, .15f, .7f, .4f, .01f, .45f, .9f, .20f, .45f, .65f, .09f, .22f, .9f, .18f, .33f, 0, 0, .30f, 5.2f }, 0, 0, 0, 0, 1.15f),
+            P ("Gospel organ lead (drawbar-ish)",      K_Lead, { 3, 3, 12, 0, .7f, .5f, 0, .5f, 0, 6000, 0, 0, .2f, .004f, .2f, 1.f, .08f, .3f, 1.f, .02f, .18f, 1.1f, .12f, .30f, 0, 0, .25f, 6.4f }, 0, 0, 0, 0, 0.95f),
+            P ("Chiptune square (8-bit)",              K_Lead, { 1, 1, 12, 0, .3f, 0, 0, .25f, 0, 8000, 0, 0, .2f, .001f, .2f, .95f, .05f, .2f, 1.f, 0, .10f, .8f, .10f, .25f, 0, 0, .20f, 6.0f }, 0, 0, 0, 0, 0.9f),
+        };
+        for (int i = 0; i < 5; ++i) a[(size_t) i].insert (a[(size_t) i].end(), leads3.begin(), leads3.end());
+        grp = "Synth basses (v3.2)";
+        for (auto& pt : std::vector<Patch> {
+            P ("Moog ladder bass (fat, round)",        K_Lead, { 0, 1, -12, 5, .7f, .5f, 0, .5f, 0, 520, .45f, 2.0f, .3f, .002f, .30f, .6f, .08f, .25f, .25f, .03f, 0, 1.5f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.0f),
+            P ("Acid bass (303-style squelch)",        K_Lead, { 0, 0, 0, 0, 0, 0, 0, .5f, 0, 380, 1.5f, 3.6f, .3f, .001f, .20f, .3f, .05f, .14f, .05f, .07f, 0, 1.8f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 0.85f),
+            P ("Dancehall square sub",                 K_Lead, { 1, 3, -12, 0, .6f, .3f, 0, .5f, 0, 1400, .1f, .3f, .2f, .003f, .3f, .9f, .10f, .3f, .9f, .02f, 0, 1.2f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.0f),
+            P ("Amapiano warm saw sub",                K_Lead, { 0, 3, -12, 0, .8f, .2f, 0, .5f, 0, 650, .1f, .4f, .2f, .006f, .4f, .9f, .12f, .4f, .9f, .05f, 0, 1.1f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.15f),
+            P ("808 short (punchy)",                   K_Sub,  { 0.9f, 1.6f, 1.4f, 0.f }, 0, 0, 0, 0, 1.0f),
+            P ("Kizomba smooth sub (sine glide)",      K_Lead, { 3, 3, 12, 0, .15f, 0, 0, .5f, 0, 3000, 0, 0, 0, .01f, .5f, .95f, .15f, .5f, 1.f, .08f, 0, 1.0f, 0, .3f, 0, 0, 0, 5.4f }, 0, 0, 0, 0, 1.3f) }) a[kInstBass].push_back (pt);
         return a;
     }();
     return all[(size_t) std::clamp (inst, 0, 5)];
@@ -406,7 +445,7 @@ public:
         bool scSafe = true;
     };
     void setLogControls (const LogCtl& c) { logc = c; if (std::abs (c.monoHz - monoHzSet) > 0.5f) { monoHzSet = c.monoHz; monoLpL.lowpass (std::max (20.f, c.monoHz), 0.707f, sr); monoLpR = monoLpL; } }
-    bool logDrumActive() const { return cur.kind == K_LogDrum; }
+    bool logDrumActive() const { return isLogKind (cur.kind); }
     /** v2.7 global sound controls (both plugins). 0.5 = the natural / previous amount where it says so */
     struct GlobalCtl
     {
@@ -475,7 +514,7 @@ public:
         if (cur.kind == K_Classic) return;
         ++noteCounter;
         const bool lead = (cur.kind == K_Lead);
-        const bool logd = (cur.kind == K_LogDrum);
+        const bool logd = isLogKind (cur.kind);
         const bool mono = lead || logd || (cur.kind == K_Sax || cur.kind == K_Brass || cur.kind == K_Bow || cur.kind == K_Sub || isPM (cur.kind) || (cur.kind == K_Poly && instIdx == kInstBass));
         const bool legatoArt = (art == A_Legato || art == A_HammerOn || art == A_PullOff || art == A_Slide || art == A_Gliss);
         const bool plucked = (cur.kind == K_Pluck);
@@ -600,7 +639,7 @@ public:
             mechRender (oL, oR);
             toneProcess (oL, oR);
             if (mmc.fx != 0) fxProcess (oL, oR);
-            if (cur.kind == K_LogDrum)
+            if (isLogKind (cur.kind))
             {
                 if (logc.monoHz > 0.f)                                               // everything under the mono point in the middle
                 {
@@ -676,7 +715,8 @@ private:
                 case K_Sax: rel = 0.07f; break; case K_Brass: rel = 0.06f; break; case K_Bow: rel = 0.12f; break;
                 case K_SaxPM: rel = 0.08f; break; case K_BrassPM: rel = 0.07f; break; case K_BowPM: rel = 0.14f; break;
                 case K_Sub: rel = 0.25f; break; case K_Log: rel = 0.12f; break;
-                case K_LogDrum: rel = v.pt.p[10] > 0.f ? 0.12f : 2.0f; break;     // a log drum rings out after note-off (a hybrid's sustain stops)
+                case K_LogDrum: rel = v.pt.p[10] > 0.f ? 0.12f : 2.0f; break;
+                case K_LogDX: rel = 3.0f; break;                                  // the DX10 release envelope runs inside the voice     // a log drum rings out after note-off (a hybrid's sustain stops)
                 default: rel = 0.1f;
             }
         }
@@ -714,11 +754,12 @@ private:
             case K_Sub: startSub (v, fv); break;
             case K_Log: startLog (v, fv); break;
             case K_LogDrum: startLogDrum (v, fv); break;
+            case K_LogDX: startLogDX (v); break;
             default: break;
         }
         // per-note humanisation: a few cents of intonation (more on the winds, which a player bends into tune), bow direction
         const bool windy = (v.kind == K_Sax || v.kind == K_Brass || v.kind == K_Bow || isPM (v.kind));
-        if (v.kind != K_LogDrum && v.kind != K_Piano) v.pm[15] = gc.human * (windy ? 0.07f : 0.03f) * hashSigned (noteCounter * 7u + 3u);
+        if (! isLogKind (v.kind) && v.kind != K_Piano) v.pm[15] = gc.human * (windy ? 0.07f : 0.03f) * hashSigned (noteCounter * 7u + 3u);
         if ((v.kind == K_Bow || v.kind == K_BowPM) && pend.bowUp) v.attackInc *= 0.75f;      // up-bow: a slightly softer start
         v.baseDetune = v.pm[15]; v.mmRand = hashSigned (noteCounter * 13u + 5u);
     }
@@ -1069,6 +1110,114 @@ private:
         v.par[0] = v.pt.p[0];
         if (v.pt.p[3] > 0.f) v.lad.set (v.pt.p[3], 0.f, sr);
     }
+
+    //---------------------------------------------------------------- v3.0 log drum: the DX10 "Log Drum" recipe (Paul Kellett, mda DX10, MIT licence)
+    // One carrier and one sine modulator. The modulator's index starts high and falls to a low sustain within a few milliseconds:
+    // that is the wooden knock. The carrier is a 5th-order sine approximation whose "waveform" setting adds odd harmonics: the hollow log body.
+    // Added here: glide (the slide between notes that amapiano is built on), a clean sine sub, an optional pitch drop, drive, tone, width.
+    void startLogDX (Voice& v)
+    {
+        const auto& P = v.pt.p;
+        const float Fs = sr, ifs = 1.f / Fs;
+        float* q = v.pm;
+        std::fill (std::begin (v.pm), std::end (v.pm), 0.f);
+        const float h = logc.human;
+        v.par[5] = h * 0.06f * hashSigned (noteCounter * 17u + 1u);                      // +/- 6 cents at 100 % humanize
+        const float lvlVar = dbToLin (h * 1.5f * hashSigned (noteCounter * 29u + 3u));
+        // DX10 update(): envelope coefficients from the preset (decay scaled by the panel)
+        const float decRate = std::exp (5.f - 8.f * P[1]) / std::max (0.25f, logc.decayMul);
+        v.par[0] = std::exp (-ifs * decRate);                                               // cdec
+        v.par[1] = std::exp (-ifs * std::exp (5.f - 5.f * P[2]) / std::max (0.25f, logc.decayMul));   // crel
+        v.par[2] = 1.f - std::exp (-ifs * std::exp (6.f - 7.f * P[6]));                     // mdec
+        v.par[3] = 1.f - std::exp (-ifs * std::exp (5.f - 8.f * P[8]));                     // mrel
+        v.par[4] = 1.f - std::exp (-1.f / (std::max (0.00005f, logc.attack) * Fs));         // catt (DX10 preset: about 0.3 ms)
+        float rati = std::floor (40.1f * P[3] * P[3]);
+        float ratf = P[4] < 0.5f ? 0.2f * P[4] * P[4] : 0.75f;
+        v.par[6] = 0.5f * (rati + ratf);                                                    // modulator / carrier frequency ratio
+        // DX10 noteOn(): key tracking + velocity sensitivity of the modulation index
+        float l = std::exp (0.05776226505f * (float) (v.note + 12));                       // key tracking of the DX10 note that sounds at this pitch
+        if (l > 50.f) l = 50.f;
+        const float velsens = std::clamp (logc.velResp, 0.f, 1.f);
+        l *= 64.f + velsens * ((float) v.vel - 64.f);
+        const float depth = 0.0002f * P[5] * P[5], dept2 = 0.0002f * P[7] * P[7] * logc.bodyMul;
+        q[2] = depth * l * logc.punchMul;                                                   // menv (falls toward mlev)
+        q[3] = dept2 * l;                                                                   // mlev
+        q[4] = v.par[2];                                                                    // current mod envelope rate
+        const float velAmp = std::pow (((float) v.vel + 10.f) / 137.f, 0.4f + 1.2f * velsens);
+        q[5] = (1.5f - P[13]) * 0.0035f * 137.f * velAmp * lvlVar;                         // env (DX10 level at full velocity)
+        q[6] = 0.f;                                                                         // cenv
+        q[7] = v.par[4];                                                                    // catt
+        q[8] = v.par[0];                                                                    // cdec
+        v.par[7] = 0.50f - 3.0f * P[13] * P[13];                                            // rich (waveform)
+        v.par[8] = 0.25f * P[14] * P[14];                                                   // mod thru
+        q[0] = 0.f; q[1] = 0.f;                                                             // carrier / modulator phase
+        v.par[9] = std::exp (-1.f / (0.9f * Fs) / std::max (0.25f, logc.decayMul));          // sub decay (a little longer than the body)
+        q[9] = 0.f; q[10] = 1.f; q[11] = 0.f;                                                            // sub phase, sub level env
+        v.wp = 0; v.lp[0] = v.lp[1] = v.lp[2] = 0.f;
+        v.gain = 1.f;
+    }
+    bool tickLogDX (Voice& v, float& oL, float& oR)
+    {
+        const auto& P = v.pt.p;
+        float* q = v.pm;
+        const int ch = v.ch;
+        if (v.releasing && q[11] == 0.f)                                               // DX10 note-off: release envelopes
+        {
+            q[11] = 1.f; q[8] = v.par[1]; q[5] = q[6]; q[7] = 1.f; q[3] = 0.f; q[4] = v.par[3];
+        }
+        v.curSemis += ((float) v.note - v.curSemis) * v.glideCoef;
+        const float drop = P[18] * logc.dropMul + std::max (0.f, logc.dropMul - 1.f) * 3.f;
+        float dropSemis = 0.f;
+        if (drop > 0.001f)
+        {
+            const float dT = std::max (0.004f, (P[19] > 0.f ? P[19] : 0.03f) * logc.dropTimeMul), e3 = 0.0497871f;
+            dropSemis = drop * std::max (0.f, (std::exp (-v.t / dT) - e3) / (1.f - e3));     // lands exactly on pitch
+        }
+        const float semis = v.curSemis + logc.tune + bend[(size_t) ch] + v.par[5] + dropSemis + v.pm[15] * 0.f;
+        const float f = f0Of (semis);
+        if (f > 0.4f * sr) return false;
+        // ---- the DX10 voice (per sample, as in mdaDX10::processReplacing)
+        const float e = q[5];
+        if (e <= 0.0003f) return false;
+        q[5] = e * q[8];                                                                     // decay & release
+        q[6] += q[7] * (e - q[6]);                                                           // attack
+        const float dcar = 2.f * f / sr;                                                     // carrier phase step (phase runs -1..1)
+        q[1] += kTwoPi * v.par[6] * f / sr; if (q[1] > kTwoPi) q[1] -= kTwoPi;               // modulator (a free sine, so it can glide)
+        const float m = -std::sin (q[1]);                                                     // the DX10 recursive sine starts as -sin
+        q[2] += q[4] * (q[3] - q[2]);                                                        // modulation index envelope
+        float x = q[0] + dcar + m * q[2];
+        while (x > 1.f) x -= 2.f;
+        while (x < -1.f) x += 2.f;
+        q[0] = x;
+        const float w = std::clamp (v.par[7], -1.f, 0.6f);
+        float body = q[6] * (v.par[8] * m + (x + x * x * x * (w * x * x - 1.f - w)));
+        // ---- additions: tone, drive, clean sub, width
+        if (std::fabs (logc.tone) > 0.01f)
+        {
+            const float fc = 1400.f * std::exp2 (logc.tone * 2.f);
+            v.lp[0] += (body - v.lp[0]) * (1.f - std::exp (-kTwoPi * fc / sr));
+            body = logc.tone < 0.f ? v.lp[0] : body + (body - v.lp[0]) * logc.tone * 0.8f;
+        }
+        const float drv = std::clamp (P[17] + logc.drive, 0.f, 1.5f);
+        if (drv > 0.001f) { const float d = 1.f + 6.f * drv; body = std::tanh (body * d * 2.2f) / (2.2f * (1.f + 0.8f * drv)); }
+        q[9] += f / sr; if (q[9] >= 1.f) q[9] -= 1.f;
+        q[10] *= v.par[9];
+        if (v.releasing) q[10] *= v.par[1];
+        const float subLvl = std::clamp (P[16] * dbToLin (logc.subDb), 0.f, 3.f);
+        const float sub = subLvl * 0.35f * std::sin (kTwoPi * q[9]) * q[10] * std::min (1.f, q[6] / std::max (1e-4f, e) * 4.f) * std::min (1.f, e * 3.f + 0.2f);
+        // width: the upper part of the body only, as a tiny Haas offset (the low end stays mono)
+        v.lp[1] += (body - v.lp[1]) * (1.f - std::exp (-kTwoPi * 220.f / sr));
+        const float hi = body - v.lp[1];
+        v.buf[(size_t) (v.wp & (kBuf - 1))] = hi;
+        const int dl = std::max (1, (int) ((0.0003f + 0.0009f * logc.width) * sr));
+        const float hiD = v.buf[(size_t) ((v.wp - dl) & (kBuf - 1))];
+        ++v.wp;
+        const float wAmt = std::clamp (logc.width + P[21] * 0.5f, 0.f, 1.f);
+        const float lowAll = v.lp[1] + sub;
+        oL = (lowAll + hi) * 1.9f;
+        oR = (lowAll + hi * (1.f - wAmt) + hiD * wAmt) * 1.9f;
+        return true;
+    }
     //---------------------------------------------------------------- v2.7 Amapiano log drum (tuned modal drum, separate layers)
     void startLogDrum (Voice& v, float vel)
     {
@@ -1299,6 +1448,7 @@ private:
                 oL = oR = y; return dec > 0.0004f || v.held;
             }
             case K_LogDrum: return tickLogDrum (v, oL, oR, env);
+            case K_LogDX: return tickLogDX (v, oL, oR);
             default:   // K_Log
             {
                 const float f = f0Of ((float) v.note);
@@ -1687,7 +1837,7 @@ private:
         const int k = cur.kind;
         const bool wind = (k == K_Sax || k == K_Brass || k == K_SaxPM || k == K_BrassPM);
         const bool bowed = (k == K_Bow || k == K_BowPM);
-        if (gc.humanPlay && k != K_LogDrum)
+        if (gc.humanPlay && ! isLogKind (k))
         {
             const float tp = (float) (clock - ph.start), L = std::max (1.f, ph.avgLen);
             const float arc = std::sin (kPi * std::min (1.f, tp / L));

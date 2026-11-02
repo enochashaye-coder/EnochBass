@@ -251,7 +251,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
                           "One track per articulation = notes split onto one MIDI track per articulation, so you can route each to its own patch");
 
     artist.setJustificationType (juce::Justification::centredLeft);
-    artist.onChange = [this] { if (! updatingUi) setChoiceParam ("artist", artist.getSelectedItemIndex()); };
+    artist.onChange = [this] { if (! updatingUi && artist.getSelectedId() > 0) setChoiceParam ("artist", artist.getSelectedId() - 1); };
     artist.setTooltip ("Play in the style of this player");
     addAndMakeVisible (artist);
 
@@ -385,11 +385,11 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     saveBtn.setTooltip ("Save the MIDI file anywhere (you can also drag it)");
     addAndMakeVisible (saveBtn);
     advBtn.setClickingTogglesState (true);
-    advBtn.onClick = [this] { advanced = advBtn.getToggleState(); if (advanced) { logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
+    advBtn.onClick = [this] { advanced = advBtn.getToggleState(); if (advanced) { routeOpen = false; routeBtn.setToggleState (false, juce::dontSendNotification); logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
     addAndMakeVisible (advBtn);
     ldBtn.setClickingTogglesState (true);
-    ldBtn.setTooltip ("Open the Amapiano log drum panel: 6 log drum types, tuning, pitch drop, punch, sub, body, tone, drive, glide, mono low end");
-    ldBtn.onClick = [this] { logOpen = ldBtn.getToggleState(); if (logOpen) { advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
+    ldBtn.setTooltip ("Open the Amapiano log drum panel: log drum types (8 on the DX10 recipe), tuning, pitch drop, punch, sub, body, tone, drive, glide, mono low end");
+    ldBtn.onClick = [this] { logOpen = ldBtn.getToggleState(); if (logOpen) { routeOpen = false; routeBtn.setToggleState (false, juce::dontSendNotification); advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
     addAndMakeVisible (ldBtn);
     ldPanel.paintPlate = [] (juce::Graphics& g, juce::Rectangle<float> b) { LF::plate (g, b, texPlate(), 7.f, true); };
     addChildComponent (ldPanel);
@@ -398,10 +398,27 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     feelBtn.onClick = [this]
     {
         feelOpen = feelBtn.getToggleState();
-        if (feelOpen) { advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); }
+        if (feelOpen) { advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); routeOpen = false; routeBtn.setToggleState (false, juce::dontSendNotification); logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); }
         resized();
     };
     addAndMakeVisible (feelBtn);
+    routeBtn.setClickingTogglesState (true);
+    routeBtn.setTooltip ("Where each part plays: built-in sound, an external VST on a MIDI channel (EZkeys, EZbass, Kontakt ...) or a hardware port, with its mapping profile");
+    routeBtn.onClick = [this]
+    {
+        routeOpen = routeBtn.getToggleState();
+        if (routeOpen)
+        {
+            advanced = false; advBtn.setToggleState (false, juce::dontSendNotification);
+            feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification);
+            logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification);
+            routePanel.refresh();
+        }
+        resized();
+    };
+    addAndMakeVisible (routeBtn);
+    routePanel.paintPlate = [] (juce::Graphics& g, juce::Rectangle<float> b) { LF::plate (g, b, texPlate(), 7.f, true); };
+    addChildComponent (routePanel);
     feelPanel.paintPlate = [] (juce::Graphics& g, juce::Rectangle<float> b) { LF::plate (g, b, texPlate(), 7.f, true); };
     addChildComponent (feelPanel);
     barSpeedBox.addItem ("Speed: follow", 1); barSpeedBox.addItem ("Speed: normal", 2); barSpeedBox.addItem ("Speed: double time", 3);
@@ -502,13 +519,18 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     barAuto.onClick = [this] { proc.pushUndo(); roll.applyBusyToSelection (-1.f, busySeed + 1); };
     barReroll.setTooltip ("Write new notes for the selected bars only");
     barReroll.onClick = [this] { roll.rerollSelectedBars(); };
+    barClearNotes.setTooltip ("Clear every note in the selected bars (the bars stay silent; Undo brings them back)");
+    barClearNotes.onClick = [this] { roll.clearSelectedBarNotes(); };
+    clearAllBtn.setTooltip ("Clear all notes: a blank piano roll that plays nothing (Undo brings them back; TRY ANOTHER writes a new take)");
+    clearAllBtn.onClick = [this] { roll.clearAllNotes(); };
+    addAndMakeVisible (clearAllBtn);
     barCopy.setTooltip ("Copy the chord of the selected bar");
     barCopy.onClick = [this] { roll.copyChord(); refreshBarPanel(); };
     barPaste.setTooltip ("Paste the copied chord onto the selected bar(s). Tip: or click a chord, then choose 'Same as bar...'");
     barPaste.onClick = [this] { roll.pasteChord(); };
     barClear.setTooltip ("Clear the bar selection");
     barClear.onClick = [this] { roll.clearBarSelection(); };
-    for (auto* b : { &barAuto, &barReroll, &barCopy, &barPaste, &barClear }) addAndMakeVisible (*b);
+    for (auto* b : { &barAuto, &barReroll, &barClearNotes, &barCopy, &barPaste, &barClear }) addAndMakeVisible (*b);
     roll.onBarSelection = [this] { refreshBarPanel(); };
 
     auto toggleP = [&] (juce::ToggleButton& t, const char* id, const char* tip, bool visible)
@@ -593,8 +615,8 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
 
     // ---- hardware knobs: the main sound-shaping controls (drag up / down, Shift = fine, double-click = default, wheel = step)
     makeHardwareKnob (intensity, "intensity", "CALM", "FIERY", 0);
-    makeHardwareKnob (busyG, "busy", "LAZY", "RAPID", 0);
-    makeHardwareKnob (space, "space", "BUSY", "AIRY", 0);
+    makeHardwareKnob (busyG, "busy", "SPARSE", "DENSE", 0);
+    makeHardwareKnob (space, "space", "FULL", "AIRY", 0);
     makeHardwareKnob (repeat, "repeat", "NEW", "RIFFS", 0);
     makeHardwareKnob (grooveAmt, "grooveAmount", "FREE", "LOCKED", 0);
     makeHardwareKnob (octave, "octave", "-2", "+2", 1);
@@ -602,7 +624,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     lClean.setText ("CLEANUP", juce::dontSendNotification);
     for (auto* k : { &hTiming, &hVel, &hLength, &hFeel }) makeHardwareKnob (*k, nullptr, "", "", 0);
     for (auto* l : { &lIntensity, &lBusy, &lSpace, &lRepeat, &lGroove, &lOct, &lClean }) { l->setJustificationType (juce::Justification::centred); l->setColour (juce::Label::textColourId, LF::text()); l->setFont (LF::fnt (10.5f, "Bold", 0.10f)); }
-    lIntensity.setText ("INTENSITY", juce::dontSendNotification); lBusy.setText ("BUSY", juce::dontSendNotification);
+    lIntensity.setText ("INTENSITY", juce::dontSendNotification); lBusy.setText ("NOTE DENSITY", juce::dontSendNotification);
     lSpace.setText ("SPACE", juce::dontSendNotification); lRepeat.setText ("REPEAT", juce::dontSendNotification);
     lGroove.setText ("GROOVE LOCK", juce::dontSendNotification); lOct.setText ("OCTAVE", juce::dontSendNotification);
 
@@ -762,14 +784,17 @@ void EnochSoloEditor::refreshArtists()
     artist.clear (juce::dontSendNotification);
     const auto idx = stylesFor (inst);
     std::string lastCat;
-    for (size_t i = 0; i < idx.size(); ++i)
-    {
-        const auto& st = allStyles()[(size_t) idx[i]];
-        if (st.cat != lastCat) { artist.addSectionHeading (st.cat); lastCat = st.cat; }
-        artist.addItem (st.name, (int) i + 1);
-    }
+    // v3.1: the Session Player Profiles are listed first (their saved numbers stay at the end of the list, so old projects keep their style)
+    for (int pass = 0; pass < 2; ++pass)
+        for (size_t i = 0; i < idx.size(); ++i)
+        {
+            const auto& st = allStyles()[(size_t) idx[i]];
+            if ((st.cat == kSessionCat) != (pass == 0)) continue;
+            if (st.cat != lastCat) { artist.addSectionHeading (st.cat == kSessionCat ? juce::String ("Session Player Profiles") : juce::String (st.cat)); lastCat = st.cat; }
+            artist.addItem (st.name, (int) i + 1);
+        }
     const int a = juce::jlimit (0, (int) idx.size() - 1, juce::roundToInt (proc.apvts.getRawParameterValue ("artist")->load()));
-    artist.setSelectedItemIndex (a, juce::dontSendNotification);
+    artist.setSelectedId (a + 1, juce::dontSendNotification);
     shownInstrument = inst;
     updatingUi = false;
     refillLibraries();
@@ -836,7 +861,7 @@ void EnochSoloEditor::refreshBarPanel()
     barBusyText.setText (! has ? juce::String ("select a bar first")
                                : juce::String (juce::roundToInt (roll.busyOfSelection() * 100.f)) + (roll.selectionHasExplicitBusy() ? "%  (own value)" : "%  (follows global)"),
                          juce::dontSendNotification);
-    for (auto* c : std::initializer_list<juce::Component*> { &barBusy, &barAuto, &barReroll, &barCopy, &barClear, &barSpeedBox })
+    for (auto* c : std::initializer_list<juce::Component*> { &barBusy, &barAuto, &barReroll, &barClearNotes, &barCopy, &barClear, &barSpeedBox })
         c->setEnabled (has);
     lBarBusy.setEnabled (has); lBarBusy.setAlpha (has ? 1.f : 0.5f);
     barAuto.setEnabled (has && roll.selectionHasExplicitBusy());
@@ -853,12 +878,12 @@ void EnochSoloEditor::timerCallback()
     {
         const auto& pl = enochsolo::snd::patchList (inst);
         const int si = juce::jlimit (0, (int) pl.size() - 1, juce::roundToInt (sp->load()));
-        if (pl[(size_t) si].kind == enochsolo::snd::K_LogDrum || pl[(size_t) si].kind == enochsolo::snd::K_Log) themeKey = 6;
+        if (enochsolo::snd::isLogKind (pl[(size_t) si].kind) || pl[(size_t) si].kind == enochsolo::snd::K_Log) themeKey = 6;
     }
     if (inst != shownInstrument) { refreshArtists(); applyTheme (themeKey); shownTheme = themeKey; }
     else if (themeKey != shownTheme) { shownTheme = themeKey; applyTheme (themeKey); }
-    else if (artist.getNumItems() > 0 && artist.getSelectedItemIndex() != juce::jlimit (0, artist.getNumItems() - 1, a))
-    { updatingUi = true; artist.setSelectedItemIndex (juce::jlimit (0, artist.getNumItems() - 1, a), juce::dontSendNotification); updatingUi = false; }
+    else if (artist.getNumItems() > 0 && artist.getSelectedId() != juce::jlimit (0, artist.getNumItems() - 1, a) + 1)
+    { updatingUi = true; artist.setSelectedId (juce::jlimit (0, artist.getNumItems() - 1, a) + 1, juce::dontSendNotification); updatingUi = false; }
     for (int i = 0; i < instButtons.size(); ++i) instButtons[i]->setToggleState (i == inst, juce::dontSendNotification);
     refreshKeySwitchText();
     refreshSounds();
@@ -875,7 +900,7 @@ void EnochSoloEditor::timerCallback()
 
     {
         const bool live = proc.apvts.getRawParameterValue ("midiOut")->load() > 0.5f;
-        liveBtn.setButtonText (live ? "LIVE MIDI OUT: ON" : "LIVE MIDI OUT: OFF");
+        liveBtn.setButtonText (live ? "LIVE OUT: ON" : "LIVE OUT: OFF");
         liveBtn.setToggleState (live, juce::dontSendNotification);
         const int locks = proc.numLockedPhrases();
         if (locks != shownLocks)
@@ -1518,7 +1543,7 @@ void EnochSoloEditor::layoutBody()
         lGrid.setBounds (0, 0, 0, 0);
         rowLayout (tb, { { &toolSelect, 58 }, { &toolDraw, 52 }, { &toolErase, 56 }, { &toolSplit, 52 }, { &toolMute, 54 }, { nullptr, 8 },
                          { &undoBtn, 52 }, { &redoBtn, 52 }, { &editBtn, 64 }, { nullptr, 8 },
-                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 } });
+                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 }, { nullptr, 6 }, { &clearAllBtn, 72 } });
         // the toggles are drawn smaller, centred in the row
         for (auto* t : { &snapGrid, &snapScale }) t->setBounds (t->getBounds().reduced (0, 4));
         gridBox.setTooltip ("Grid used for the grid lines, snapping, quantize and new-note length");
@@ -1556,6 +1581,7 @@ void EnochSoloEditor::layoutBody()
         barInfo.setBounds (l1);
         bp.removeFromTop (2);
         auto l2 = bp.removeFromTop (24);
+        barClearNotes.setBounds (l2.removeFromRight (80).reduced (2, 0));
         barReroll.setBounds (l2.removeFromRight (98).reduced (2, 0));
         barAuto.setBounds (l2.removeFromRight (54).reduced (2, 0));
         barBusyText.setBounds (l2.removeFromRight (118));
@@ -1607,10 +1633,12 @@ void EnochSoloEditor::layoutBody()
     for (auto* c : std::initializer_list<juce::Component*> { &sfLoadBtn, &sfClearBtn, &sfOnT, &sfLabel, &smpLoadBtn, &smpClearBtn, &smpOnT, &smpRootBox, &smpLabel })
         c->setVisible (false);
     roll.setBounds (r);
+    routePanel.setVisible (routeOpen);
+    if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236))); routePanel.toFront (false); }
     feelPanel.setVisible (feelOpen);
     if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); feelPanel.toFront (false); }
     ldPanel.setVisible (logOpen);
-    if (logOpen) { ldPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 250))); ldPanel.toFront (false); }
+    if (logOpen) { ldPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 272))); ldPanel.toFront (false); }
     advBg.setVisible (advanced);
     if (advanced)
     {
@@ -1647,7 +1675,8 @@ void EnochSoloEditor::layoutBody()
     }
     bottom.removeFromLeft (10);
     auto lc = bottom.removeFromLeft (juce::jmax (150, bottom.getWidth() - 8));
-    liveBtn.setBounds (lc.removeFromTop (28).reduced (2, 0)); lc.removeFromTop (4);
+    { auto lr0 = lc.removeFromTop (28); routeBtn.setBounds (lr0.removeFromRight (juce::jmin (104, lr0.getWidth() / 2)).reduced (2, 0)); liveBtn.setBounds (lr0.reduced (2, 0)); }
+    lc.removeFromTop (4);
     {
         auto lr = lc.removeFromTop (28);
         lStart.setBounds (lr.removeFromLeft (juce::jmax (70, lr.getWidth() - 62)));

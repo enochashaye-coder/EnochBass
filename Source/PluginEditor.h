@@ -9,6 +9,7 @@
 #include "EnochLook.h"
 #include "SourceBar.h"
 #include "FeelPanel.h"
+#include "RoutingPanel.h"
 #include "LogDrumPanel.h"
 
 //==============================================================================
@@ -101,6 +102,9 @@ public:
     juce::String barSelText() const;
     void clearBarSelection();
     void rerollSelectedBars();
+    void clearAllNotes();            // v3.1: blank piano roll (one undo step)
+    void selectBars (int a, int b) { barA = a; barB = b; notifyBars(); repaint(); }
+    void clearSelectedBarNotes();    // v3.1: empty the selected bars (one undo step)
     void copyChord();
     void pasteChord();
     bool hasChordClipboard() const { return chordClip.has; }
@@ -390,7 +394,7 @@ private:
                      undoBtn { "Undo" }, redoBtn { "Redo" }, editBtn { "Edit  v" }, quantizeBtn { "Quantize" }, deleteBtn { "Delete" },
                      zoomFitBtn { "Fit" }, resetChords { "Reset chords" }, ksToggle { "KEY-SWITCHES: ON" },
                      toolSelect { "Select" }, toolDraw { "Draw" }, toolErase { "Erase" }, toolSplit { "Split" }, toolMute { "Mute" },
-                     refLoad { "Load..." }, refClear { "Clear" }, barAuto { "Auto" }, barReroll { "Re-roll bars" }, barCopy { "Copy chord" }, barPaste { "Paste chord" }, barClear { "Deselect" },
+                     refLoad { "Load..." }, refClear { "Clear" }, barAuto { "Auto" }, barReroll { "Re-roll bars" }, barClearNotes { "Clear bar" }, clearAllBtn { "Clear all" }, barCopy { "Copy chord" }, barPaste { "Paste chord" }, barClear { "Deselect" },
                      phraseBtn { "Lock all phrases" }, liveBtn { "LIVE MIDI OUT: OFF" }, saveStyleBtn { "Save as my style" }, delStyleBtn { "Delete" }, learnBtn { "LEARN FROM THIS BASS LINE" }, songBtn { "FROM YOUR SONG  v" },
                      sfLoadBtn { "Load SoundFont (.sf2)..." }, sfClearBtn { "Remove" };
     juce::ToggleButton playerOn { "Test player" }, midiOut { "Send MIDI to host" }, loopT { "Loop" }, hostSync { "Follow host transport" },
@@ -403,6 +407,9 @@ private:
     LogDrumPanel ldPanel { proc };                                // v2.7: Amapiano log drum drawer
     juce::TextButton ldBtn { "LOG DRUM" };
     bool logOpen = false;
+    RoutingPanel routePanel { proc };                             // v3.0: ROUTING drawer
+    juce::TextButton routeBtn { "ROUTING" };
+    bool routeOpen = false;
     FeelPanel feelPanel { proc };                                 // v2.7 batch 2: SOUND & FEEL drawer
     juce::TextButton feelBtn { "SOUND & FEEL" };
     bool feelOpen = false;

@@ -1,4 +1,4 @@
-# Enoch Bass (v1.8)
+# Enoch Bass (v2.2)
 
 A Windows-only VST3 that writes bass-guitar MIDI for you. Choose the key and the chord of each bar, click **TRY ANOTHER** (generate), and drag the MIDI into **Toontrack EZbass** (or any bass instrument). It is built from the Enoch Solo engine and keeps its piano roll, humanize, chord-per-bar editing, groove lock and style reference. Afrobeat, Afrobeats, Amapiano and other African styles come first, then Pop, Gospel, Rock, Swing, Bossa, Samba and Latin.
 
@@ -7,6 +7,42 @@ A Windows-only VST3 that writes bass-guitar MIDI for you. Choose the key and the
 2. Open **Actions**, wait for the green tick (or run *Build Enoch Bass (Windows VST3)*).
 3. Download the `EnochBass-Windows-VST3` zip from the finished run and extract it.
 4. Close your DAW, right-click `Install-EnochBass.bat` and choose *Run as administrator*, then rescan plugins. It shows up under Instruments as **Enoch Bass**.
+
+
+
+
+## v2.2: session presets, quick routing, more synth basses
+- **13 new presets**, one per EZbass-style genre: Funk, Gospel, Neo-soul, R&B, Afrobeats, Amapiano, Reggae, Dancehall, Rock, Pop, Jazz, Kizomba and Zouk. Each uses a Session Player Profile plus the genre's Timing Feel and Note Density. A ninth bass profile, *Jazz Walking Session Bass*, is new.
+- **ROUTING > Quick setup...**: one click for EZbass (ch 4), EZbass + log drum VST (ch 4 / ch 5), Ilya Efimov Modern Bass + log drum, *Bass line to my VST*, or back to *All built-in*.
+- **6 more synth basses** ("Synth basses (v3.2)"): Moog ladder bass, Acid 303-style, Dancehall square sub, Amapiano warm saw sub, 808 short, Kizomba smooth sub.
+- **Fix:** with nothing routed, v2.0-v2.1.1 sent and exported the bass on MIDI channel 4 instead of channel 1. It is channel 1 again, as in v1.x.
+
+## v2.1: clear buttons, Note Density, new subdivisions, timing feels, session players
+
+- **Clear all** (piano-roll toolbar, next to Delete): removes every note, so the roll is blank and nothing plays. A cleared project stays blank when you reopen it. Undo brings the notes back; TRY ANOTHER writes a new take.
+- **Clear bar** (bar panel, next to Re-roll bars): click a bar number (drag for several), then Clear bar. Those bars go silent, and a note held into them stops at the bar line. Undo brings them back.
+- **Note Density** (was BUSY): 0-30 % sparse (few, long notes, lots of space), 30-70 % normal phrasing, 70-100 % dense lines and runs. Notes are added on the strongest beats and off-beats of the groove, never at random. The per-bar BAR NOTES DENSITY works the same way.
+- **Subdivision** (SOUND & FEEL): new **1/4, 1/8 and 1/8 triplets**. The line is re-phrased to move in that rhythm; 1/16T, 1/32 and 1/32T still add fast runs.
+- **Timing Feel** (SOUND & FEEL): Tight studio grid, Laid-back pocket, Pushed, Afrobeats pocket, Amapiano swing, Gospel behind the beat, Neo-soul drunk, Jazz swing, Live and loose. It works with the HUMANIZE knobs.
+- **Session Player Profiles**: new players described by how they play (no artist names), listed first in the STYLE OF menu. The older styles are all still there and old projects keep theirs.
+- **Bass articulations follow the neck** (v2.1.1): hammer-ons, pull-offs and slides never jump strings; a hammer-on wider than 4 frets becomes a slide.
+- **The log drum part has its own pattern**: two-bar amapiano phrases that interlock with the bass line instead of copying it, with pitches from the chords, rolls and held drop notes at phrase ends, following Note Density. Route the *Log drum* row (ROUTING) to your log drum VST. A bar where the bass is cleared is silent for the log drum too.
+- Bass profiles (8): Afrobeats, Amapiano, Gospel, Neo-Soul & R&B, Funk, Reggae & Dancehall, Kizomba & Zouk, Pop & Rock.
+
+## v2.0: drive your own instruments (ROUTING) and the new log drums
+**ROUTING** (bottom bar) sends the parts to your own VSTs or hardware: **Bass line** (EZbass, Ilya Efimov basses, any bass),
+**Log drum** (plays the bass line on a second channel for a log drum VST - its own pattern arrives in v2.1) and **Chord pad**.
+Per part: destination (built-in / external VST / both / hardware / off), MIDI channel, mapping profile, program change and octave.
+In Studio One set the instrument track's Input to *Enoch Bass* and the channel shown. Dragged MIDI keeps the same channels and key-switches.
+
+Profiles: **Toontrack EZbass** (notes an octave up, legato G#0, slide G0, slide down F0, palm mute C0 - check ghost / harmonic / slap with Test),
+**Ilya Efimov Modern / Classic / Fretless** (string keys, fingered / legato / slap / palm mute / harmonics / slides, auto-legato off at start,
+repetition key E4), **Retro / Rock** (same layout assumed - check with Test), **Plain bass**, and **Log drum VST: DX10 style**.
+**Edit** opens the profile editor (Learn, Test, Save profile).
+
+**Log drums rebuilt.** Eight new types built on the original *mda DX10 "Log Drum"* patch that Amapiano log drums come from
+(2-operator FM, fast modulation decay, ~0.5 s ring): ORIGINAL, CLASSIC, DEEP, PUNCHY, SUB-HEAVY, KNOCK, BACARDI, SGIJA.
+The older six types are still in the list so old projects sound the same.
 
 ## Writing a bass line
 1. **Key / Scale / Genre / Bars / Time sig**: time signature "Auto" follows your project.
@@ -18,16 +54,20 @@ A Windows-only VST3 that writes bass-guitar MIDI for you. Choose the key and the
 7. **LIVE MIDI OUT** sends the line live to a track you route the plugin's MIDI output to (routing differs per DAW).
 
 ## Instrument of choice: EZbass
-Pick **Toontrack EZbass** (the default). Enoch Bass then writes EZbass's own key-switch notes **below the bass range**, so they never play a note:
+Pick **Toontrack EZbass** (the default). Enoch Bass then writes EZbass's own key-switch notes **below the bass range**, so they never play a note.
+Note names use Toontrack's numbering (middle C = C3 = note 60). v2.0 corrects the octave: v1.x wrote these an octave too low.
 
-| Articulation | EZbass key-switch (C-1 = note 0) |
+| Articulation | EZbass key-switch |
 |---|---|
-| Legato (hammer-on / pull-off) | G#0 (hold) |
-| Slide | F#0 (hold) |
-| Ghost / dead note | E-1 (hold) |
-| Palm mute | C0 (hold; EZbass libraries that contain recorded palm mutes) |
-| Harmonic | A#-1 (hold) |
-| Slap / pop | B-1 (hold) |
+| Legato (hammer-on / pull-off) | G#0 = 32 (hold) |
+| Slide up | G0 = 31 (hold) |
+| Glissando / slide down | F0 = 29 (hold) |
+| Palm mute | C0 = 24 (hold) |
+| Ghost / dead note | E-1 = 16 (hold, unconfirmed) |
+| Harmonic | A#-1 = 22 (hold, unconfirmed) |
+| Slap / pop | B-1 = 23 (hold, unconfirmed) |
+
+The bass notes themselves are sent one octave up, which is where EZbass expects them.
 
 **Honesty note:** Toontrack does not publish one clean table of these, so the map was put together from Toontrack's release notes, its help text and review pages. They agree, but I could not open the EZbass program itself. Test one bar first. If a key is wrong in your version, copy `Examples/Instruments/Example-MyBassLibrary.enochlib` to `%APPDATA%\Enoch Bass\Instruments\`, correct the note numbers and restart: your version then appears in the dropdown. EZbass also chooses index / middle finger and fret positions by itself. "Plain bass" writes no key-switches at all (notes only), and "Standard layout" uses Enoch's own order from the Key-switch Base Note (Advanced).
 

@@ -17,13 +17,15 @@ public:
         // the six types = the "Amapiano log drums" group of the bass sound list
         const auto& list = enochsolo::snd::patchList (enochsolo::I_Bass);
         for (int i = 0; i < (int) list.size(); ++i)
-            if (list[(size_t) i].kind == enochsolo::snd::K_LogDrum)
+            if (list[(size_t) i].kind == enochsolo::snd::K_LogDX)        // v3.0: the DX10-recipe types (the v2.7 types stay in PREVIEW SOUND)
             {
                 typeIdx.push_back (i);
                 juce::String n (list[(size_t) i].name);
                 n = n.fromFirstOccurrenceOf ("Log drum: ", false, false);
                 juce::String shortName = n.upToFirstOccurrenceOf (" ", false, false).upToFirstOccurrenceOf ("-", false, false).toUpperCase();
-                if (shortName == "PERCUSSIVE") shortName = "PERC";
+                if (n.startsWith ("The Original")) shortName = "ORIGINAL";
+                if (shortName == "PERCUSSIVE") shortName = "KNOCK";
+                if (shortName == "SUB") shortName = "SUB-HEAVY";
                 auto* b = typeBtn.add (new juce::TextButton (shortName));
                 b->getProperties().set ("seg", true);
                 b->setClickingTogglesState (false);
@@ -101,15 +103,15 @@ public:
         auto r = getLocalBounds().reduced (18, 10);
         auto head = r.removeFromTop (30);
         title.setBounds (head.removeFromLeft (170));
-        resetBtn.setBounds (head.removeFromRight (90).reduced (2, 2));
-        scBtn.setBounds (head.removeFromRight (190).reduced (2, 2));
-        monoBox.setBounds (head.removeFromRight (90).reduced (2, 3));
-        lMono.setBounds (head.removeFromRight (80));
-        head.removeFromRight (6);
-        const int tw = juce::jmin (118, head.getWidth() / juce::jmax (1, typeBtn.size()));
+        const int tw = juce::jmin (112, head.getWidth() / juce::jmax (1, typeBtn.size()));
         for (auto* b : typeBtn) b->setBounds (head.removeFromLeft (tw).reduced (2, 2));
         r.removeFromTop (8);
-        state.setBounds (r.removeFromBottom (16));
+        auto foot = r.removeFromBottom (24);
+        resetBtn.setBounds (foot.removeFromRight (90).reduced (2, 1));
+        scBtn.setBounds (foot.removeFromRight (190).reduced (2, 1));
+        monoBox.setBounds (foot.removeFromRight (90).reduced (2, 2));
+        lMono.setBounds (foot.removeFromRight (80));
+        state.setBounds (foot);
         // 17 knobs: two rows (9 + 8)
         const int perRow = 9, rows = 2;
         const int rh = r.getHeight() / rows;
@@ -176,8 +178,8 @@ private:
         const int cur = currentSound();
         bool isLog = false;
         for (int i = 0; i < typeBtn.size(); ++i) { const bool on = typeIdx[(size_t) i] == cur; typeBtn[i]->setToggleState (on, juce::dontSendNotification); isLog |= on; }
-        const juce::String t = isLog ? juce::String ("These knobs shape the selected log drum type.  Tip: Bass genre Amapiano writes call-and-response log drum phrases; "
-                                                     "overlap two notes or use a Slide articulation for a glide.")
+        { const auto& pl = enochsolo::snd::patchList (enochsolo::I_Bass); if (cur >= 0 && cur < (int) pl.size()) isLog |= enochsolo::snd::isLogKind (pl[(size_t) cur].kind); }
+        const juce::String t = isLog ? juce::String ("Built on the original DX10 'Log Drum' recipe. Overlap two notes or use Slide for the glide.")
                                      : juce::String ("PREVIEW SOUND is not an Amapiano log drum - pick a type above to hear these controls "
                                                      "(the knobs are kept and apply as soon as a log drum is selected).");
         if (t != state.getText()) state.setText (t, juce::dontSendNotification);

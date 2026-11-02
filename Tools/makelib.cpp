@@ -44,6 +44,33 @@ static std::string clean (std::string s)
     return s;
 }
 
+// v3.2: each take is played by the Session Player Profile that suits the genre (its "best with" list), with the genre's timing feel
+static int sessionArtistFor (int inst, int g)
+{
+    const auto idx = stylesFor (inst);
+    const std::string gname = genreInfo (g).name, bname = genreInfo (baseGenre (g)).name;
+    int any = -1;
+    for (size_t k = 0; k < idx.size(); ++k)
+    {
+        const auto& st = allStyles()[(size_t) idx[k]];
+        if (st.cat != kSessionCat) continue;
+        if (any < 0) any = (int) k;
+        if (st.fav.find (gname) != std::string::npos) return (int) k;
+    }
+    for (size_t k = 0; k < idx.size(); ++k)
+    {
+        const auto& st = allStyles()[(size_t) idx[k]];
+        if (st.cat == kSessionCat && st.fav.find (bname) != std::string::npos) return (int) k;
+    }
+    return any >= 0 ? any : 0;
+}
+static int feelFor (int g)
+{
+    if (g == G_Amapiano || g == G_PrivateSchool || g == G_Bacardi || g == G_Sgija) return 5;
+    if (g == G_SmoothJazz) return 7;
+    switch (baseGenre (g)) { case G_AfroFusion: case G_Afrobeat: case G_Highlife: case G_Juju: return 4; case G_Gospel: return 6; case G_Swing: return 8; case G_Rock: case G_Pop: return 1; default: return 0; }
+}
+
 int main (int argc, char** argv)
 {
     namespace fs = std::filesystem;
@@ -66,7 +93,7 @@ int main (int argc, char** argv)
                 for (auto& pt : parts)
                 {
                     Settings s;
-                    s.instrument = inst; s.artist = 0; s.genre = g;
+                    s.instrument = inst; s.artist = sessionArtistFor (inst, g); s.genre = g; s.feel = feelFor (g);
                     s.keyRoot = majorGenre (g) ? 0 : 9; s.scale = majorGenre (g) ? SC_Major : SC_Minor;
                     s.bars = pt.bars; s.harmony = 1;                                      // the genre's own progressions
                     s.busy = std::clamp (h.busy + pt.busyAdd, 0.05f, 1.f);

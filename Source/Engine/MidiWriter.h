@@ -112,13 +112,13 @@ private:
     {
         struct E { uint32_t tick; int ord; std::vector<uint8_t> bytes; };
         std::vector<E> ev;
-        const uint8_t ch = (uint8_t) channel;
         auto tickOf = [] (double beats) { return (uint32_t) std::max (0.0, std::llround (beats * kPPQ) + 0.0); };
         for (auto& e : p.events)
         {
             if (e.track != track) continue;
             if (artFilter >= 0 && (e.type == EV_ON || e.type == EV_OFF) && e.art != artFilter) continue;
             E x; x.tick = tickOf (e.t); x.ord = e.ord;
+            const uint8_t ch = (uint8_t) (e.ch >= 0 ? (e.ch & 15) : channel);      // v3.0: routed parts keep their instrument's channel
             switch (e.type)
             {
                 case EV_ON:   x.bytes = { (uint8_t) (0x90 | ch), (uint8_t) e.a, (uint8_t) e.b }; break;
@@ -126,6 +126,7 @@ private:
                 case EV_CC:   x.bytes = { (uint8_t) (0xB0 | ch), (uint8_t) e.a, (uint8_t) e.b }; break;
                 case EV_AT:   x.bytes = { (uint8_t) (0xD0 | ch), (uint8_t) e.a }; break;
                 case EV_BEND: x.bytes = { (uint8_t) (0xE0 | ch), (uint8_t) (e.a & 0x7f), (uint8_t) ((e.a >> 7) & 0x7f) }; break;
+                case EV_PC:   x.bytes = { (uint8_t) (0xC0 | ch), (uint8_t) (e.a & 0x7f) }; break;
             }
             ev.push_back (std::move (x));
         }

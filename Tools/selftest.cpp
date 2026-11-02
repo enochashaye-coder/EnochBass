@@ -649,7 +649,7 @@ int main (int argc, char** argv)
                         }
                         for (auto& e : p.events) if (e.type == EV_ON && e.ord == 1 && e.track == 0)
                         {
-                            if (useLib) CHECK (e.a == 20 || e.a == 18 || e.a == 4 || e.a == 12 || e.a == 10 || e.a == 11, "EZbass: unexpected key-switch note %d", e.a);
+                            if (useLib) CHECK (e.a == 32 || e.a == 31 || e.a == 29 || e.a == 16 || e.a == 24 || e.a == 22 || e.a == 23, "EZbass: unexpected key-switch note %d", e.a);
                             else CHECK (e.a >= 12 && e.a < 28, "standard bass key-switch %d not below the bass range", e.a);
                         }
                     }

@@ -126,6 +126,28 @@ inline std::vector<Style> bassStyles()
         "density .75, rest .25, sync .6, motif .9, legato .55, stacc .3, laid 2, vel 86, ghost .06, octave .3, slide .08, step .25, dyn .3"));
     v.push_back (mkS ("Gqom Dark Bounce", B, 0, FD, "Afro-House, Amapiano", "Gqom: dark, minimal, heavy kick-bass hits with big gaps",
         "density .4, rest .55, sync .6, motif .95, legato .7, stacc .2, laid 1, vel 96, ghost .03, octave .1, slide .2, step .1, dyn .15"));
+    // ======================= v3.1 Session Player Profiles (original players, no named artists); appended so old projects keep their style
+    {
+    const char* SPC = kSessionCat;
+    v.push_back (mkS ("Afrobeats Session Bass", B, 0, SPC, "Afro-Fusion, Afrobeat, Pop", "Round, behind-the-beat Afrobeats bass: a short hook that repeats, slides into the changes, space for the drums",
+        "density .6, rest .4, sync .5, motif .85, legato .75, stacc .15, laid 8, vel 84, ghost .12, octave .15, slide .25, hammer .06, pull .06, step .25, dyn .3"));
+    v.push_back (mkS ("Amapiano Session Bass", B, 0, SPC, "Amapiano, Afro-House", "Deep sustained sub notes that leave the log drum room: long tones, slow glides, few notes",
+        "density .4, rest .55, sync .55, motif .9, legato .95, stacc 0, laid 4, vel 90, ghost .02, octave .1, slide .45, step .1, dyn .2"));
+    v.push_back (mkS ("Gospel Session Bass", B, 0, SPC, "Gospel / Soul, Pop", "Church bass: walk-ups into every change, octave pops at the shout, chromatic runs into the IV",
+        "density .72, rest .2, sync .45, motif .5, legato .65, stacc .2, laid 3, vel 90, ghost .2, octave .35, slide .2, hammer .15, pull .15, step .6, slap .1, dyn .5"));
+    v.push_back (mkS ("Neo-Soul & R&B Session Bass", B, 0, SPC, "Gospel / Soul, Smooth / Ballad, Afro-Fusion", "Lazy pocket: notes dragged behind the beat, ghosted 16ths, chromatic approach notes and slides",
+        "density .55, rest .35, sync .6, motif .7, legato .7, stacc .15, laid 14, vel 80, ghost .3, octave .12, slide .3, hammer .15, pull .15, step .45, dyn .35"));
+    v.push_back (mkS ("Funk Session Bass", B, 0, SPC, "Afrobeat, Pop, Rock", "Tight funk: 16th syncopation, octave pops and slaps, dead notes between the hits",
+        "density .85, rest .15, sync .75, motif .8, legato .35, stacc .45, laid 0, vel 96, ghost .45, octave .45, slide .08, hammer .2, pull .2, step .3, slap .45, dyn .5"));
+    v.push_back (mkS ("Reggae & Dancehall Session Bass", B, 0, SPC, "Reggae & Dub, Hip-Hop & Trap", "Heavy one-drop and riddim bass: big gaps, root-heavy hooks, the low end owns the space",
+        "density .45, rest .55, sync .6, motif .9, legato .8, stacc .15, laid 6, vel 94, ghost .05, octave .15, slide .15, step .2, dyn .2"));
+    v.push_back (mkS ("Kizomba & Zouk Session Bass", B, 0, SPC, "Caribbean, Smooth / Ballad", "Smooth, sensual groove: tresillo-based patterns, long glides and soft repeated notes",
+        "density .55, rest .35, sync .6, motif .85, legato .85, stacc .1, laid 6, vel 82, ghost .08, octave .1, slide .4, step .25, dyn .25"));
+    v.push_back (mkS ("Pop & Rock Session Bass", B, 0, SPC, "Pop, Rock", "Song-first bass: driving 8ths with the kick, simple fills into the chorus, octaves for lift",
+        "density .7, rest .25, sync .3, motif .75, legato .55, stacc .25, laid 0, vel 92, ghost .1, octave .25, slide .1, hammer .08, pull .08, step .3, palm .2, dyn .45"));
+    v.push_back (mkS ("Jazz Walking Session Bass", B, 0, SPC, "Swing Jazz, Afro-Jazz, Bossa Nova", "Walking quarters through the changes: chord tones on the beat, chromatic approach notes, a skip or a triplet now and then",
+        "density .9, rest .1, sync .15, motif .3, legato .85, stacc .05, laid 2, vel 82, ghost .12, octave .1, slide .05, step .8, dyn .3"));
+    }
     return v;
 }
 } // namespace enochsolo

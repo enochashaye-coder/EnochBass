@@ -68,18 +68,23 @@ public:
     bool isLoaded() const { return std::atomic_load (&sample) != nullptr; }
     void setRootOverride (int note) { rootOverride.store (note); }       // 0 = automatic
     void setBendRange (float semis) { bendRange = semis; }
+    /** v3.0 log drum mode: your log drum one-shot plays like the built-in log drum (overlap glide, pitch drop, rings after note-off) */
+    struct LogMode { bool on = false; float glide = 0.06f, drop = 0.f, dropT = 0.03f, tune = 0.f; };
+    void setLogMode (const LogMode& m) { logMode = m; }
 
     void noteOn (int ch, int note, int vel, int art)
     {
         auto smp = std::atomic_load (&sample);
         if (! smp) return;
         const bool legato = (art == A_Legato || art == A_HammerOn || art == A_PullOff || art == A_Slide);
-        if (legato)
+        const bool logGlide = logMode.on && logMode.glide > 0.0005f;          // a log drum glides on every overlap (amapiano slides)
+        if (legato || logGlide)
             for (auto& v : voices)
                 if (v.active && v.ch == ch && v.held && ! v.releasing)
                 {
                     v.note = note; v.vel = vel;
-                    v.glideCoef = 1.0f - std::exp (-1.0f / ((art == A_Slide ? 0.07f : 0.012f) * (float) sampleRate));
+                    const float gt = logGlide ? std::max (0.004f, logMode.glide) : (art == A_Slide ? 0.07f : 0.012f);
+                    v.glideCoef = 1.0f - std::exp (-1.0f / (gt * (float) sampleRate));
                     return;
                 }
         for (auto& v : voices) if (v.active && v.ch == ch && v.held) { v.held = false; startRelease (v, 0.03f); }    // a bass plays one note at a time
@@ -101,7 +106,7 @@ public:
     void noteOff (int ch, int note)
     {
         for (auto& v : voices)
-            if (v.active && v.ch == ch && v.note == note && v.held) { v.held = false; startRelease (v, 0.09f); }
+            if (v.active && v.ch == ch && v.note == note && v.held) { v.held = false; startRelease (v, logMode.on ? 1.2f : 0.09f); }   // a log drum rings out
     }
     void setBend (int ch, float semis) { if (ch >= 0 && ch < 16) bend[(size_t) ch] = semis; }
     void allNotesOff() { for (auto& v : voices) if (v.active) { v.held = false; startRelease (v, 0.02f); } }
@@ -118,7 +123,16 @@ public:
             for (int i = 0; i < num; ++i)
             {
                 v.curSemis += ((float) v.note - v.curSemis) * v.glideCoef;
-                const float semis = v.curSemis + bend[(size_t) v.ch];
+                float semis = v.curSemis + bend[(size_t) v.ch];
+                if (logMode.on)
+                {
+                    semis += logMode.tune;
+                    if (logMode.drop > 0.001f)
+                    {
+                        const float t = (float) v.age / sr, dT = std::max (0.004f, logMode.dropT), e3 = 0.0497871f;
+                        semis += logMode.drop * std::max (0.f, (std::exp (-t / dT) - e3) / (1.f - e3));
+                    }
+                }
                 const double ratio = std::exp2 ((double) (semis - (float) rootN) / 12.0) * v.smp->rate / (double) sr;
                 const long long i0 = (long long) v.pos;
                 if (i0 + 2 >= n) { v.active = false; break; }
@@ -156,5 +170,6 @@ private:
     std::array<float, 16> bend {};
     std::shared_ptr<const BassSample> sample;
     std::atomic<int> rootOverride { 0 };
+    LogMode logMode;
 };
 }
