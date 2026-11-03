@@ -136,8 +136,20 @@ public:
         for (auto& path : files)
         {
             const juce::File f (path); const auto e = f.getFileExtension().toLowerCase(); juce::String m;
-            if (e == ".sf2") { msg = proc.loadSoundFont (f, m) ? juce::String() : m; presetKey = {}; break; }
-            if (e == ".wav" || e == ".aif" || e == ".aiff" || e == ".flac" || e == ".mp3") { msg = proc.loadOneShot (f, m) ? juce::String() : m; break; }
+            juce::Component::SafePointer<SourceBar> self (this);     // v3.5: files load on a worker thread
+            if (e == ".sf2")
+            {
+                msg = "Loading " + f.getFileName() + " ...";
+                proc.loadSoundFontAsync (f, [self] (bool ok, juce::String r) { if (self == nullptr) return; self->msg = ok ? juce::String() : r; self->presetKey = {}; self->timerCallback(); });
+                break;
+            }
+            if (e == ".wav" || e == ".aif" || e == ".aiff" || e == ".flac" || e == ".mp3")
+            {
+                msg = "Loading " + f.getFileName() + " ...";
+                proc.loadOneShotAsync (f, [self] (bool ok, juce::String r) { if (self == nullptr) return; self->msg = ok ? juce::String() : r; self->timerCallback(); });
+                break;
+            }
+            juce::ignoreUnused (m);
         }
         timerCallback();
     }
@@ -204,9 +216,12 @@ private:
             juce::MessageManager::callAsync ([self, f]
             {
                 if (self == nullptr) return;
-                juce::String m;
-                self->msg = self->proc.loadOneShot (f, m) ? juce::String() : m;
-                self->timerCallback();
+                self->proc.loadOneShotAsync (f, [self] (bool ok, juce::String r)       // v3.5: worker thread
+                {
+                    if (self == nullptr) return;
+                    self->msg = ok ? juce::String() : r;
+                    self->timerCallback();
+                });
             });
         });
     }
@@ -223,10 +238,13 @@ private:
             juce::MessageManager::callAsync ([self, f]
             {
                 if (self == nullptr) return;
-                juce::String m;
-                self->msg = self->proc.loadSoundFont (f, m) ? juce::String() : m;
-                self->presetKey = {};
-                self->timerCallback();
+                self->proc.loadSoundFontAsync (f, [self] (bool ok, juce::String r)     // v3.5: worker thread
+                {
+                    if (self == nullptr) return;
+                    self->msg = ok ? juce::String() : r;
+                    self->presetKey = {};
+                    self->timerCallback();
+                });
             });
         });
     }

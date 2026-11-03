@@ -31,6 +31,31 @@ public:
         return true;
     }
 
+    /** v3.5: read and parse a SoundFont without touching the player (any thread, used by the loading worker) */
+    static tsf* parse (const juce::File& f, double sampleRate, juce::String& message)
+    {
+        juce::MemoryBlock mb;
+        if (! f.loadFileAsData (mb) || mb.getSize() < 64) { message = "Could not read that file."; return nullptr; }
+        tsf* t = tsf_load_memory (mb.getData(), (int) mb.getSize());
+        if (t == nullptr || tsf_get_presetcount (t) < 1) { if (t) tsf_close (t); message = "That is not a valid SoundFont (.sf2) file."; return nullptr; }
+        tsf_set_output (t, TSF_STEREO_UNWEAVED, (int) sampleRate, 0.0f);
+        tsf_set_max_voices (t, 48);
+        return t;
+    }
+    static void discard (tsf* t) { if (t) tsf_close (t); }
+    /** v3.5: put a parsed SoundFont in place (message thread); the audio thread only ever sees the old or the new one */
+    void install (tsf* t, const juce::File& f, double sampleRate)
+    {
+        tsf_set_output (t, TSF_STEREO_UNWEAVED, (int) sampleRate, 0.0f);
+        tsf* old = nullptr;
+        {
+            const juce::SpinLock::ScopedLockType sl (lock);
+            old = font; font = t; programApplied = -1; appliedPreset = -2; sr = sampleRate;
+        }
+        if (old) tsf_close (old);
+        name = f.getFileName(); path = f.getFullPathName(); loaded = true;
+    }
+
     /** shares the sample data of a SoundFont another instrument already loaded (no second copy in memory) */
     bool loadCopyOf (SoundFontPlayer& src, double sampleRate)
     {

@@ -8,7 +8,7 @@ endif()
 # static MSVC runtime: the plugin runs on any Windows PC without installing redistributables
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
 
-project(EnochBass VERSION 2.4.0 LANGUAGES C CXX)
+project(EnochBass VERSION 2.5.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -56,5 +56,7 @@ target_link_libraries(EnochBass PRIVATE
     juce::juce_recommended_warning_flags)
 
 if(MSVC)
-    target_compile_options(EnochBass PRIVATE /utf-8 /bigobj)
+    target_compile_options(EnochBass PRIVATE /utf-8 /bigobj /Zi /FS)
+    # v3.5: a .pdb symbol file is written for every build, so a crash dump can name the exact function
+    target_link_options(EnochBass_VST3 PRIVATE /DEBUG /OPT:REF /OPT:ICF)
 endif()

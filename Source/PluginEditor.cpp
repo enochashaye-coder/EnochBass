@@ -1051,10 +1051,13 @@ void EnochSoloEditor::chooseBassSample()
         juce::MessageManager::callAsync ([self, f]
         {
             if (self == nullptr) return;
-            juce::String msg;
-            if (! self->proc.loadBassSample (f, msg)) self->smpLabel.setText (msg, juce::dontSendNotification);
-            self->smpShown = "<changed>";
-            self->repaint();
+            self->proc.loadOneShotAsync (f, [self] (bool ok, juce::String msg)     // v3.5: decoded on a worker thread
+            {
+                if (self == nullptr) return;
+                if (! ok) self->smpLabel.setText (msg, juce::dontSendNotification);
+                self->smpShown = "<changed>";
+                self->repaint();
+            });
         });
     });
 }
@@ -1072,9 +1075,12 @@ void EnochSoloEditor::chooseSoundFont()
         juce::MessageManager::callAsync ([self, f]
         {
             if (self == nullptr) return;
-            juce::String msg;
-            if (! self->proc.loadSoundFont (f, msg)) self->sfLabel.setText (msg, juce::dontSendNotification);
-            self->repaint();
+            self->proc.loadSoundFontAsync (f, [self] (bool ok, juce::String msg)   // v3.5: parsed on a worker thread
+            {
+                if (self == nullptr) return;
+                if (! ok) self->sfLabel.setText (msg, juce::dontSendNotification);
+                self->repaint();
+            });
         });
     });
 }

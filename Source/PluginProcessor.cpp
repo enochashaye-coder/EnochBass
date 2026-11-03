@@ -9,6 +9,8 @@ static std::shared_ptr<enochsolo::BassSample> loadBassSample_ (const juce::File&
 #include <tuple>
 #include <thread>
 #include <future>
+void* enochPinModule();
+void enochUnpinModuleAndExitThread (void* module);
 #include <chrono>
 
 using namespace enochsolo;
@@ -243,7 +245,7 @@ EnochSoloProcessor::EnochSoloProcessor()
     seed = (uint64_t) juce::Random::getSystemRandom().nextInt64();
     hSeed = (uint64_t) juce::Random::getSystemRandom().nextInt64();
     regenerate (false, true);
-    startTimerHz (20);
+    startTimerHz (30);       // v3.5: parameter changes are applied here, so a little quicker
 }
 
 // v3.3: destroying a MIDI port that a stuck driver is still writing to used to hold up the host. The port now gets its last
@@ -253,12 +255,15 @@ static void retireMidiOut (std::shared_ptr<juce::MidiOutput> dev, const std::vec
     if (! dev) return;
     auto finished = std::make_shared<std::promise<void>>();
     auto done = finished->get_future();
-    std::thread ([dev, goodbye, finished]() mutable
+    void* pin = enochPinModule();      // v3.5: this DLL stays loaded until the thread below has finished, so removal cannot unload code it runs
+    std::thread ([dev, msgs = std::vector<juce::MidiMessage> (goodbye), finished, pin]() mutable
     {
-        for (const auto& m : goodbye) dev->sendMessageNow (m);
+        for (const auto& m : msgs) dev->sendMessageNow (m);
         dev->stopBackgroundThread();
         dev.reset();
-        finished->set_value();
+        msgs.clear(); msgs.shrink_to_fit();
+        finished->set_value(); finished.reset();
+        enochUnpinModuleAndExitThread (pin);      // Windows: lets go of the DLL and ends this thread in one step
     }).detach();
     if (waitMs > 0) done.wait_for (std::chrono::milliseconds (waitMs));
 }
@@ -266,6 +271,8 @@ static void retireMidiOut (std::shared_ptr<juce::MidiOutput> dev, const std::vec
 EnochSoloProcessor::~EnochSoloProcessor()
 {
     stopTimer();
+    alive->store (false);                  // v3.5: results of loads still on their way are dropped
+    loader.removeAllJobs (true, 4000);
     for (auto* id : kGenIds) apvts.removeParameterListener (id, this);
     for (auto* id : kFinIds) apvts.removeParameterListener (id, this);
     juce::MidiBuffer pb; buildPanic (pb);
@@ -296,7 +303,7 @@ void EnochSoloProcessor::buildPanic (juce::MidiBuffer& pb)
 // JUCE does not run processBlock while the host releases us, so the notes can be let go here
 void EnochSoloProcessor::releaseResources()
 {
-    juce::MidiBuffer pb; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0);     // added to, never overwritten: a pending panic must not be lost
+    auto& pb = rtPanic; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0);     // added to, never overwritten: a pending panic must not be lost
     player.allNotesOff();
     { const juce::SpinLock::ScopedTryLockType lk (hwLock); if (lk.isLocked() && hwOut) hwOut->sendBlockOfMessages (panicBuf, juce::Time::getMillisecondCounterHiRes() + 2.0, sr); }
     // panicBuf also goes out on the DAW output if the host runs another block
@@ -305,7 +312,7 @@ void EnochSoloProcessor::releaseResources()
 // bypassed: the DAW no longer hears this plugin's output, so every note we sent is released at once
 void EnochSoloProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
-    juce::MidiBuffer pb; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0);
+    auto& pb = rtPanic; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0);
     midi.clear(); midi.addEvents (panicBuf, 0, buffer.getNumSamples(), 0);
     { const juce::SpinLock::ScopedTryLockType lk (hwLock); if (lk.isLocked() && hwOut) hwOut->sendBlockOfMessages (panicBuf, juce::Time::getMillisecondCounterHiRes() + 2.0, sr); }
     panicBuf.clear();
@@ -316,10 +323,15 @@ void EnochSoloProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer,
 // Events that fall past the end of the block wait in the queue.
 void EnochSoloProcessor::applyDelay (std::vector<std::pair<int64_t, juce::MidiMessage>>& q, int64_t& clock, const juce::MidiBuffer& in, juce::MidiBuffer& out, int n, int64_t delaySamples)
 {
-    for (const auto meta : in) q.emplace_back (clock + meta.samplePosition + delaySamples, meta.getMessage());
+    for (const auto meta : in)
+    {
+        // v3.5: kept in time order by inserting in place (no sort and no temporary memory on the audio thread)
+        const int64_t at = clock + meta.samplePosition + delaySamples;
+        auto pos = std::upper_bound (q.begin(), q.end(), at, [] (int64_t v, const auto& e) { return v < e.first; });
+        q.insert (pos, { at, meta.getMessage() });
+    }
     if (! q.empty())
     {
-        std::stable_sort (q.begin(), q.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
         size_t keep = 0;
         for (size_t i = 0; i < q.size(); ++i)
         {
@@ -334,14 +346,15 @@ void EnochSoloProcessor::applyDelay (std::vector<std::pair<int64_t, juce::MidiMe
 
 void EnochSoloProcessor::parameterChanged (const juce::String& id, float)
 {
+    // v3.5: this is called from inside the host (its parameter call, automation on the audio thread) or from our own UI.
+    // Nothing here may call back into the host or do heavy work: it only records what changed, and the plugin's own
+    // timer does the work a moment later. (Calling back into Studio One from inside its call crashed its view tree.)
     if (loadingState) return;
-    const bool onMessageThread = juce::MessageManager::getInstance()->isThisTheMessageThread();
-    if (id == "harmony") barChords.clear();
+    if (id == "harmony") clearBarChordsPending.store (true);
     if (id == "inst" || id.startsWith ("src") || id.startsWith ("sound")) panicRequest.store (true);
-    if (id == "inst" && onMessageThread) setParam ("library", 1.f);          // libraries belong to one instrument
-    for (auto* g : kGenIds) if (id == g) { needRegen = true; if (onMessageThread) timerCallback(); return; }
+    if (id == "inst") libraryResetPending.store (true);                     // libraries belong to one instrument
+    for (auto* g : kGenIds) if (id == g) { needRegen = true; return; }
     needFinalize = true;
-    if (onMessageThread) timerCallback();
 }
 
 //==============================================================================
@@ -452,8 +465,15 @@ void EnochSoloProcessor::publishMaster()
     snap->number = ++snapCounter;
     lastBpmUsed = snap->pattern.s.bpm;
     lastTsNum = snap->pattern.s.tsNum; lastTsDen = snap->pattern.s.tsDen;
-    const juce::SpinLock::ScopedLockType l (snapLock);
-    snapshot = snap;
+    std::shared_ptr<const Snapshot> old;
+    {
+        const juce::SpinLock::ScopedLockType l (snapLock);
+        old = std::move (snapshot);
+        snapshot = snap;
+    }
+    // v3.5: an old pattern is freed here, on the message thread, once the audio thread has let go of it
+    if (old) retiredSnaps.push_back (std::move (old));
+    retiredSnaps.erase (std::remove_if (retiredSnaps.begin(), retiredSnaps.end(), [] (const auto& s) { return s.use_count() == 1; }), retiredSnaps.end());
 }
 
 void EnochSoloProcessor::regenerate (bool newSeed, bool pushHistory)
@@ -1004,6 +1024,9 @@ void EnochSoloProcessor::applyPreset (int i)
 
 void EnochSoloProcessor::timerCallback()
 {
+    // v3.5: work that parameter changes asked for, done on our own timer (never inside a host call)
+    if (clearBarChordsPending.exchange (false)) barChords.clear();
+    if (libraryResetPending.exchange (false)) setParam ("library", 1.f);
     if (lastTr && (std::abs (getF (apvts, "trClean") - lastTrClean) > 1.0e-4f || getB (apvts, "trGhosts") != lastTrGhosts)) { juce::String m; installTranscription (m); if (m.isNotEmpty()) lastTrMessage = m, ++trVersion; lastTrClean = getF (apvts, "trClean"); lastTrGhosts = getB (apvts, "trGhosts"); }
     if (auditionNote >= 0 && ! auditionHeld && (juce::int32) (juce::Time::getMillisecondCounter() - auditionOffAt) >= 0)
     {
@@ -1132,6 +1155,9 @@ void EnochSoloProcessor::auditionRelease()
 
 void EnochSoloProcessor::prepareToPlay (double sampleRate, int)
 {
+    // v3.5: everything the audio thread fills is allocated here, not while playing
+    for (auto* mb : { &rtAudition, &rtInternal, &rtAll, &rtTimed, &rtDaw, &rtHw, &rtPanic, &genBuffer, &playBuffer, &panicBuf }) mb->ensureSize (16384);
+    delayQ.reserve (8192); intQ.reserve (8192);
     sr = sampleRate;
     player.prepare (sampleRate);
     internalBeat = 0; expectedNext = -1; wasRunning = false;
@@ -1155,6 +1181,11 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     {
         const juce::SpinLock::ScopedTryLockType l (snapLock);
         if (l.isLocked()) audioSnap = snapshot;
+    }
+    // v3.5: the audio thread works on its own copy of the routes, refreshed when they change (it never waits for the editor)
+    {
+        const juce::SpinLock::ScopedTryLockType lk (routeLock);
+        if (lk.isLocked() && audioRouteVersion != routeVersion.load()) { audioRoutes = routes; audioRouteVersion = routeVersion.load(); }
     }
 
     // ---------------------------------------------------------------- host info
@@ -1181,7 +1212,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         cfg.inst = inst; cfg.sax = st.variant;
         if (auto* sp = soundParams[(size_t) slot]) cfg.sound = (int) std::lround (sp->load());
         if (auto* sp = srcParams[(size_t) slot]) cfg.src = (int) std::lround (sp->load());
-        { const auto rd = getRoute (slot, 0).dest; if (rd == RD_External || rd == RD_Hardware) cfg.src = TestPlayer::S_External; }   // v3.0: the routed instrument plays instead
+        { const auto rd = audioRoutes[(size_t) slot][0].dest; if (rd == RD_External || rd == RD_Hardware) cfg.src = TestPlayer::S_External; }   // v3.0: the routed instrument plays instead
         cfg.sfPreset = sfPresets[(size_t) slot].load();
         cfg.smpGen = smpGen[(size_t) slot].load(); cfg.sfGen = sfGen[(size_t) slot].load();
         player.setDesired (cfg);
@@ -1223,7 +1254,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         g.realism = getF (apvts, "realism") / 100.f; g.human = getF (apvts, "sndHuman") / 100.f; g.dynamics = getF (apvts, "dynamics") / 100.f;
         g.exprResp = getF (apvts, "exprResp") / 100.f; g.bright = getF (apvts, "bright") / 100.f; g.mech = getF (apvts, "mechNoise") / 100.f;
         g.mic = getF (apvts, "micPos") / 100.f; g.glideMode = juce::jlimit (0, 4, getI (apvts, "glideMode")); g.glideTime = getF (apvts, "glideTime") / 100.f;
-        g.humanPlay = getB (apvts, "humanPlay"); g.seed = (uint32_t) (master.s.seed & 0xffffffffu) | 1u;
+        g.humanPlay = getB (apvts, "humanPlay"); g.seed = (uint32_t) ((audioSnap ? audioSnap->pattern.s.seed : 1u) & 0xffffffffu) | 1u;
         player.eng.setGlobal (g);
         enochsolo::snd::Engine::ModCtl mc;
         for (int k = 0; k < 4; ++k)
@@ -1248,7 +1279,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         const auto m = meta.getMessage();
         if (m.isNoteOn()) { lastInNote = m.getNoteNumber(); lastInVel = (int) m.getVelocity(); inNoteCount.fetch_add (1); }
     }
-    juce::MidiBuffer auditionBuf;
+    auto& auditionBuf = rtAudition; auditionBuf.clear();
     auditionState.processNextMidiBuffer (auditionBuf, 0, n, true);
     midi.addEvents (auditionBuf, 0, n, 0);
 
@@ -1269,11 +1300,11 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     genBuffer.clear(); playBuffer.clear();
     // v3.0: which channels go to the DAW and which to a hardware port
     bool liveCh[16] = {}, hwCh[16] = {}; bool anyLive = false, anyHw = false;
-    const bool routedNow = anyRouted (curSlot());
+    const bool routedNow = routedIn (audioRoutes, curSlot());
     if (routedNow)
         for (int part = 0; part < kParts; ++part)
         {
-            const auto r = getRoute (curSlot(), part);
+            const auto& r = audioRoutes[(size_t) curSlot()][(size_t) part];
             const int c = juce::jlimit (0, 15, r.channel - 1);
             if (r.dest == RD_External || r.dest == RD_Both) { liveCh[c] = true; anyLive = true; }
             if (r.dest == RD_Hardware) { hwCh[c] = true; anyHw = true; }
@@ -1364,11 +1395,11 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     // ---------------------------------------------------------------- feed player (incoming MIDI + generated MIDI), sample accurate
     // the built-in sounds can be held back (Built-in Delay) to line them up with an external instrument that plays late
-    juce::MidiBuffer internalTimed;
+    auto& internalTimed = rtInternal; internalTimed.clear();
     applyDelay (intQ, intClock, playBuffer, internalTimed, n, juce::jmax<int64_t> (0, (int64_t) std::lround (getF (apvts, "internalDelayMs") * sr / 1000.0)));
     if (getB (apvts, "playerOn"))
     {
-        juce::MidiBuffer all;
+        auto& all = rtAll; all.clear();
         all.addEvents (midi, 0, n, 0);
         all.addEvents (internalTimed, 0, n, 0);
         int pos = 0;
@@ -1380,6 +1411,16 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
         if (pos < n) player.render (buffer, pos, n - pos);
     }
+    // v3.5: a fault in a sound engine (NaN / infinity) never reaches the host: the block is silenced and the voices are reset
+    {
+        bool bad = false;
+        for (int c = 0; c < buffer.getNumChannels() && ! bad; ++c)
+        {
+            const float* d = buffer.getReadPointer (c);
+            for (int i = 0; i < n; ++i) if (! std::isfinite (d[i])) { bad = true; break; }
+        }
+        if (bad) { buffer.clear(); player.reset(); engineFaults.fetch_add (1); }
+    }
 
     {
         float lv = 0.f;
@@ -1388,8 +1429,8 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
     // ---------------------------------------------------------------- MIDI out
     if (! sendMidiOut && wasSendingOut) flushHeld();               // switched off while notes were sounding
-    if (panicRequest.exchange (false)) { juce::MidiBuffer pb; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0); }
-    juce::MidiBuffer timed;
+    if (panicRequest.exchange (false)) { auto& pb = rtPanic; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0); }
+    auto& timed = rtTimed; timed.clear();
     applyDelay (delayQ, sampleClock, genBuffer, timed, n, juce::jmax<int64_t> (0, (int64_t) std::lround (getF (apvts, "midiDelayMs") * sr / 1000.0) + getI (apvts, "midiDelaySamp")));
     midi.clear();
     if (panicBuf.getNumEvents() > 0)
@@ -1410,7 +1451,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (routedNow && (anyHw || ! getB (apvts, "midiOut")))
         {
             // split by channel: DAW parts stay on the plugin output, hardware parts go to the port (Built-in-only parts are not sent)
-            juce::MidiBuffer daw, hw;
+            auto& daw = rtDaw; auto& hw = rtHw; daw.clear(); hw.clear();
             for (const auto meta : timed)
             {
                 const auto m = meta.getMessage();
@@ -1953,6 +1994,65 @@ bool EnochSoloProcessor::loadSoundFont (const juce::File& f, juce::String& messa
     return true;
 }
 
+// v3.5 file loading on a worker thread ----------------------------------------------------------------------------------------
+void EnochSoloProcessor::loadSoundFontAsync (const juce::File& f, std::function<void (bool, juce::String)> done)
+{
+    const int slot = curSlot();
+    // the same file is already loaded for another instrument: its samples are shared (quick, no file access)
+    for (int o = 0; o < TestPlayer::kSlots; ++o)
+        if (o != slot && player.slotSF (o).isLoaded() && player.slotSF (o).path == f.getFullPathName())
+        {
+            juce::String m; const bool ok = loadSoundFont (f, m);
+            if (done) done (ok, m);
+            return;
+        }
+    ++loadingJobs;
+    auto token = alive; const double rate = sr;
+    loader.addJob ([this, token, f, slot, rate, done]
+    {
+        juce::String m;
+        tsf* t = SoundFontPlayer::parse (f, rate, m);          // file read + parse: worker thread only
+        juce::MessageManager::callAsync ([this, token, f, slot, t, m, done]
+        {
+            if (! token->load()) { SoundFontPlayer::discard (t); return; }
+            --loadingJobs;
+            if (t == nullptr) { if (done) done (false, m); return; }
+            player.slotSF (slot).install (t, f, sr);
+            sfPaths[(size_t) slot] = f.getFullPathName();
+            sfPresets[(size_t) slot] = -1;
+            sfGen[(size_t) slot].fetch_add (1);
+            setParam (("src" + juce::String (slot)).toRawUTF8(), (float) TestPlayer::S_SoundFont);
+            setParam ("sfOn", 1.f);
+            if (done) done (true, juce::String());
+        });
+    });
+}
+
+void EnochSoloProcessor::loadOneShotAsync (const juce::File& f, std::function<void (bool, juce::String)> done)
+{
+    const int slot = curSlot();
+    ++loadingJobs;
+    auto token = alive;
+    loader.addJob ([this, token, f, slot, done]
+    {
+        juce::String m;
+        auto s = loadBassSample_ (f, m);                     // file read + decode: worker thread only
+        juce::MessageManager::callAsync ([this, token, f, slot, s, m, done]
+        {
+            if (! token->load()) return;
+            --loadingJobs;
+            if (! s) { if (done) done (false, m); return; }
+            player.setSlotSample (slot, s);
+            smpPaths[(size_t) slot] = f.getFullPathName();
+            smpGen[(size_t) slot].fetch_add (1);
+            setParam ("smpRoot", 0.f);
+            setParam (("src" + juce::String (slot)).toRawUTF8(), (float) TestPlayer::S_OneShot);
+            setParam ("smpOn", 1.f);
+            if (done) done (true, juce::String());
+        });
+    });
+}
+
 void EnochSoloProcessor::clearSoundFont()
 {
     const int slot = curSlot();
@@ -2260,23 +2360,28 @@ void EnochSoloProcessor::setRoute (int slot, int part, const PartRoute& r)
         routes[(size_t) juce::jlimit (0, TestPlayer::kSlots - 1, slot)][(size_t) juce::jlimit (0, kParts - 1, part)] = r;
     }
     openHardwareFor (slot);
-    routesChanged = true;
+    routesChanged = true; ++routeVersion;
     refinalize();
 }
 
-bool EnochSoloProcessor::anyRouted (int slot) const
+bool EnochSoloProcessor::routedIn (const RouteTable& rs, int slot)
 {
-    const juce::SpinLock::ScopedLockType lk (routeLock);
     // v3.2: routing is on when a part leaves Enoch (external VST, both, hardware) or a part was switched Off. The Enoch Bass log drum
     // row starts Off (there is no log drum until you route one), so on its own it does not switch routing on.
     const int sl = juce::jlimit (0, TestPlayer::kSlots - 1, slot);
     for (int part = 0; part < kParts; ++part)
     {
-        const auto& r = routes[(size_t) sl][(size_t) part];
+        const auto& r = rs[(size_t) sl][(size_t) part];
         if (r.dest == RD_External || r.dest == RD_Both || r.dest == RD_Hardware) return true;
         if (r.dest == RD_Off && ! (sl == 5 && part == 1)) return true;
     }
     return false;
+}
+
+bool EnochSoloProcessor::anyRouted (int slot) const
+{
+    const juce::SpinLock::ScopedLockType lk (routeLock);
+    return routedIn (routes, slot);
 }
 
 std::shared_ptr<const enochsolo::Library> EnochSoloProcessor::libraryByName (int inst, const juce::String& name) const
@@ -2372,7 +2477,7 @@ void EnochSoloProcessor::routesFromTree (const juce::ValueTree& t)
             r.transpose = juce::jlimit (-48, 48, (int) c.getProperty ("transpose", 0)); r.port = c.getProperty ("port").toString();
         }
     }
-    routesChanged = true;
+    routesChanged = true; ++routeVersion;
 }
 
 bool EnochSoloProcessor::saveProfile (const enochsolo::Library& l, juce::String& message)

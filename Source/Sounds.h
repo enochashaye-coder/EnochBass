@@ -389,7 +389,7 @@ struct Chorus
     void set (int mode) { depth = mode == 0 ? 0.f : (mode == 1 ? 0.0016f : 0.0030f); mix = mode == 0 ? 0.f : (mode == 1 ? 0.35f : 0.5f); rate = mode == 2 ? 0.38f : 0.62f; }
     static float tap (const std::vector<float>& b, int w, int size, float d)
     {
-        float rp = (float) w - d; while (rp < 0) rp += (float) size;
+        float rp = (float) w - d; if (! std::isfinite (rp)) rp = 0.f; else if (rp < 0) rp += (float) size * std::ceil (-rp / (float) size);
         const int i0 = (int) rp; const float fr = rp - (float) i0; const int mask = size - 1;
         return b[(size_t) (i0 & mask)] * (1.f - fr) + b[(size_t) ((i0 + 1) & mask)] * fr;
     }
@@ -1186,8 +1186,8 @@ private:
         const float m = -std::sin (q[1]);                                                     // the DX10 recursive sine starts as -sin
         q[2] += q[4] * (q[3] - q[2]);                                                        // modulation index envelope
         float x = q[0] + dcar + m * q[2];
-        while (x > 1.f) x -= 2.f;
-        while (x < -1.f) x += 2.f;
+        if (! std::isfinite (x)) x = 0.f;                                              // v3.5: never loop on a broken value
+        else if (x > 1.f || x < -1.f) x -= 2.f * std::floor ((x + 1.f) * 0.5f);      // back into -1..1 in one step
         q[0] = x;
         const float w = std::clamp (v.par[7], -1.f, 0.6f);
         float body = q[6] * (v.par[8] * m + (x + x * x * x * (w * x * x - 1.f - w)));
@@ -1905,7 +1905,7 @@ private:
         {
             const int n = (int) erBuf.size();
             erBuf[(size_t) erW] = 0.5f * (L + R);
-            auto tap = [&] (float ms) { int r = erW - (int) (ms * 0.001f * sr); while (r < 0) r += n; return erBuf[(size_t) r]; };
+            auto tap = [&] (float ms) { int r = erW - (int) (ms * 0.001f * sr); if (n <= 0) return 0.f; r = ((r % n) + n) % n; return erBuf[(size_t) r]; };
             const float a = tap (7.3f), b = tap (11.9f), c = tap (17.1f), d = tap (23.7f);
             L += erMix * (0.6f * a + 0.35f * c); R += erMix * (0.6f * b + 0.35f * d);
             erW = (erW + 1) % n;
@@ -1966,7 +1966,7 @@ private:
         }
         const int n = (int) fxL.size();
         fxL[(size_t) fxW] = L; fxR[(size_t) fxW] = R;
-        auto rd = [&] (const std::vector<float>& b, float dSamp) { float rp = (float) fxW - dSamp; while (rp < 0.f) rp += (float) n; const int i0 = (int) rp; const float fr = rp - (float) i0; return b[(size_t) (i0 % n)] * (1.f - fr) + b[(size_t) ((i0 + 1) % n)] * fr; };
+        auto rd = [&] (const std::vector<float>& b, float dSamp) { float rp = (float) fxW - dSamp; if (! std::isfinite (rp)) rp = 0.f; else if (rp < 0.f) rp += (float) n * std::ceil (-rp / (float) n); const int i0 = (int) rp; const float fr = rp - (float) i0; return b[(size_t) (i0 % n)] * (1.f - fr) + b[(size_t) ((i0 + 1) % n)] * fr; };
         switch (mmc.fx)
         {
             case 1:   // tape wobble: slow wow + fast flutter on a short delay (pitch drifts like an old tape)

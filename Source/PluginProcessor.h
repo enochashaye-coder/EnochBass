@@ -131,6 +131,12 @@ public:
 
     /** SoundFont (.sf2) for the built-in test player: the preview plays through it instead of the built-in sounds */
     bool loadSoundFont (const juce::File& f, juce::String& message);
+    // v3.5: files are read and decoded on a worker thread; done (ok, message) runs on the message thread once the sound is in
+    // place. The previous sound keeps playing while a file loads, and stays if the file cannot be used.
+    void loadSoundFontAsync (const juce::File& f, std::function<void (bool, juce::String)> done);
+    void loadOneShotAsync (const juce::File& f, std::function<void (bool, juce::String)> done);
+    bool isLoadingFile() const { return loadingJobs.load() > 0; }
+    int engineFaultCount() const { return engineFaults.load(); }
     void clearSoundFont();
     /** one-shot bass sound for the built-in preview: any single bass note recording (WAV / AIFF / FLAC / MP3) */
     bool loadBassSample (const juce::File& f, juce::String& message);
@@ -147,6 +153,8 @@ public:
     enum RouteDest { RD_Builtin = 0, RD_External, RD_Both, RD_Hardware, RD_Off };
     struct PartRoute { int dest = RD_Builtin; int channel = 1; juce::String profile; int program = -1; int transpose = 0; juce::String port; };
     static constexpr int kParts = 3;
+    using RouteTable = std::array<std::array<PartRoute, kParts>, TestPlayer::kSlots>;
+    static bool routedIn (const RouteTable& rs, int slot);      // v3.5: routing on for an instrument (no lock: works on a copy)
     PartRoute getRoute (int slot, int part) const;
     void setRoute (int slot, int part, const PartRoute& r);
     static juce::StringArray partNames();
@@ -248,6 +256,13 @@ private:
 
     // state
     mutable juce::SpinLock snapLock;
+    std::vector<std::shared_ptr<const Snapshot>> retiredSnaps;   // v3.5: old patterns are freed on the message thread, not the audio thread
+    juce::MidiBuffer rtAudition, rtInternal, rtAll, rtTimed, rtDaw, rtHw, rtPanic;   // v3.5: reused by the audio thread (no allocation while playing)
+    std::atomic<int> engineFaults { 0 };                         // v3.5: blocks a sound engine produced NaN / infinity in (silenced)
+    std::atomic<bool> clearBarChordsPending { false }, libraryResetPending { false };   // v3.5: work deferred from parameterChanged
+    std::atomic<int> loadingJobs { 0 };
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);   // false once this instance is being destroyed
+    juce::ThreadPool loader { 1 };                               // v3.5: file loading worker
     std::shared_ptr<const Snapshot> snapshot;       // guarded by snapLock
     std::shared_ptr<const Snapshot> audioSnap;      // audio-thread copy
     int snapCounter = 0;
@@ -273,6 +288,9 @@ private:
     std::array<std::array<PartRoute, kParts>, TestPlayer::kSlots> routes;
     mutable juce::SpinLock routeLock;
     std::atomic<bool> routesChanged { false };
+    RouteTable audioRoutes {};                                   // v3.5: the audio thread's own copy of the routes
+    int audioRouteVersion = -1;
+    std::atomic<int> routeVersion { 0 };
     std::shared_ptr<juce::MidiOutput> hwOut; juce::String hwOpenId; juce::SpinLock hwLock;
     juce::MidiBuffer testBuf; juce::SpinLock testLock;
     std::atomic<bool> panicRequest { false };

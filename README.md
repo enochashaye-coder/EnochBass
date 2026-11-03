@@ -1,4 +1,11 @@
-# Enoch Bass (v2.4)
+# Enoch Bass (v2.5)
+## v2.5: Stability (Studio One freezes)
+- Changing the key, scale, genre, artist, instrument or sound source no longer makes the plugin call back into the DAW, or rebuild the song, from inside the DAW's own call. The work happens on the plugin's own timer a moment later. (The Studio One crash dump showed it crashing in its own window code right after calling into Enoch.)
+- SoundFonts and one-shots load on a background thread. The previous sound keeps playing while a file loads and stays if the file cannot be used; the status line shows "Loading ..." meanwhile.
+- The audio thread no longer waits for any lock the editor holds, no longer allocates or frees memory while playing, and never reads the editor's copy of the song.
+- Sound engines: a broken value can no longer trap the audio thread in an endless loop. A block that contains NaN or infinity is silenced and the voices are reset instead of reaching the DAW.
+- Removing the plugin while a hardware MIDI port is closing can no longer unload code that is still running.
+- Every build now writes a .pdb symbol file (a separate "Symbols" download in GitHub Actions), so a crash dump can name the exact function.
 ## v2.4: Bar locks, scale lock, grid visibility, dropdown stepping
 - **LOCK BAR** (bar panel, selected bars): keeps their notes exactly as they are when the song is regenerated (genre, artist, key, instrument...). Editing a locked bar updates its lock. Locks are saved with the project.
 - **LOCK SCALE** (bar panel): the notes of the selected bars stay in their chord scale. Dragging a note steps to the next scale tone in the direction of the drag, and out-of-scale notes are fitted at once (Undo reverts).
