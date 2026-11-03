@@ -54,8 +54,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
     choice ("inst", "Instrument", insts, I_Bass);
     l.add (std::make_unique<juce::AudioParameterInt> (P { "artist", 1 }, "Bass Style", 0, std::max (1, maxArtists() - 1), 0));
     choice ("genre", "Genre", choices (G_Count, [] (int i) { return genreInfo (i).name; }), G_Afrobeat);
-    choice ("key", "Key", kKeys, 9);
-    choice ("scale", "Scale", choices (SC_Count, [] (int i) { return scaleName (i); }), SC_Minor);
+    choice ("key", "Key", kKeys, 0);          // v3.7: C major by default
+    choice ("scale", "Scale", choices (SC_Count, [] (int i) { return scaleName (i); }), SC_Major);
     choice ("ts", "Time Signature", kTimeSigs, 0);
     choice ("bars", "Bass Length (bars)", kBars, 3);
     flt ("intensity", "Intensity", 0.f, 1.f, 0.6f);
@@ -115,10 +115,29 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
 
     boolean ("playerOn", "Test Player", true);
     boolean ("midiOut", "Send MIDI to Host", false);
-    flt ("midiDelayMs", "MIDI Delay (ms)", 0.f, 200.f, 0.f);
+    flt ("midiDelayMs", "MIDI Delay (ms)", -200.f, 200.f, 0.f);      // v3.7: below 0 = early
     l.add (std::make_unique<juce::AudioParameterInt> (P { "midiDelaySamp", 1 }, "MIDI Delay (samples)", 0, 4000, 0));
     flt ("internalDelayMs", "Built-in Delay (ms)", 0.f, 400.f, 0.f);
     flt ("gridVis", "Grid Visibility", 0.f, 100.f, 50.f);
+    // v3.7 output section of the built-in sound
+    flt ("masterVol", "Master Volume (dB)", -60.f, 6.f, -3.f);
+    flt ("partLvl1", "Part 1 Level (%)", 0.f, 150.f, 100.f);
+    flt ("partLvl2", "Part 2 Level (%)", 0.f, 150.f, 100.f);
+    flt ("partLvl3", "Part 3 Level (%)", 0.f, 150.f, 100.f);
+    boolean ("compOn", "Compressor On", false);
+    flt ("compThresh", "Compressor Threshold (dB)", -40.f, 0.f, -18.f);
+    flt ("compRatio", "Compressor Ratio", 1.f, 20.f, 3.f);
+    flt ("compAttack", "Compressor Attack (ms)", 0.1f, 100.f, 10.f);
+    flt ("compRelease", "Compressor Release (ms)", 10.f, 1000.f, 150.f);
+    flt ("compKnee", "Compressor Knee (dB)", 0.f, 12.f, 6.f);
+    flt ("compMakeup", "Compressor Makeup (dB)", 0.f, 24.f, 0.f);
+    boolean ("limOn", "Safe Output (limiter)", true);
+    flt ("limCeiling", "Limiter Ceiling (dB)", -12.f, 0.f, -1.f);
+    flt ("limRelease", "Limiter Release (ms)", 10.f, 500.f, 80.f);
+    // v3.7 TRY ANOTHER keeps
+    boolean ("keepRhythm", "Try Another: Keep Rhythm", false);
+    boolean ("keepNotes", "Try Another: Keep Notes", false);
+    boolean ("keepArts", "Try Another: Keep Articulations", false);
     l.add (std::make_unique<juce::AudioParameterBool> (P { "lockScaleAll", 1 }, "Lock Scale (all bars)", false));
     boolean ("loop", "Loop Playback", true);
     boolean ("hostSync", "Follow Host Transport", true);
@@ -449,6 +468,9 @@ std::shared_ptr<EnochSoloProcessor::Snapshot> EnochSoloProcessor::makeSnapshot (
     for (auto& e : p.playEvents)
     {
         const int ch = e.track + 1;
+        // v3.6: the pattern's key-switches reach the built-in player as their own message (poly aftertouch on the switch key), so a
+        // bass or melody note that happens to sit on a key-switch pitch (F1 = 29 in EZbass numbering, for example) still sounds
+        if (e.ks) { if (e.type == EV_ON) snap->testEvents.push_back ({ e.t, juce::MidiMessage::aftertouchChange (ch, e.a, 127) }); continue; }
         juce::MidiMessage m;
         switch (e.type)
         {
@@ -1077,7 +1099,64 @@ void EnochSoloProcessor::tryAnother()
 {
     needRegen = false; needFinalize = false;
     pushUndo();
+    // v3.7: TRY ANOTHER can keep the rhythm, the notes or the articulations of the current take
+    const bool kr = getB (apvts, "keepRhythm"), kn = getB (apvts, "keepNotes"), ka = getB (apvts, "keepArts");
+    const Pattern old = master;
     regenerate (true, true);
+    if ((kr || kn || ka) && ! old.raw.empty()) applyKeeps (old, kr, kn, ka);
+}
+
+// v3.7: the new take borrows the rhythm, the notes or the articulations of the previous take (main part). Pitches are fitted into the
+// new take's chord scale; locked bars stay as they were.
+void EnochSoloProcessor::applyKeeps (const Pattern& old, bool keepRhythm, bool keepNotes, bool keepArts)
+{
+    auto mainOf = [] (const Pattern& p)
+    {
+        std::vector<Note> v;
+        for (auto& x : p.raw) if (x.track == 0 && ! x.mute) v.push_back (x);
+        std::stable_sort (v.begin(), v.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+        return v;
+    };
+    const auto o = mainOf (old), f = mainOf (master);
+    if (o.empty() || f.empty()) return;
+    auto pick = [] (const std::vector<Note>& v, size_t i, size_t count) -> const Note& { return v[std::min (v.size() - 1, i * v.size() / std::max<size_t> (1, count))]; };
+    std::vector<Note> res = keepRhythm ? o : f;
+    for (size_t i = 0; i < res.size(); ++i)
+    {
+        if (keepRhythm && ! keepNotes) res[i].pitch = pick (f, i, res.size()).pitch;
+        if (keepNotes && ! keepRhythm) res[i].pitch = pick (o, i, res.size()).pitch;
+        if (keepArts) res[i].art = pick (o, i, res.size()).art;
+        else if (keepRhythm) res[i].art = pick (f, i, res.size()).art;
+        res[i].pitch = enochsolo::barlock::snapInScale (res[i].pitch, enochsolo::barlock::scaleMaskAt (master, res[i].start), 0);
+    }
+    std::vector<Note> raw;
+    for (auto& x : master.raw) if (! (x.track == 0 && ! x.mute)) raw.push_back (x);
+    for (auto x : res) { x.id = master.nextId++; raw.push_back (x); }
+    std::stable_sort (raw.begin(), raw.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+    master.raw = std::move (raw);
+    applyBarLocks (master, true);
+    Settings s = editSettings(); s.barChords = master.s.barChords;
+    Generator::finalize (master, s);
+    publishMaster();
+}
+
+// v3.7: taps (mouse, keys or MIDI) become a rhythm reference: the take is written on that rhythm and TRY ANOTHER keeps it
+void EnochSoloProcessor::useTappedRhythm (const std::vector<TapHit>& hits, double bpmUsed)
+{
+    if (hits.size() < 3) return;
+    auto prof = std::make_shared<RefProfile>();
+    prof->name = "Tapped rhythm (" + std::to_string (hits.size()) + " taps)";
+    prof->fromMidi = true; prof->bpm = bpmUsed > 20.0 ? bpmUsed : 120.0; prof->phase = 0.0;
+    const double t0 = hits.front().ms;
+    for (auto& h : hits)
+    {
+        RefRaw r; r.t = (h.ms - t0) / 1000.0; r.dur = std::max (0.03, h.durMs / 1000.0); r.loud = juce::jlimit (0.05f, 1.f, h.loud); r.pitch = -1;
+        prof->notes.push_back (r);
+    }
+    prof->lengthSec = prof->notes.back().t + prof->notes.back().dur;
+    refProfile = prof;
+    if (getF (apvts, "refAmount") < 0.85f) setParam ("refAmount", 0.9f);
+    tryAnother();
 }
 
 void EnochSoloProcessor::historyBack()
@@ -1164,6 +1243,7 @@ void EnochSoloProcessor::prepareToPlay (double sampleRate, int)
     // v3.5: everything the audio thread fills is allocated here, not while playing
     for (auto* mb : { &rtAudition, &rtInternal, &rtAll, &rtTimed, &rtDaw, &rtHw, &rtPanic, &genBuffer, &playBuffer, &panicBuf }) mb->ensureSize (16384);
     delayQ.reserve (8192); intQ.reserve (8192);
+    outStage.prepare (sampleRate);            // v3.7
     sr = sampleRate;
     player.prepare (sampleRate);
     internalBeat = 0; expectedNext = -1; wasRunning = false;
@@ -1280,10 +1360,13 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     { const int ri = getI (apvts, "smpRoot"); player.smp.setRootOverride (ri > 0 ? 11 + ri : 0); }
 
     // notes auditioned from the piano roll join the incoming MIDI
+    const double blockStartMs = juce::Time::getMillisecondCounterHiRes();
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
         if (m.isNoteOn()) { lastInNote = m.getNoteNumber(); lastInVel = (int) m.getVelocity(); inNoteCount.fetch_add (1); }
+        if (tapArmed.load() && (m.isNoteOn() || m.isNoteOff()))       // v3.7: TAP drawer open: MIDI notes are taps
+            pushTap (blockStartMs + meta.samplePosition * 1000.0 / sr, m.isNoteOn(), (int) m.getVelocity());
     }
     auto& auditionBuf = rtAudition; auditionBuf.clear();
     auditionState.processNextMidiBuffer (auditionBuf, 0, n, true);
@@ -1342,6 +1425,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     {
         if (lastPlayedSnap != nullptr && wasRunning)
         {
+            chasePending = true;          // v3.7: the notes that should be sounding start again below
             player.allNotesOff();
             if (sendMidiOut || wasSendingOut)
             {
@@ -1360,20 +1444,60 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (loop && len > 0 && b0 >= 0.0) b0 = std::fmod (b0, len);
         const bool discontinuity = ! wasRunning || expectedNext < 0 || std::abs (b0 - expectedNext) > std::max (0.02, blockBeats * 0.75);
         if (discontinuity && wasRunning) { player.allNotesOff(); intQ.clear(); if (sendMidiOut) flushHeld(); }
+        // v3.7: MIDI Delay below 0 sends the external notes early (the take is known ahead), for a DAW that plays a live-monitored
+        // instrument late. Above 0 they are held back as before (applyDelay below).
+        const double leadBeats = juce::jmax (0.0, -(double) getF (apvts, "midiDelayMs")) * bpm / 60000.0;
+        auto runWin = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double from, double to, double sampleBase, bool atStart)
+        {
+            if (to <= from) return;
+            auto it = std::lower_bound (evs.begin(), evs.end(), from, [] (const Playback& e, double v) { return e.beat < v; });
+            for (; it != evs.end() && it->beat < to; ++it)
+            {
+                const int pos = atStart ? 0 : (int) std::lround (sampleBase + (it->beat - from) * 60.0 * sr / bpm);
+                dest.addEvent (it->msg, juce::jlimit (0, n - 1, pos));
+            }
+        };
         auto emit = [&] (double from, double to, double sampleBase)
         {
-            auto run = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest)
+            runWin (audioSnap->testEvents, playBuffer, from, to, sampleBase, false);
+            if (! sendMidiOut) return;
+            double a = from + leadBeats, b = to + leadBeats;
+            if (loop && len > 0)
             {
-                auto it = std::lower_bound (evs.begin(), evs.end(), from, [] (const Playback& e, double v) { return e.beat < v; });
-                for (; it != evs.end() && it->beat < to; ++it)
+                if (a >= len) { a -= len; b -= len; }
+                if (b > len)
                 {
-                    const int pos = (int) std::lround (sampleBase + (it->beat - from) * 60.0 * sr / bpm);
-                    dest.addEvent (it->msg, juce::jlimit (0, n - 1, pos));
+                    runWin (audioSnap->events, genBuffer, a, len, sampleBase, false);
+                    runWin (audioSnap->events, genBuffer, 0.0, b - len, sampleBase + (len - a) * 60.0 * sr / bpm, false);
+                    return;
                 }
-            };
-            run (audioSnap->testEvents, playBuffer);
-            if (sendMidiOut) run (audioSnap->events, genBuffer);
+            }
+            runWin (audioSnap->events, genBuffer, a, b, sampleBase, false);
         };
+        // starting (or jumping) with MIDI sent early: the notes that are already due go out at once instead of being skipped
+        if (discontinuity && sendMidiOut && leadBeats > 0.0) runWin (audioSnap->events, genBuffer, b0, b0 + leadBeats, 0.0, true);
+        // v3.7: a new take arrived while playing (key change, Try Another...): notes that should be sounding now start again, so a
+        // held root note is not lost until its next note-on
+        if (chasePending)
+        {
+            chasePending = false;
+            auto chaseInto = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double at)
+            {
+                if (loop && len > 0) at = std::fmod (at, len);
+                for (auto& row : chaseHeld) row.fill (-1);
+                auto it = std::lower_bound (evs.begin(), evs.end(), at - 64.0, [] (const Playback& e, double v) { return e.beat < v; });
+                for (; it != evs.end() && it->beat < at - 1e-9; ++it)
+                {
+                    const auto& m = it->msg;
+                    const int c = juce::jlimit (0, 15, m.getChannel() - 1);
+                    if (m.isNoteOn()) chaseHeld[(size_t) c][(size_t) m.getNoteNumber()] = (int) (it - evs.begin());
+                    else if (m.isNoteOff()) chaseHeld[(size_t) c][(size_t) m.getNoteNumber()] = -1;
+                }
+                for (auto& row : chaseHeld) for (int k : row) if (k >= 0) dest.addEvent (evs[(size_t) k].msg, 0);
+            };
+            chaseInto (audioSnap->testEvents, playBuffer, b0);
+            if (sendMidiOut) chaseInto (audioSnap->events, genBuffer, b0 + leadBeats);
+        }
         double endBeat = b0 + blockBeats;
         if (loop && len > 0 && endBeat > len)
         {
@@ -1405,15 +1529,26 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     applyDelay (intQ, intClock, playBuffer, internalTimed, n, juce::jmax<int64_t> (0, (int64_t) std::lround (getF (apvts, "internalDelayMs") * sr / 1000.0)));
     if (getB (apvts, "playerOn"))
     {
-        auto& all = rtAll; all.clear();
-        all.addEvents (midi, 0, n, 0);
-        all.addEvents (internalTimed, 0, n, 0);
+        // v3.6: notes of the pattern always sound; only notes played in from the DAW / a keyboard can act as key-switches by pitch
         int pos = 0;
-        for (const auto meta : all)
+        const float partLevel[3] = { getF (apvts, "partLvl1") / 100.f, getF (apvts, "partLvl2") / 100.f, getF (apvts, "partLvl3") / 100.f };   // v3.7
+        auto ia = midi.cbegin(), ib = internalTimed.cbegin();
+        while (ia != midi.cend() || ib != internalTimed.cend())
         {
+            const bool fromIn = ib == internalTimed.cend() || (ia != midi.cend() && (*ia).samplePosition <= (*ib).samplePosition);
+            const auto meta = fromIn ? *ia : *ib;
+            if (fromIn) ++ia; else ++ib;
             const int t = juce::jlimit (0, n, meta.samplePosition);
             if (t > pos) { player.render (buffer, pos, t - pos); pos = t; }
-            player.handle (meta.getMessage());
+            auto msg = meta.getMessage();
+            if (! fromIn && msg.isNoteOn() && msg.getChannel() >= 1 && msg.getChannel() <= 3)
+            {
+                const float lv = partLevel[msg.getChannel() - 1];
+                if (lv <= 0.005f) continue;                           // part turned all the way down
+                if (std::abs (lv - 1.f) > 0.001f)
+                    msg = juce::MidiMessage::noteOn (msg.getChannel(), msg.getNoteNumber(), (juce::uint8) juce::jlimit (1, 127, (int) std::lround (msg.getVelocity() * lv)));
+            }
+            player.handle (msg, ! fromIn);
         }
         if (pos < n) player.render (buffer, pos, n - pos);
     }
@@ -1426,6 +1561,17 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             for (int i = 0; i < n; ++i) if (! std::isfinite (d[i])) { bad = true; break; }
         }
         if (bad) { buffer.clear(); player.reset(); engineFaults.fetch_add (1); }
+    }
+    // v3.7 output section: master volume, optional compressor, Safe Output limiter (on by default), meter values for the editor
+    {
+        enochsolo::OutputStage::Settings os;
+        os.masterDb = getF (apvts, "masterVol");
+        os.compOn = getB (apvts, "compOn"); os.threshDb = getF (apvts, "compThresh"); os.ratio = getF (apvts, "compRatio");
+        os.attackMs = getF (apvts, "compAttack"); os.releaseMs = getF (apvts, "compRelease"); os.kneeDb = getF (apvts, "compKnee"); os.makeupDb = getF (apvts, "compMakeup");
+        os.limOn = getB (apvts, "limOn"); os.ceilingDb = getF (apvts, "limCeiling"); os.limReleaseMs = getF (apvts, "limRelease");
+        outStage.process (buffer, n, os);
+        outPeakV[0].store (outStage.peak[0]); outPeakV[1].store (outStage.peak[1]); outGrV.store (outStage.gainReductionDb);
+        if (outStage.clipped) outClipV.store (true);
     }
 
     {
@@ -1558,6 +1704,8 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         state.setProperty ("barChords", bc, nullptr);
         state.setProperty ("scaleLockBars", juce::String (enochsolo::barlock::saveSet (scaleLockBars)), nullptr);
         state.setProperty ("lockedBars", juce::String (enochsolo::barlock::saveSaved (lockedBars)), nullptr);
+        state.setProperty ("editorW", editorW.load(), nullptr);   // v3.7: window size of this project
+        state.setProperty ("editorH", editorH.load(), nullptr);
         for (int i = 0; i < TestPlayer::kSlots; ++i)
         {
             state.setProperty ("sfPath_" + juce::String (i), sfPaths[(size_t) i], nullptr);
@@ -1707,6 +1855,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     scaleLockBars = enochsolo::barlock::loadSet (vt.getProperty ("scaleLockBars").toString().toStdString());
     lockedBars = enochsolo::barlock::loadSaved (vt.getProperty ("lockedBars").toString().toStdString());
     appliedScaleAll = scaleLockAll();
+    editorW = (int) vt.getProperty ("editorW", 0); editorH = (int) vt.getProperty ("editorH", 0);
     undoStack.clear(); redoStack.clear();
 
     // restore the exact notes (including edits) when they were saved

@@ -64,12 +64,12 @@ public:
         // v3.3 / v2.3: MIDI Delay for external instruments (parameter midiDelayMs, 0.1 ms steps)
         delayLbl.setText ("MIDI DELAY", juce::dontSendNotification); delayLbl.setFont (EnochLookAndFeel::fnt (11.f, "Bold", 0.06f));
         delayLbl.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); addAndMakeVisible (delayLbl);
-        delaySlider.setRange (0.0, 200.0, 0.1); delaySlider.setSliderStyle (juce::Slider::LinearHorizontal);
+        delaySlider.setRange (-200.0, 200.0, 0.1);    // v3.7: below 0 sends the MIDI early delaySlider.setSliderStyle (juce::Slider::LinearHorizontal);
         delaySlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         delayVal.setFont (EnochLookAndFeel::fnt (12.f, "SemiBold")); delayVal.setJustificationType (juce::Justification::centredRight);
         delayVal.setColour (juce::Label::textColourId, juce::Colours::white); addAndMakeVisible (delayVal);
-        delaySlider.onValueChange = [this] { delayVal.setText (juce::String::formatted ("%.1f ms", delaySlider.getValue()), juce::dontSendNotification); };
-        delaySlider.setTooltip ("Sends your external instrument's MIDI this many ms late, to line it up with the built-in sounds. 0 = off. Steps of 0.1 ms; the 'MIDI Delay (samples)' parameter adds whole samples.");
+        delaySlider.onValueChange = [this] { const double v = delaySlider.getValue(); delayVal.setText (v < 0.0 ? juce::String::formatted ("%.1f ms early", -v) : juce::String::formatted ("%.1f ms", v), juce::dontSendNotification); };
+        delaySlider.setTooltip ("MIDI DELAY: moves the MIDI sent to your external instruments. Right of 0 = later. Left of 0 = EARLY, for an instrument the DAW plays late while you monitor it live (EZbass with Monitor on). Double-click = 0");
         delayAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "midiDelayMs", delaySlider);
         addAndMakeVisible (delaySlider);
         // v3.3 / v2.3 Built-in Delay: holds the built-in sounds back to line them up with a late external instrument (parameter internalDelayMs)

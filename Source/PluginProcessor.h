@@ -8,7 +8,9 @@
 #include "Engine/MidiWriter.h"
 #include "Engine/Phrases.h"
 #include "Engine/BarLocks.h"
-#include "EnochLog.h"   // v3.6: open / close / removal log   // v3.4 bar locks
+#include "EnochLog.h"   // v3.6: open / close / removal log
+#include "OutputStage.h"  // v3.7: master volume, compressor, Safe Output limiter
+#include <array>   // v3.4 bar locks
 #include "TestPlayer.h"
 
 class EnochSoloProcessor : public juce::AudioProcessor,
@@ -139,6 +141,26 @@ public:
     void loadOneShotAsync (const juce::File& f, std::function<void (bool, juce::String)> done);
     bool isLoadingFile() const { return loadingJobs.load() > 0; }
     int engineFaultCount() const { return engineFaults.load(); }
+    // v3.7 output section of the built-in sound (meter values of the last block)
+    float outPeak (int ch) const { return outPeakV[(size_t) juce::jlimit (0, 1, ch)].load(); }
+    float outGainReductionDb() const { return outGrV.load(); }
+    bool outClipped() const { return outClipV.load(); }
+    void resetClip() { outClipV.store (false); }
+    // v3.7 tap rhythm: MIDI notes become taps while the TAP drawer is open (audio thread -> lock-free FIFO -> editor)
+    struct TapMidi { double ms = 0; bool on = false; int vel = 0; };
+    struct TapHit { double ms = 0, durMs = 120; float loud = 0.7f; };
+    void setTapArmed (bool a) { tapArmed.store (a); }
+    int popTaps (TapMidi* out, int maxN)
+    {
+        int s1, n1, s2, n2; tapFifo.prepareToRead (maxN, s1, n1, s2, n2);
+        for (int i = 0; i < n1; ++i) out[i] = tapBuf[(size_t) (s1 + i)];
+        for (int i = 0; i < n2; ++i) out[n1 + i] = tapBuf[(size_t) (s2 + i)];
+        tapFifo.finishedRead (n1 + n2);
+        return n1 + n2;
+    }
+    void useTappedRhythm (const std::vector<TapHit>& hits, double bpm);
+    void applyKeeps (const enochsolo::Pattern& old, bool keepRhythm, bool keepNotes, bool keepArts);
+    std::atomic<int> editorW { 0 }, editorH { 0 };     // v3.7: this project's window size (0 = not set yet)
     void clearSoundFont();
     /** one-shot bass sound for the built-in preview: any single bass note recording (WAV / AIFF / FLAC / MP3) */
     bool loadBassSample (const juce::File& f, juce::String& message);
@@ -265,6 +287,21 @@ private:
     std::atomic<int> loadingJobs { 0 };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);   // false once this instance is being destroyed
     juce::ThreadPool loader { 1 };                               // v3.5: file loading worker
+    enochsolo::OutputStage outStage;                             // v3.7
+    std::array<std::atomic<float>, 2> outPeakV {};
+    std::atomic<float> outGrV { 0.f };
+    std::atomic<bool> outClipV { false };
+    std::atomic<bool> tapArmed { false };
+    juce::AbstractFifo tapFifo { 256 };
+    std::array<TapMidi, 256> tapBuf {};
+    void pushTap (double ms, bool on, int vel)
+    {
+        int s1, n1, s2, n2; tapFifo.prepareToWrite (1, s1, n1, s2, n2);
+        if (n1 > 0) tapBuf[(size_t) s1] = { ms, on, vel }; else if (n2 > 0) tapBuf[(size_t) s2] = { ms, on, vel };
+        tapFifo.finishedWrite (n1 + n2);
+    }
+    bool chasePending = false;                                   // v3.7: a new pattern arrived while playing
+    std::array<std::array<int, 128>, 16> chaseHeld {};
     std::shared_ptr<const Snapshot> snapshot;       // guarded by snapLock
     std::shared_ptr<const Snapshot> audioSnap;      // audio-thread copy
     int snapCounter = 0;

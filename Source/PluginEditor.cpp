@@ -423,6 +423,39 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     addChildComponent (routePanel);
     feelPanel.paintPlate = [] (juce::Graphics& g, juce::Rectangle<float> b) { LF::plate (g, b, texPlate(), 7.f, true); };
     addChildComponent (feelPanel);
+    // v3.7: OUTPUT drawer, TAP RHYTHM drawer, TRY ANOTHER options
+    outPanel.paintPlate = feelPanel.paintPlate; addChildComponent (outPanel);
+    tapPanel.paintPlate = feelPanel.paintPlate; addChildComponent (tapPanel);
+    auto closeStd = [this] { advanced = false; advBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); routeOpen = false; routeBtn.setToggleState (false, juce::dontSendNotification); logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); };
+    outBtn.setClickingTogglesState (true);
+    outBtn.setTooltip ("Master volume, part levels, compressor, Safe Output limiter and the meter of the built-in sound. Shows CLIP if the sound reached 0 dB");
+    outBtn.onClick = [this, closeStd] { outOpen = outBtn.getToggleState(); if (outOpen) { closeStd(); tapOpen = false; tapBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
+    tapBtn.setClickingTogglesState (true);
+    tapBtn.setTooltip ("TAP RHYTHM: tap a rhythm (mouse, computer keys or MIDI keyboard) and have the take written on it");
+    tapBtn.onClick = [this, closeStd] { tapOpen = tapBtn.getToggleState(); if (tapOpen) { closeStd(); outOpen = false; outBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
+    tryOpts.setTooltip ("TRY ANOTHER options: keep the rhythm, the notes or the articulations of the current take; earlier takes");
+    tryOpts.onClick = [this]
+    {
+        auto on = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load() > 0.5f; };
+        juce::PopupMenu m;
+        m.addSectionHeader ("TRY ANOTHER keeps...");
+        m.addItem (1, "Keep the rhythm (new notes on the same rhythm)", true, on ("keepRhythm"));
+        m.addItem (2, "Keep the notes (the same notes on a new rhythm)", true, on ("keepNotes"));
+        m.addItem (3, "Keep the articulations", true, on ("keepArts"));
+        m.addSeparator();
+        m.addItem (4, "Previous take", proc.canGoBack());
+        m.addItem (5, "Next take", proc.canGoForward());
+        juce::Component::SafePointer<EnochSoloEditor> self (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&tryOpts), [self] (int r)
+        {
+            if (self == nullptr) return;
+            static const char* ids[] = { "keepRhythm", "keepNotes", "keepArts" };
+            if (r >= 1 && r <= 3) self->setBoolParam (ids[r - 1], ! (self->proc.apvts.getRawParameterValue (ids[r - 1])->load() > 0.5f));
+            if (r == 4) self->proc.historyBack();
+            if (r == 5) self->proc.historyForward();
+        });
+    };
+    for (auto* b : { &outBtn, &tapBtn, &tryOpts }) addAndMakeVisible (*b);
     barSpeedBox.addItem ("Speed: follow", 1); barSpeedBox.addItem ("Speed: normal", 2); barSpeedBox.addItem ("Speed: double time", 3);
     barSpeedBox.setTooltip ("Speed of the SELECTED bars: follow the global Speed (SOUND & FEEL), normal, or double time. The bars are written again.");
     barSpeedBox.onChange = [this]
@@ -664,7 +697,23 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     setResizable (true, false);                       // our own edge / corner handles do the resizing (all four edges and corners)
     setResizeLimits (720, 560, 3400, 2400);
     juce::Component::addAndMakeVisible (edgeResizer);
-    setSize (1260, 940);
+    // v3.7: opening any other drawer closes OUTPUT and TAP
+    for (juce::Button* b : std::initializer_list<juce::Button*> { &advBtn, &feelBtn, &routeBtn, &ldBtn })
+    {
+        auto prev = b->onClick;
+        b->onClick = [this, b, prev]
+        {
+            if (b->getToggleState()) { outOpen = false; outBtn.setToggleState (false, juce::dontSendNotification); tapOpen = false; tapBtn.setToggleState (false, juce::dontSendNotification); }
+            if (prev) prev();
+        };
+    }
+    {
+        // v3.7: open at the size this project last used, else the size last used anywhere (remembered per plugin)
+        int w = proc.editorW.load(), h = proc.editorH.load();
+        if (w < 720 || h < 560) { w = enochsolo::folderSettings().getIntValue ("editorW", 1260); h = enochsolo::folderSettings().getIntValue ("editorH", 940); }
+        setSize (juce::jlimit (720, 3400, w), juce::jlimit (560, 2400, h));      // last: this triggers resized(), which needs every child to exist
+        savedW = getWidth(); savedH = getHeight();
+    }
     enochlog::write ("window opened");      // last: this triggers resized(), which needs every child to exist
     startTimerHz (10);
 }
@@ -896,6 +945,27 @@ void EnochSoloEditor::refreshBarPanel()
 void EnochSoloEditor::timerCallback()
 {
     if (proc.scaleLockAllPending()) proc.applyLocksNow();   // v3.4: the project-wide scale lock was switched
+    // v3.7: remember the window size (this project, and as the default for new windows), saved a moment after resizing stops
+    if (getWidth() != savedW || getHeight() != savedH)
+    {
+        savedW = getWidth(); savedH = getHeight(); proc.editorW = savedW; proc.editorH = savedH;
+        sizeSaveAt = juce::Time::getMillisecondCounter() + 800;
+    }
+    if (sizeSaveAt != 0 && juce::Time::getMillisecondCounter() >= sizeSaveAt)
+    {
+        sizeSaveAt = 0;
+        enochsolo::folderSettings().setValue ("editorW", savedW); enochsolo::folderSettings().setValue ("editorH", savedH);
+        enochsolo::folderSettings().saveIfNeeded();
+    }
+    {   // clip light on the OUTPUT button
+        const bool c = proc.outClipped();
+        if (c != clipShown)
+        {
+            clipShown = c;
+            outBtn.setButtonText (c ? "OUTPUT  CLIP" : "OUTPUT");
+            if (c) outBtn.setColour (juce::TextButton::textColourOffId, juce::Colours::red); else outBtn.removeColour (juce::TextButton::textColourOffId);
+        }
+    }
     const int inst = juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load());
     const int a = juce::roundToInt (proc.apvts.getRawParameterValue ("artist")->load());
     // v2.7: an Amapiano log drum as the sound turns the interface to the log drum colours
@@ -1525,7 +1595,7 @@ void EnochSoloEditor::layoutBody()
         right.removeFromLeft (10);
         lHarmony.setBounds (right.removeFromTop (16)); harmony.setBounds (right.removeFromTop (28).reduced (2, 0));
         right.removeFromTop (10);
-        tryAnother.setBounds (right.removeFromTop (40));
+        { auto tr = right.removeFromTop (40); tryOpts.setBounds (tr.removeFromRight (30).reduced (1, 0)); tapBtn.setBounds (tr.removeFromRight (56).reduced (2, 0)); tryAnother.setBounds (tr); }   // v3.7
         juce::Slider* ks[] = { &intensity, &busyG, &space, &repeat, &trClean, &grooveAmt, &octave };
         juce::Label* ls[] = { &lIntensity, &lBusy, &lSpace, &lRepeat, &lClean, &lGroove, &lOct };
         const int kw = tr.getWidth() / 7;
@@ -1672,6 +1742,10 @@ void EnochSoloEditor::layoutBody()
     if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236))); routePanel.toFront (false); }
     feelPanel.setVisible (feelOpen);
     if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); feelPanel.toFront (false); }
+    outPanel.setVisible (outOpen);
+    if (outOpen) { outPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); outPanel.toFront (false); }
+    tapPanel.setVisible (tapOpen);
+    if (tapOpen) { tapPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 220))); tapPanel.toFront (true); }
     ldPanel.setVisible (logOpen);
     if (logOpen) { ldPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 272))); ldPanel.toFront (false); }
     advBg.setVisible (advanced);
@@ -1710,7 +1784,7 @@ void EnochSoloEditor::layoutBody()
     }
     bottom.removeFromLeft (10);
     auto lc = bottom.removeFromLeft (juce::jmax (150, bottom.getWidth() - 8));
-    { auto lr0 = lc.removeFromTop (28); routeBtn.setBounds (lr0.removeFromRight (juce::jmin (104, lr0.getWidth() / 2)).reduced (2, 0)); liveBtn.setBounds (lr0.reduced (2, 0)); }
+    { auto lr0 = lc.removeFromTop (28); routeBtn.setBounds (lr0.removeFromRight (juce::jmin (104, lr0.getWidth() / 3)).reduced (2, 0)); outBtn.setBounds (lr0.removeFromRight (juce::jmin (112, lr0.getWidth() / 2)).reduced (2, 0)); liveBtn.setBounds (lr0.reduced (2, 0)); }
     lc.removeFromTop (4);
     {
         auto lr = lc.removeFromTop (28);

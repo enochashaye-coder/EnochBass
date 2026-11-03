@@ -127,20 +127,27 @@ public:
         smp.reset(); eng.reset();
     }
 
-    void handle (const juce::MidiMessage& m)
+    /** fromPattern: the note comes from the generated part (never a key-switch by pitch; its switches arrive as poly aftertouch) */
+    void handle (const juce::MidiMessage& m, bool fromPattern = false)
     {
         const int ch = juce::jlimit (0, 15, m.getChannel() - 1);
+        if (m.isAftertouch())      // v3.6: a key-switch from the pattern
+        {
+            const int k = m.getNoteNumber();
+            if (k >= 0 && k < 128 && ksArt[(size_t) k] >= 0) art[(size_t) ch] = ksArt[(size_t) k];
+            return;
+        }
         if (m.isNoteOn())
         {
             const int n = m.getNoteNumber();
-            if (n >= 0 && n < 128 && ksArt[(size_t) n] != -2) { if (ksArt[(size_t) n] >= 0) art[(size_t) ch] = ksArt[(size_t) n]; return; }   // key-switch
+            if (! fromPattern && n >= 0 && n < 128 && ksArt[(size_t) n] != -2) { if (ksArt[(size_t) n] >= 0) art[(size_t) ch] = ksArt[(size_t) n]; return; }   // key-switch played in
             if (effective == S_External) return;
             if (sampleActive()) smp.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else if (sfActive()) curSF().noteOn (ch, n, m.getVelocity()); else if (engFor (ch)) eng.noteOn (ch, n, m.getVelocity(), art[(size_t) ch]); else noteOn (ch, n, m.getVelocity());
         }
         else if (m.isNoteOff())
         {
             const int n = m.getNoteNumber();
-            if (n >= 0 && n < 128 && ksArt[(size_t) n] != -2) return;
+            if (! fromPattern && n >= 0 && n < 128 && ksArt[(size_t) n] != -2) return;
             if (sampleActive()) smp.noteOff (ch, n); else if (sfActive()) curSF().noteOff (ch, n); else { eng.noteOff (ch, n); noteOff (ch, n); }
         }
         else if (m.isPitchWheel())

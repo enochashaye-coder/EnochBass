@@ -8,13 +8,14 @@ namespace enochsolo
 {
 inline juce::PropertiesFile& folderSettings()
 {
-    static std::unique_ptr<juce::PropertiesFile> pf = []
+    // v3.7: never destroyed (freeing it while Windows unloads the plugin is not safe); the settings are saved as they change
+    static juce::PropertiesFile* pf = []
     {
         juce::PropertiesFile::Options o;
         o.applicationName = JucePlugin_Name; o.filenameSuffix = ".settings"; o.osxLibrarySubFolder = "Application Support";
         o.folderName = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile (JucePlugin_Name).getFullPathName();
         o.storageFormat = juce::PropertiesFile::storeAsXML;
-        return std::make_unique<juce::PropertiesFile> (o);
+        return new juce::PropertiesFile (o);
     }();
     return *pf;
 }

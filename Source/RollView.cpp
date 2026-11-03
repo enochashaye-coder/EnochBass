@@ -438,10 +438,18 @@ void RollView::timerCallback()
 {
     const double pb = proc.getPlayBeat();
     const bool moved2 = std::abs (pb - lastBeat) > 1e-9;
+    const double prevBeat = lastBeat;
     lastBeat = pb;
     auto s = proc.getSnapshot();
     if ((s ? s->number : -1) != lastNumber) refresh();
-    else if (moved2) repaint();
+    else if (moved2)
+    {
+        // v3.7: only the thin strips where the playhead was and is now are redrawn, so the roll stays light while playing
+        if (! snap) { repaint(); return; }
+        const auto G = geo();
+        auto strip = [&] (double beat) { if (beat < 0 || G.len <= 0) return; const int x = (int) xOf (G, std::fmod (beat, G.len)); repaint (x - 4, 0, 9, getHeight()); };
+        strip (prevBeat); strip (pb);
+    }
 }
 
 void RollView::commit (std::vector<Note> v)

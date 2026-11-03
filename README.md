@@ -1,4 +1,14 @@
-# Enoch Bass (v2.6)
+# Enoch Bass (v2.7)
+## v2.7: Silent root note fix, output section, tap rhythm and more
+- Fixed: in some keys the root note (and a few notes near it) made no sound with the built-in sound, a one-shot or a SoundFont. Those notes sit on the key-switch keys of the chosen instrument layout (EZbass: F1 = 29, G1 = 31, G#1 = 32, ...), and the preview player treated them as articulation switches. Notes of the take now always sound; only notes you play in can act as key-switches.
+- Notes start again when a new take arrives while playing (key change, TRY ANOTHER ...), so a held root note is not lost.
+- MIDI DELAY (ROUTING page) now goes both ways: -200 to +200 ms. Left of 0 sends the MIDI early, which lines up an instrument the DAW plays late while you monitor it live (EZbass with Monitor on).
+- OUTPUT drawer (footer button): master volume (default -3 dB), part levels, compressor (off by default: threshold, ratio, attack, release, knee, makeup) and SAFE OUTPUT, a limiter that keeps every note below the ceiling (on by default, -1 dB). Meter with peak hold, gain reduction and a clip light; the OUTPUT button shows CLIP if the sound reached 0 dB. Built-in sound only.
+- The window opens at the size you last used (per project, and as the default for new windows).
+- New instances start in C major. Saved projects keep their own key.
+- The piano roll no longer redraws itself completely 30 times a second while playing (only the playhead strip), which keeps scrolling smooth.
+- TAP (next to TRY ANOTHER): tap a rhythm with the mouse, computer keys or your MIDI keyboard, then USE RHYTHM. The take is written on that rhythm, and TRY ANOTHER keeps it.
+- The small "v" next to TAP: TRY ANOTHER can keep the rhythm, the notes or the articulations of the current take, and step to earlier or later takes.
 ## v2.6: Removal freeze fix
 - Removing the plugin from a project (or closing the project) froze the DAW on Windows, in Studio One and Cubase. The panel textures were kept in static memory until Windows unloaded the plugin, after JUCE had shut down its Direct2D graphics; freeing them then could hang the DAW. They now belong to the open plugin windows and are freed when the last Enoch window closes.
 - A short log is written to %APPDATA%\Enoch\enoch-log.txt: instance created, window opened / closed, textures freed, each step of removal, plugin unloaded. If the DAW ever stops responding, the last line shows where.

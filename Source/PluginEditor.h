@@ -1,6 +1,8 @@
 #pragma once
 #include "StepCombo.h"
-#include "EnochLog.h"   // v3.6: open / close / removal log   // v3.4: dropdowns that step with the arrows, keys and wheel
+#include "EnochLog.h"   // v3.6: open / close / removal log
+#include "OutputPanel.h"  // v3.7
+#include "TapPanel.h"     // v3.7   // v3.4: dropdowns that step with the arrows, keys and wheel
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <functional>
@@ -430,6 +432,12 @@ private:
     bool routeOpen = false;
     FeelPanel feelPanel { proc };                                 // v2.7 batch 2: SOUND & FEEL drawer
     juce::TextButton feelBtn { "SOUND & FEEL" };
+    // v3.7: OUTPUT and TAP RHYTHM drawers, TRY ANOTHER options, remembered window size, clip light on the OUTPUT button
+    OutputPanel outPanel { proc };
+    TapPanel tapPanel { proc };
+    juce::TextButton outBtn { "OUTPUT" }, tapBtn { "TAP" }, tryOpts { "v" };
+    bool outOpen = false, tapOpen = false, clipShown = false;
+    int savedW = 0, savedH = 0; juce::uint32 sizeSaveAt = 0;
     bool feelOpen = false;
     // v3.4: bar locks, the project-wide scale lock, grid visibility
     juce::TextButton barLockBtn { "Lock bar" }, barScaleLockBtn { "Lock scale" };
