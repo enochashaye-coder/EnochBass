@@ -11,11 +11,21 @@ jobs:
         run: cmake -S . -B build -A x64
       - name: Build
         run: cmake --build build --config Release --target EnochBass_VST3 -j 4
+      - name: Collect symbols (.pdb, for crash dumps)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path symbols | Out-Null
+          Get-ChildItem -Recurse build -Filter *.pdb | Where-Object { $_.Name -like "Enoch*" } | Copy-Item -Destination symbols
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EnochBass-Symbols
+          path: symbols
       - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item -Recurse "build/EnochBass_artefacts/Release/VST3/Enoch Bass.vst3" "dist/Enoch Bass.vst3"
+          Get-ChildItem -Recurse dist -Filter *.pdb | Remove-Item -Force
           Copy-Item installer/Install-EnochBass.bat dist/
           Copy-Item README.md dist/
           Compress-Archive -Path dist/* -DestinationPath EnochBass-Windows-VST3.zip
