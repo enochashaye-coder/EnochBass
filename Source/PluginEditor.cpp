@@ -521,9 +521,16 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     barReroll.onClick = [this] { roll.rerollSelectedBars(); };
     barClearNotes.setTooltip ("Clear every note in the selected bars (the bars stay silent; Undo brings them back)");
     barClearNotes.onClick = [this] { roll.clearSelectedBarNotes(); };
+    barLockBtn.setTooltip ("Lock the selected bars: regeneration (genre, artist, key, instrument...) keeps their notes exactly as they are. Editing a locked bar updates its lock.");
+    barLockBtn.onClick = [this] { proc.setBarLocks (roll.barSelFirst(), roll.barSelLast(), ! proc.isBarLocked (roll.barSelFirst())); refreshBarPanel(); };
+    barScaleLockBtn.setTooltip ("Scale-lock the selected bars: their notes stay in the chord scale, dragging steps to the next scale tone, and out-of-scale notes are fitted now (Undo reverts)");
+    barScaleLockBtn.onClick = [this] { proc.setScaleLocks (roll.barSelFirst(), roll.barSelLast(), ! proc.isScaleLocked (roll.barSelFirst())); refreshBarPanel(); };
     clearAllBtn.setTooltip ("Clear all notes: a blank piano roll that plays nothing (Undo brings them back; TRY ANOTHER writes a new take)");
     clearAllBtn.onClick = [this] { roll.clearAllNotes(); };
     addAndMakeVisible (clearAllBtn);
+    panicBtn.setTooltip ("Panic / All Notes Off: releases every note on the DAW and hardware outputs, and resets sustain, expression, modulation and pitch bend");
+    panicBtn.onClick = [this] { proc.requestPanic(); };
+    addAndMakeVisible (panicBtn);
     barCopy.setTooltip ("Copy the chord of the selected bar");
     barCopy.onClick = [this] { roll.copyChord(); refreshBarPanel(); };
     barPaste.setTooltip ("Paste the copied chord onto the selected bar(s). Tip: or click a chord, then choose 'Same as bar...'");
@@ -531,6 +538,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     barClear.setTooltip ("Clear the bar selection");
     barClear.onClick = [this] { roll.clearBarSelection(); };
     for (auto* b : { &barAuto, &barReroll, &barClearNotes, &barCopy, &barPaste, &barClear }) addAndMakeVisible (*b);
+    addAndMakeVisible (barLockBtn); addAndMakeVisible (barScaleLockBtn);
     roll.onBarSelection = [this] { refreshBarPanel(); };
 
     auto toggleP = [&] (juce::ToggleButton& t, const char* id, const char* tip, bool visible)
@@ -541,6 +549,15 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     };
     toggleP (snapGrid, "snapGrid", "ON: notes you move, draw or resize snap to the grid. OFF: free editing, notes land exactly where you drop them.", true);
     toggleP (snapScale, "snapScale", "While editing, notes you move or draw jump to the nearest note of the bar's scale", true);
+    toggleP (lockScaleAll, "lockScaleAll", "Lock scale: every bar's notes stay inside the chord scale. Dragging steps to the next scale tone, and notes are fitted when the song is regenerated. Off: only the bars locked with LOCK SCALE.", true);
+    gridVisSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    gridVisSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    gridVisSlider.setTooltip ("Grid Visibility: how strongly the bar, beat and grid lines are drawn in the piano roll (50 = as before)");
+    lGridVis.setText ("Grid", juce::dontSendNotification);
+    lGridVis.setJustificationType (juce::Justification::centredRight);
+    lGridVis.setTooltip ("Grid Visibility");
+    addAndMakeVisible (gridVisSlider); addAndMakeVisible (lGridVis);
+    sliderAtt.push_back (std::make_unique<juce::SliderParameterAttachment> (*A.getParameter ("gridVis"), gridVisSlider));
     toggleP (chordPad, "chordTrack", "Also write a block-chord pad track you can drag out with the bass line", true);
     toggleP (showScaleT, "showScale", "Dim the piano-roll rows that are outside each bar's scale, and mark the scale on the piano keys (select a bar to see its scale)", true);
     toggleP (sfOnT, "sfOn", "Play the preview through your SoundFont instead of the built-in sounds", false);
@@ -866,10 +883,15 @@ void EnochSoloEditor::refreshBarPanel()
     lBarBusy.setEnabled (has); lBarBusy.setAlpha (has ? 1.f : 0.5f);
     barAuto.setEnabled (has && roll.selectionHasExplicitBusy());
     barPaste.setEnabled (has && roll.hasChordClipboard());
+    barLockBtn.setToggleState (has && proc.isBarLocked (roll.barSelFirst()), juce::dontSendNotification);
+    barScaleLockBtn.setToggleState (has && proc.isScaleLocked (roll.barSelFirst()), juce::dontSendNotification);
+    barLockBtn.setEnabled (has);
+    barScaleLockBtn.setEnabled (has && ! proc.scaleLockAll());
 }
 
 void EnochSoloEditor::timerCallback()
 {
+    if (proc.scaleLockAllPending()) proc.applyLocksNow();   // v3.4: the project-wide scale lock was switched
     const int inst = juce::roundToInt (proc.apvts.getRawParameterValue ("inst")->load());
     const int a = juce::roundToInt (proc.apvts.getRawParameterValue ("artist")->load());
     // v2.7: an Amapiano log drum as the sound turns the interface to the log drum colours
@@ -1543,7 +1565,7 @@ void EnochSoloEditor::layoutBody()
         lGrid.setBounds (0, 0, 0, 0);
         rowLayout (tb, { { &toolSelect, 58 }, { &toolDraw, 52 }, { &toolErase, 56 }, { &toolSplit, 52 }, { &toolMute, 54 }, { nullptr, 8 },
                          { &undoBtn, 52 }, { &redoBtn, 52 }, { &editBtn, 64 }, { nullptr, 8 },
-                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 }, { nullptr, 6 }, { &clearAllBtn, 72 } });
+                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 }, { nullptr, 6 }, { &clearAllBtn, 72 }, { &panicBtn, 64 } });
         // the toggles are drawn smaller, centred in the row
         for (auto* t : { &snapGrid, &snapScale }) t->setBounds (t->getBounds().reduced (0, 4));
         gridBox.setTooltip ("Grid used for the grid lines, snapping, quantize and new-note length");
@@ -1554,17 +1576,18 @@ void EnochSoloEditor::layoutBody()
     {
         auto tb = r.removeFromTop (26);
         lZoom.setBounds (tb.removeFromLeft (42));
-        const int fixed = 38 + 36 + 150 + 116 + 24 + 64 + 124;
+        const int fixed = 38 + 36 + 150 + 116 + 24 + 64 + 124 + 40 + 90 + 8 + 104;
         const int zw = juce::jmax (80, (tb.getWidth() - fixed) / 2);
         const int zv = juce::jmax (60, zw * 3 / 4);
         lZoomT.setBounds (tb.removeFromLeft (30)); zoomH.setBounds (tb.removeFromLeft (zw).reduced (2, 0));
         lZoomP.setBounds (tb.removeFromLeft (34)); zoomV.setBounds (tb.removeFromLeft (zv).reduced (2, 0));
         zoomFitBtn.setBounds (tb.removeFromLeft (38).reduced (2, 0)); tb.removeFromLeft (8);
         auto rest = tb;
+        lGridVis.setBounds (rest.removeFromLeft (40)); gridVisSlider.setBounds (rest.removeFromLeft (90).reduced (2, 0)); rest.removeFromLeft (8);   // v3.4
         lLane.setBounds (rest.removeFromLeft (36)); laneBox.setBounds (rest.removeFromLeft (150).reduced (2, 0));
         rest.removeFromLeft (8);
         chordPad.setBounds (rest.removeFromLeft (116).reduced (2, 0));
-        showScaleT.setBounds (rest.removeFromLeft (124).reduced (2, 0));
+        showScaleT.setBounds (rest.removeFromLeft (124).reduced (2, 0)); lockScaleAll.setBounds (rest.removeFromLeft (104).reduced (2, 0));
     }
     r.removeFromTop (3);
     // bar panel (two lines: which bars, then the labelled BUSY slider)
@@ -1581,6 +1604,8 @@ void EnochSoloEditor::layoutBody()
         barInfo.setBounds (l1);
         bp.removeFromTop (2);
         auto l2 = bp.removeFromTop (24);
+        barScaleLockBtn.setBounds (l2.removeFromRight (80).reduced (2, 0));
+        barLockBtn.setBounds (l2.removeFromRight (74).reduced (2, 0));
         barClearNotes.setBounds (l2.removeFromRight (80).reduced (2, 0));
         barReroll.setBounds (l2.removeFromRight (98).reduced (2, 0));
         barAuto.setBounds (l2.removeFromRight (54).reduced (2, 0));

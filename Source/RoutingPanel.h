@@ -1,4 +1,5 @@
 #pragma once
+#include "StepCombo.h"   // v3.4: routing dropdowns step with the arrows, keys and wheel
 // v3.0 ROUTING drawer (identical in Enoch Solo and Enoch Bass): where every part plays, on which MIDI channel, with which mapping profile,
 // plus the profile editor (articulation keys with Learn and Test, transpose, legato overlap, repetition key, program) and rig templates.
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -60,6 +61,29 @@ public:
         quickBox.setTooltip ("One click for the usual rigs (EZkeys Full, EZbass + log drum, Ilya Efimov ...). Every row stays editable afterwards.");
         quickBox.onChange = [this] { if (! updating && quickBox.getSelectedId() > 0) { applyQuick (quickBox.getSelectedId()); } };
         addAndMakeVisible (quickBox);
+        // v3.3 / v2.3: MIDI Delay for external instruments (parameter midiDelayMs, 0.1 ms steps)
+        delayLbl.setText ("MIDI DELAY", juce::dontSendNotification); delayLbl.setFont (EnochLookAndFeel::fnt (11.f, "Bold", 0.06f));
+        delayLbl.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); addAndMakeVisible (delayLbl);
+        delaySlider.setRange (0.0, 200.0, 0.1); delaySlider.setSliderStyle (juce::Slider::LinearHorizontal);
+        delaySlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        delayVal.setFont (EnochLookAndFeel::fnt (12.f, "SemiBold")); delayVal.setJustificationType (juce::Justification::centredRight);
+        delayVal.setColour (juce::Label::textColourId, juce::Colours::white); addAndMakeVisible (delayVal);
+        delaySlider.onValueChange = [this] { delayVal.setText (juce::String::formatted ("%.1f ms", delaySlider.getValue()), juce::dontSendNotification); };
+        delaySlider.setTooltip ("Sends your external instrument's MIDI this many ms late, to line it up with the built-in sounds. 0 = off. Steps of 0.1 ms; the 'MIDI Delay (samples)' parameter adds whole samples.");
+        delayAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "midiDelayMs", delaySlider);
+        addAndMakeVisible (delaySlider);
+        // v3.3 / v2.3 Built-in Delay: holds the built-in sounds back to line them up with a late external instrument (parameter internalDelayMs)
+        internalLbl.setText ("BUILT-IN DELAY", juce::dontSendNotification); internalLbl.setFont (EnochLookAndFeel::fnt (11.f, "Bold", 0.06f));
+        internalLbl.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); addAndMakeVisible (internalLbl);
+        internalSlider.setRange (0.0, 400.0, 0.1); internalSlider.setSliderStyle (juce::Slider::LinearHorizontal); internalSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        internalSlider.setTooltip ("Built-in Delay: holds the built-in sounds back this many ms, to line them up with an external instrument that plays late (e.g. EZbass). 0 = off. Steps of 0.1 ms.");
+        internalVal.setFont (EnochLookAndFeel::fnt (12.f, "SemiBold")); internalVal.setJustificationType (juce::Justification::centredRight);
+        internalVal.setColour (juce::Label::textColourId, juce::Colours::white); addAndMakeVisible (internalVal);
+        internalSlider.onValueChange = [this] { internalVal.setText (juce::String::formatted ("%.1f ms", internalSlider.getValue()), juce::dontSendNotification); };
+        internalAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "internalDelayMs", internalSlider);
+        internalVal.setText (juce::String::formatted ("%.1f ms", internalSlider.getValue()), juce::dontSendNotification);
+        addAndMakeVisible (internalSlider);
+        delayVal.setText (juce::String::formatted ("%.1f ms", delaySlider.getValue()), juce::dontSendNotification);
         status.setFont (EnochLookAndFeel::fnt (11.5f)); status.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); addAndMakeVisible (status);
 
         // ---- profile editor page
@@ -161,7 +185,16 @@ public:
         edBack.setBounds (loadRig.getBounds()); edSave.setBounds (saveRig.getBounds().withX (saveRig.getX() - 30).withWidth (124));
         hint.setBounds (juce::Rectangle<int> (title.getRight() + 4, head.getY(), juce::jmax (0, quickBox.getX() - title.getRight() - 12), head.getHeight()));
         r.removeFromTop (10);
-        status.setBounds (r.removeFromBottom (18)); edStatus.setBounds (status.getBounds());
+        auto statusRow = r.removeFromBottom (24);
+        auto delayArea = statusRow.removeFromRight (700);
+        auto internalArea = delayArea.removeFromRight (340);
+        delayLbl.setBounds (delayArea.removeFromLeft (100).reduced (0, 3));
+        delayVal.setBounds (delayArea.removeFromRight (72).reduced (0, 3));
+        delaySlider.setBounds (delayArea.reduced (2, 2));
+        internalLbl.setBounds (internalArea.removeFromLeft (110).reduced (0, 3));
+        internalVal.setBounds (internalArea.removeFromRight (72).reduced (0, 3));
+        internalSlider.setBounds (internalArea.reduced (2, 2));
+        status.setBounds (statusRow.reduced (0, 3)); edStatus.setBounds (status.getBounds());
         // routing page
         {
             auto rr = r;
@@ -211,7 +244,7 @@ public:
     }
 
 private:
-    struct Row { juce::Label name; juce::ComboBox dest, ch, prof, prog, tr, port; juce::TextButton edit { "Edit" }, test { "Test" }; };
+    struct Row { juce::Label name; StepCombo dest, ch, prof, prog, tr, port; juce::TextButton edit { "Edit" }, test { "Test" }; };
     struct ArtRow { int art = 0; bool shown = true; juce::Label name; juce::ComboBox key; juce::Slider vel; juce::ToggleButton hold; juce::TextButton learn { "Learn" }, test { "Test" }; };
 
     static juce::String noteName (int n)                                          // Kontakt / Toontrack numbering: middle C = C3 = 60
@@ -407,7 +440,11 @@ private:
     juce::Label title, hint, status, hPart, hDest, hCh, hProf, hProg, hTr, hPort;
     juce::OwnedArray<Row> rows;
     juce::TextButton saveRig { "Save rig..." }, loadRig { "Load rig..." };
-    juce::ComboBox quickBox;
+    StepCombo quickBox;
+    juce::Label delayLbl, delayVal; juce::Slider delaySlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> delayAtt;
+    juce::Label internalLbl, internalVal; juce::Slider internalSlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> internalAtt;
     // ---- v3.2 quick setups: one click for the usual rigs (the rows stay editable)
     struct QuickPart { int dest; int ch; const char* profile; };
     struct Quick { juce::String label; QuickPart parts[3]; int mode; };     // mode: Output to set (-1 = leave it)

@@ -226,6 +226,14 @@ int RollView::snapPitch (int pitch, double beat) const
     return pitch;
 }
 
+// v3.4: a scale-locked bar keeps its notes in the chord scale. dir: +1 steps up, -1 steps down, 0 = nearest.
+int RollView::pitchFor (int pitch, double beat, int dir) const
+{
+    const double bbl = snap ? std::max (0.5, snap->pattern.barBeats) : 4.0;
+    if (! proc.isScaleLocked ((int) std::floor (beat / bbl + 1e-6))) return snapPitch (pitch, beat);
+    const uint16_t m = (snap && ! snap->pattern.chords.empty()) ? snap->pattern.chordAt (beat).scaleMask : (uint16_t) 0;
+    return enochsolo::barlock::snapInScale (juce::jlimit (0, 127, pitch), m, dir);
+}
 double RollView::metricWeight (double beat) const
 {
     const double bb = snap ? snap->pattern.barBeats : 4.0;
@@ -665,18 +673,28 @@ void RollView::paint (juce::Graphics& g)
             g.setColour (T.accent.withAlpha (0.10f)); g.fillRect (x0, G.notes.getY(), x1 - x0, G.notes.getHeight());
             g.setColour (T.accent.withAlpha (0.6f)); g.drawVerticalLine ((int) x0, G.notes.getY(), G.notes.getBottom()); g.drawVerticalLine ((int) x1, G.notes.getY(), G.notes.getBottom());
         }
-        // grid lines (triplet grids use a tinted line)
+        // grid lines: bars, beats, then the chosen grid (triplet grids tinted). Grid Visibility scales all three.
+        const float vis = juce::jlimit (0.f, 2.f, proc.apvts.getRawParameterValue ("gridVis")->load() / 50.f);
         const double gb = gridBeats();
         if (gb > 0 && gb * G.ppb > 7.f)
         {
             const bool trip = std::abs (gb * 3.0 - std::round (gb * 3.0)) < 1e-6 && std::abs (gb * 2.0 - std::round (gb * 2.0)) > 1e-6;
             for (double t = 0; t <= G.len + 1e-6; t += gb)
-            { g.setColour (trip ? T.accent.withAlpha (0.07f) : juce::Colours::white.withAlpha (0.025f)); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
+            { g.setColour (trip ? T.accent.withAlpha (0.07f * vis) : juce::Colours::white.withAlpha (0.025f * vis)); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
         }
         for (double t = 0; t <= G.len + 1e-6; t += 1.0)
-        { g.setColour (juce::Colours::white.withAlpha (0.05f)); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
+        { g.setColour (juce::Colours::white.withAlpha (0.05f * vis)); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
         for (int bar = 0; bar <= P.bars; ++bar)
-        { g.setColour (juce::Colours::white.withAlpha (0.16f)); g.drawVerticalLine ((int) xOf (G, bar * bb), G.notes.getY(), G.notes.getBottom()); }
+        { g.setColour (juce::Colours::white.withAlpha (juce::jmax (0.06f, 0.16f * vis))); g.drawVerticalLine ((int) xOf (G, bar * bb), G.notes.getY(), G.notes.getBottom()); }
+        // v3.4 bar locks: a strip along the top of the bar (accent = scale lock, gold = bar lock)
+        for (int bar = 0; bar < P.bars; ++bar)
+        {
+            const bool sc = proc.isScaleLocked (bar), bl = proc.isBarLocked (bar);
+            if (! sc && ! bl) continue;
+            const float x0 = xOf (G, bar * bb), x1 = xOf (G, (bar + 1) * bb);
+            if (sc) { g.setColour (T.accent.withAlpha (0.85f)); g.fillRect (x0, (float) G.notes.getY(), x1 - x0, 3.f); }
+            if (bl) { g.setColour (juce::Colour (0xffd9b35a)); g.fillRect (x0, (float) G.notes.getY() + 4.f, x1 - x0, 3.f); }
+        }
 
         // notes: backing tracks first, solo on top
         for (int pass = 0; pass < 2; ++pass)
@@ -1227,7 +1245,7 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
             {
                 raw[i] = dragOrig[i];
                 raw[i].start = dragOrig[i].start + dBeat;
-                raw[i].pitch = snapPitch (juce::jlimit (0, 127, dragOrig[i].pitch + dPitch), raw[i].start);
+                raw[i].pitch = pitchFor (juce::jlimit (0, 127, dragOrig[i].pitch + dPitch), raw[i].start, dPitch > 0 ? 1 : (dPitch < 0 ? -1 : 0));
                 if (dPitch != 0 || dBeat != 0) raw[i].weight = metricWeight (raw[i].start);
             }
         const int ap = juce::jlimit (0, 127, a->pitch + dPitch);
@@ -1346,7 +1364,7 @@ void RollView::addNoteAt (double beat, int pitch)
     const double len = std::max (0.25, gridBeats());
     n.start = juce::jlimit (0.0, std::max (0.0, totalBeats() - len), snapBeat (beat, true));
     n.length = len;
-    n.pitch = snapPitch (pitch, n.start);
+    n.pitch = pitchFor (pitch, n.start, 0);
     n.vel = 96; n.art = A_Sustain; n.track = 0; n.voice = 0; n.id = proc.allocNoteId(); n.weight = metricWeight (n.start);
     auto v = raw; v.push_back (n);
     selected = { n.id };

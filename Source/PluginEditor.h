@@ -1,4 +1,5 @@
 #pragma once
+#include "StepCombo.h"   // v3.4: dropdowns that step with the arrows, keys and wheel
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <functional>
@@ -154,6 +155,7 @@ private:
     double snapBeat (double b, bool floorIt = false) const;
     bool snapIsOn() const;
     int snapPitch (int pitch, double beat) const;
+    int pitchFor (int pitch, double beat, int dir) const;   // v3.4: scale-locked bars step inside their scale (dir +1 up, -1 down, 0 nearest)
     double metricWeight (double beat) const;
     double totalBeats() const;
     void refresh (bool force = false);
@@ -372,7 +374,7 @@ private:
     EnochSoloProcessor& proc;
     juce::SharedResourcePointer<EnochFontHost> fontHost;     // embedded Inter typeface for every font in the plugin
     EnochLookAndFeel laf;
-    juce::ComboBox soundBox; juce::Label lSound;                  // built-in preview sound for the current instrument
+    StepCombo soundBox; juce::Label lSound;                  // built-in preview sound for the current instrument
     void refreshSounds();
     juce::Rectangle<int> headRect, deckRect, toolRect, footRect, sideRect;
     VUMeter vu;
@@ -384,7 +386,7 @@ private:
     Body advBg;                                                  // the Advanced drawer that slides over the lower part of the roll
 
     juce::OwnedArray<juce::TextButton> instButtons;
-    juce::ComboBox artist, key, scale, genre, timeSig, bars, mode, harmony, presetBox, gridBox, laneBox, exportBox, refTempoBox, refShiftBox, myStyleBox, startBarBox, voice2Box, claveBox, libBox;
+    StepCombo artist, key, scale, genre, timeSig, bars, mode, harmony, presetBox, gridBox, laneBox, exportBox, refTempoBox, refShiftBox, myStyleBox, startBarBox, voice2Box, claveBox, libBox;
     juce::TextEditor chordBox;
     juce::Label lArtist, lKey, lScale, lGenre, lTs, lBars, lMode, lIntensity, lBusy, lSpace, lRepeat, lOct, lHarmony, lPreset, lGrid, lZoom, lLane, lExport, lRef, lRefAmt, lBarBusy, lZoomT, lZoomP, lMyStyles, lStart, lVoice2, lClave, lGroove, songInfo, lLib, libInfo;
     juce::Slider intensity, busyG, space, repeat, octave, hTiming, hVel, hLength, hFeel, zoomH, zoomV, barBusy, refAmt, grooveAmt, trClean;
@@ -394,7 +396,7 @@ private:
                      undoBtn { "Undo" }, redoBtn { "Redo" }, editBtn { "Edit  v" }, quantizeBtn { "Quantize" }, deleteBtn { "Delete" },
                      zoomFitBtn { "Fit" }, resetChords { "Reset chords" }, ksToggle { "KEY-SWITCHES: ON" },
                      toolSelect { "Select" }, toolDraw { "Draw" }, toolErase { "Erase" }, toolSplit { "Split" }, toolMute { "Mute" },
-                     refLoad { "Load..." }, refClear { "Clear" }, barAuto { "Auto" }, barReroll { "Re-roll bars" }, barClearNotes { "Clear bar" }, clearAllBtn { "Clear all" }, barCopy { "Copy chord" }, barPaste { "Paste chord" }, barClear { "Deselect" },
+                     refLoad { "Load..." }, refClear { "Clear" }, barAuto { "Auto" }, barReroll { "Re-roll bars" }, barClearNotes { "Clear bar" }, clearAllBtn { "Clear all" }, panicBtn { "Panic" }, barCopy { "Copy chord" }, barPaste { "Paste chord" }, barClear { "Deselect" },
                      phraseBtn { "Lock all phrases" }, liveBtn { "LIVE MIDI OUT: OFF" }, saveStyleBtn { "Save as my style" }, delStyleBtn { "Delete" }, learnBtn { "LEARN FROM THIS BASS LINE" }, songBtn { "FROM YOUR SONG  v" },
                      sfLoadBtn { "Load SoundFont (.sf2)..." }, sfClearBtn { "Remove" };
     juce::ToggleButton playerOn { "Test player" }, midiOut { "Send MIDI to host" }, loopT { "Loop" }, hostSync { "Follow host transport" },
@@ -413,7 +415,11 @@ private:
     FeelPanel feelPanel { proc };                                 // v2.7 batch 2: SOUND & FEEL drawer
     juce::TextButton feelBtn { "SOUND & FEEL" };
     bool feelOpen = false;
-    juce::ComboBox barSpeedBox;                                   // v2.7: per-bar speed
+    // v3.4: bar locks, the project-wide scale lock, grid visibility
+    juce::TextButton barLockBtn { "Lock bar" }, barScaleLockBtn { "Lock scale" };
+    juce::ToggleButton lockScaleAll { "Lock all" };
+    juce::Slider gridVisSlider; juce::Label lGridVis;
+    StepCombo barSpeedBox;                                   // v2.7: per-bar speed
     SourceBar srcBar { proc };
     juce::ScrollBar vScroll { true };                             // v2.7: always-visible scroll bar on the right
     float scrollY = 0.f, scaleNow = 1.f; int shownTheme = -1;

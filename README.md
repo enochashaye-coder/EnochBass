@@ -1,4 +1,19 @@
-# Enoch Bass (v2.2)
+# Enoch Bass (v2.4)
+## v2.4: Bar locks, scale lock, grid visibility, dropdown stepping
+- **LOCK BAR** (bar panel, selected bars): keeps their notes exactly as they are when the song is regenerated (genre, artist, key, instrument...). Editing a locked bar updates its lock. Locks are saved with the project.
+- **LOCK SCALE** (bar panel): the notes of the selected bars stay in their chord scale. Dragging a note steps to the next scale tone in the direction of the drag, and out-of-scale notes are fitted at once (Undo reverts).
+- **Lock all** (toolbar, second row): the scale lock for the whole song, including regenerated notes.
+- A gold strip along the top of a bar in the piano roll = bar lock; an accent strip = scale lock.
+- **Grid** slider (toolbar, second row): Grid Visibility. 50 = the look of earlier versions; it scales the bar, beat and grid lines together.
+- Dropdowns: the up and down arrows on their right edge step one item (top half up, bottom half down). The Up and Down keys and the mouse wheel step too, and apply at once. Wheeling over a dropdown no longer scrolls the panel behind it.
+
+## v2.3: Panic, safe removal, timing offsets
+- **Panic** (toolbar, next to Clear all): releases every note on the DAW and hardware outputs, and resets sustain, expression (CC11 = 127), modulation (CC1 = 0) and pitch bend on all 16 channels.
+- Panic also runs automatically on transport stop, on a change of instrument or sound source, on a routing change, and on bypass (when the host reports bypass to the plugin).
+- Removing the plugin releases its notes first. The hardware MIDI port is closed on its own thread, so a stuck MIDI driver can no longer hold up the DAW (the host waits at most 300 ms).
+- **MIDI DELAY** (ROUTING page, bottom row): sends external MIDI 0-200 ms later, in 0.1 ms steps. The *MIDI Delay (samples)* parameter adds whole samples (0-4000).
+- **BUILT-IN DELAY**: holds the built-in sounds back 0-400 ms. Use it when an external instrument (EZbass, for example) plays late compared with the built-in sound: delay the built-in sound by the same amount.
+- MIDI DELAY can only make external notes later. To make external notes earlier relative to the built-in sound, use BUILT-IN DELAY.
 
 A Windows-only VST3 that writes bass-guitar MIDI for you. Choose the key and the chord of each bar, click **TRY ANOTHER** (generate), and drag the MIDI into **Toontrack EZbass** (or any bass instrument). It is built from the Enoch Solo engine and keeps its piano roll, humanize, chord-per-bar editing, groove lock and style reference. Afrobeat, Afrobeats, Amapiano and other African styles come first, then Pop, Gospel, Rock, Swing, Bossa, Samba and Latin.
 

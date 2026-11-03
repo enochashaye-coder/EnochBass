@@ -7,6 +7,7 @@
 #include <vector>
 #include "Engine/MidiWriter.h"
 #include "Engine/Phrases.h"
+#include "Engine/BarLocks.h"   // v3.4 bar locks
 #include "TestPlayer.h"
 
 class EnochSoloProcessor : public juce::AudioProcessor,
@@ -19,7 +20,9 @@ public:
 
     //==========================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
-    void releaseResources() override {}
+    void releaseResources() override;                       // the host stops or removes us: every note and the port are released first
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    void requestPanic() { panicRequest.store (true); }     // All Notes Off + controller reset on the next block (Panic button, auto triggers)
     bool isBusesLayoutSupported (const BusesLayout&) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlock;
@@ -69,6 +72,9 @@ public:
     //==========================================================================
     // editing (all on the message thread)
     void pushUndo();                       // call once before a change the user may want to undo
+    void applyBarLocks (enochsolo::Pattern& p, bool restore);   // v3.4: restore = put locked notes back first (regeneration only)
+    void refreshLockedBars();                                    // v3.4: a lock follows the notes its bar has now
+    void fitToLocks();
     bool canUndo() const { return ! undoStack.empty(); }
     bool canRedo() const { return ! redoStack.empty(); }
     void undo();
@@ -170,6 +176,15 @@ public:
 
     /** phrase locking: locked phrases keep their notes when the solo is generated again (Try another, parameter changes, ...) */
     const enochsolo::LockRanges& getPhraseLocks() const { return phraseLocks; }
+    // v3.4 bar locks (Engine/BarLocks.h): scale lock keeps a bar's notes in its chord scale, bar lock keeps them through regeneration
+    bool isBarLocked (int bar) const   { return lockedBars.count (bar) > 0; }
+    bool isScaleLocked (int bar) const { return scaleLockAll() || scaleLockBars.count (bar) > 0; }
+    bool scaleLockAll() const          { return apvts.getRawParameterValue ("lockScaleAll")->load() >= 0.5f; }
+    bool scaleLockAllPending() const   { return scaleLockAll() != appliedScaleAll; }   // the project-wide switch changed: fit the song
+    bool hasBarLocks() const           { return ! lockedBars.empty() || ! scaleLockBars.empty() || scaleLockAll(); }
+    void setBarLocks (int bar0, int bar1, bool lock);
+    void setScaleLocks (int bar0, int bar1, bool lock);
+    void applyLocksNow();
     void setPhraseLocked (const enochsolo::Phrase& ph, bool lock);
     void setAllPhrasesLocked (bool lock);
     void rerollPhrase (const enochsolo::Phrase& ph);            // new notes for just this phrase's region
@@ -252,11 +267,22 @@ private:
     juce::String soundFontPath, bassSamplePath;                 // (pre-2.7 single paths, kept for reading old projects)
     std::array<juce::String, TestPlayer::kSlots> smpPaths, sfPaths;
     std::vector<int> barSpeed;                                 // v2.7 per-bar speed override
+    std::set<int> scaleLockBars;                 // v3.4 bars with a scale lock
+    enochsolo::barlock::Saved lockedBars;        // v3.4 bars with a bar lock, with their notes (bar-relative)
+    bool appliedScaleAll = false;                // the project-wide scale lock the song was last fitted to
     std::array<std::array<PartRoute, kParts>, TestPlayer::kSlots> routes;
     mutable juce::SpinLock routeLock;
     std::atomic<bool> routesChanged { false };
     std::shared_ptr<juce::MidiOutput> hwOut; juce::String hwOpenId; juce::SpinLock hwLock;
     juce::MidiBuffer testBuf; juce::SpinLock testLock;
+    std::atomic<bool> panicRequest { false };
+    juce::MidiBuffer panicBuf;                                  // panic messages still to send in this block
+    std::vector<std::pair<int64_t, juce::MidiMessage>> delayQ; // external MIDI held back by the MIDI Delay setting
+    int64_t sampleClock = 0;                                    // running sample count for the delay queue
+    std::vector<std::pair<int64_t, juce::MidiMessage>> intQ;   // built-in sound events held back by the Built-in Delay setting
+    int64_t intClock = 0;
+    void buildPanic (juce::MidiBuffer& pb);
+    static void applyDelay (std::vector<std::pair<int64_t, juce::MidiMessage>>& q, int64_t& clock, const juce::MidiBuffer& in, juce::MidiBuffer& out, int n, int64_t delaySamples);
     void defaultRoutes();
     void openHardwareFor (int slot);
     void fillRoutes (enochsolo::Settings& s) const;
