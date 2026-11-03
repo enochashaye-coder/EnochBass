@@ -11,11 +11,13 @@ namespace
 constexpr float kBaseW = 1250.f, kBaseH = 1032.f;   // v2.7: +62 px for the SOUND SOURCE / NOW PLAYING rows
 constexpr int kEdge = 2, kWood = 16, kScrollW = 14;
 // surface textures, made once
-const juce::Image& texSheet()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff141922), 0.55f, 3); return i; }   // v2.7: midnight charcoal
-const juce::Image& texPlate()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff252c39), 0.5f, 5);  return i; }
-const juce::Image& texBlack()  { static const juce::Image i = EnochTextures::brushed (1024, 1024, juce::Colour (0xff0f131a), 0.8f, 9);  return i; }
-const juce::Image& texBadge()  { static const juce::Image i = EnochTextures::brushed (512, 256, juce::Colour (0xffb9bcc2), 0.6f, 13);  return i; }
-const juce::Image& texWood()   { static const juce::Image i = EnochTextures::walnut (48, 1024, 17);                                       return i; }
+// v3.6: textures come from the cache every open Enoch window holds (see EnochTextureCache)
+static juce::Image texOf (juce::Image EnochTextureCache::* m) { juce::SharedResourcePointer<EnochTextureCache> c; return (*c).*m; }
+juce::Image texSheet() { return texOf (&EnochTextureCache::sheet); }
+juce::Image texPlate() { return texOf (&EnochTextureCache::plate); }
+juce::Image texBlack() { return texOf (&EnochTextureCache::black); }
+juce::Image texBadge() { return texOf (&EnochTextureCache::badge); }
+juce::Image texWood()  { return texOf (&EnochTextureCache::wood); }
 }
 
 
@@ -662,12 +664,14 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     setResizable (true, false);                       // our own edge / corner handles do the resizing (all four edges and corners)
     setResizeLimits (720, 560, 3400, 2400);
     juce::Component::addAndMakeVisible (edgeResizer);
-    setSize (1260, 940);      // last: this triggers resized(), which needs every child to exist
+    setSize (1260, 940);
+    enochlog::write ("window opened");      // last: this triggers resized(), which needs every child to exist
     startTimerHz (10);
 }
 
 EnochSoloEditor::~EnochSoloEditor()
 {
+    enochlog::write ("window closing");
     stopTimer();
     roll.onBarSelection = nullptr; roll.onViewChanged = nullptr; roll.onToolChanged = nullptr;
     body.paintFn = nullptr;

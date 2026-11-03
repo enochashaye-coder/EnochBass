@@ -1,4 +1,7 @@
-# Enoch Bass (v2.5)
+# Enoch Bass (v2.6)
+## v2.6: Removal freeze fix
+- Removing the plugin from a project (or closing the project) froze the DAW on Windows, in Studio One and Cubase. The panel textures were kept in static memory until Windows unloaded the plugin, after JUCE had shut down its Direct2D graphics; freeing them then could hang the DAW. They now belong to the open plugin windows and are freed when the last Enoch window closes.
+- A short log is written to %APPDATA%\Enoch\enoch-log.txt: instance created, window opened / closed, textures freed, each step of removal, plugin unloaded. If the DAW ever stops responding, the last line shows where.
 ## v2.5: Stability (Studio One freezes)
 - Changing the key, scale, genre, artist, instrument or sound source no longer makes the plugin call back into the DAW, or rebuild the song, from inside the DAW's own call. The work happens on the plugin's own timer a moment later. (The Studio One crash dump showed it crashing in its own window code right after calling into Enoch.)
 - SoundFonts and one-shots load on a background thread. The previous sound keeps playing while a file loads and stays if the file cannot be used; the status line shows "Loading ..." meanwhile.

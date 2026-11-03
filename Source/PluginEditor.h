@@ -1,5 +1,6 @@
 #pragma once
-#include "StepCombo.h"   // v3.4: dropdowns that step with the arrows, keys and wheel
+#include "StepCombo.h"
+#include "EnochLog.h"   // v3.6: open / close / removal log   // v3.4: dropdowns that step with the arrows, keys and wheel
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <functional>
@@ -15,6 +16,19 @@
 
 //==============================================================================
 /** Overview bar under the piano roll: drag the middle to scroll, drag either END to zoom in or out (left-right arrows show at the ends). */
+// v3.6: the panel textures live while any Enoch window is open (every editor holds this through a SharedResourcePointer).
+// They used to sit in static variables until Windows unloaded the plugin, after JUCE had already shut down its Direct2D
+// graphics, and freeing them then could hang the DAW when the plugin was removed.
+struct EnochTextureCache
+{
+    juce::Image sheet = EnochTextures::brushed (1024, 1024, juce::Colour (0xff141922), 0.55f, 3);   // v2.7: midnight charcoal
+    juce::Image plate = EnochTextures::brushed (1024, 1024, juce::Colour (0xff252c39), 0.5f, 5);
+    juce::Image black = EnochTextures::brushed (1024, 1024, juce::Colour (0xff0f131a), 0.8f, 9);
+    juce::Image badge = EnochTextures::brushed (512, 256, juce::Colour (0xffb9bcc2), 0.6f, 13);
+    juce::Image wood  = EnochTextures::walnut (48, 1024, 17);
+    ~EnochTextureCache() { enochlog::write ("window textures freed (last Enoch window closed)"); }
+};
+
 class ZoomBar : public juce::Component
 {
 public:
@@ -322,6 +336,7 @@ private:
 class EnochSoloEditor : public juce::AudioProcessorEditor, public juce::FileDragAndDropTarget, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
+    enochlog::Mark partsMark { "window: every part destroyed" };   // v3.6: first member = destroyed last
     explicit EnochSoloEditor (EnochSoloProcessor&);
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     ~EnochSoloEditor() override;
@@ -372,7 +387,8 @@ private:
     void setBoolParam (const char* id, bool v);
 
     EnochSoloProcessor& proc;
-    juce::SharedResourcePointer<EnochFontHost> fontHost;     // embedded Inter typeface for every font in the plugin
+    juce::SharedResourcePointer<EnochFontHost> fontHost;
+    juce::SharedResourcePointer<EnochTextureCache> textures;   // v3.6: freed when the last Enoch window closes     // embedded Inter typeface for every font in the plugin
     EnochLookAndFeel laf;
     StepCombo soundBox; juce::Label lSound;                  // built-in preview sound for the current instrument
     void refreshSounds();

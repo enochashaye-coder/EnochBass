@@ -11,6 +11,7 @@ static std::shared_ptr<enochsolo::BassSample> loadBassSample_ (const juce::File&
 #include <future>
 void* enochPinModule();
 void enochUnpinModuleAndExitThread (void* module);
+static enochlog::ModuleMark enochModuleMark;   // v3.6: log lines when the DAW loads and unloads the plugin
 #include <chrono>
 
 using namespace enochsolo;
@@ -246,6 +247,7 @@ EnochSoloProcessor::EnochSoloProcessor()
     hSeed = (uint64_t) juce::Random::getSystemRandom().nextInt64();
     regenerate (false, true);
     startTimerHz (30);       // v3.5: parameter changes are applied here, so a little quicker
+    enochlog::write ("instance created");
 }
 
 // v3.3: destroying a MIDI port that a stuck driver is still writing to used to hold up the host. The port now gets its last
@@ -270,9 +272,11 @@ static void retireMidiOut (std::shared_ptr<juce::MidiOutput> dev, const std::vec
 
 EnochSoloProcessor::~EnochSoloProcessor()
 {
+    enochlog::write ("instance removal: start");
     stopTimer();
     alive->store (false);                  // v3.5: results of loads still on their way are dropped
     loader.removeAllJobs (true, 4000);
+    enochlog::write ("instance removal: timer and file loader stopped");
     for (auto* id : kGenIds) apvts.removeParameterListener (id, this);
     for (auto* id : kFinIds) apvts.removeParameterListener (id, this);
     juce::MidiBuffer pb; buildPanic (pb);
@@ -280,6 +284,7 @@ EnochSoloProcessor::~EnochSoloProcessor()
     std::shared_ptr<juce::MidiOutput> dev;
     { const juce::SpinLock::ScopedLockType lk (hwLock); dev = std::move (hwOut); hwOut.reset(); hwOpenId.clear(); }
     retireMidiOut (std::move (dev), msgs, 300);
+    enochlog::write ("instance removal: notes released, MIDI port closed; freeing its parts");
 }
 
 void EnochSoloProcessor::buildPanic (juce::MidiBuffer& pb)
@@ -303,6 +308,7 @@ void EnochSoloProcessor::buildPanic (juce::MidiBuffer& pb)
 // JUCE does not run processBlock while the host releases us, so the notes can be let go here
 void EnochSoloProcessor::releaseResources()
 {
+    enochlog::write ("audio stopped by the DAW (releaseResources)");
     auto& pb = rtPanic; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0);     // added to, never overwritten: a pending panic must not be lost
     player.allNotesOff();
     { const juce::SpinLock::ScopedTryLockType lk (hwLock); if (lk.isLocked() && hwOut) hwOut->sendBlockOfMessages (panicBuf, juce::Time::getMillisecondCounterHiRes() + 2.0, sr); }

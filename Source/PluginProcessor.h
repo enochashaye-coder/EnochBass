@@ -7,7 +7,8 @@
 #include <vector>
 #include "Engine/MidiWriter.h"
 #include "Engine/Phrases.h"
-#include "Engine/BarLocks.h"   // v3.4 bar locks
+#include "Engine/BarLocks.h"
+#include "EnochLog.h"   // v3.6: open / close / removal log   // v3.4 bar locks
 #include "TestPlayer.h"
 
 class EnochSoloProcessor : public juce::AudioProcessor,
@@ -15,6 +16,7 @@ class EnochSoloProcessor : public juce::AudioProcessor,
                            private juce::Timer
 {
 public:
+    enochlog::Mark partsMark { "instance: every part destroyed (removal finished)" };   // v3.6: first member = destroyed last
     EnochSoloProcessor();
     ~EnochSoloProcessor() override;
 
