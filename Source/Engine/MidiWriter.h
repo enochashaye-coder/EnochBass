@@ -32,7 +32,7 @@ public:
                 std::vector<std::pair<int, int>> order (used.begin(), used.end());
                 std::stable_sort (order.begin(), order.end(), [] (const auto& a, const auto& b) { return a.second > b.second; });
                 for (auto& o : order)
-                    tracks.push_back (noteTrack (p, 0, 0, std::string ("Enoch Bass - ") + instName (p.s.instrument) + " - " + artName (o.first), o.first));
+                    tracks.push_back (noteTrack (p, 0, 0, std::string ("Enoch Bass - ") + instName (p.s.instrument) + " - " + artLabel (p.s.lib.get(), o.first), o.first));
             }
             else tracks.push_back (noteTrack (p, 0, 0, std::string ("Enoch Bass - ") + instName (p.s.instrument) + " solo"));
         }
@@ -84,7 +84,7 @@ private:
             for (size_t i = 0; i < p.s.lib->arts.size(); ++i)
             {
                 const auto& a = p.s.lib->arts[i];
-                ks += std::string (artName (a.art)) + "=";
+                ks += artLabel (p.s.lib.get(), a.art) + "=";
                 for (size_t k = 0; k < a.press.size(); ++k) ks += noteName (a.press[k].note) + (k + 1 < a.press.size() ? "+" : "");
                 ks += (i + 1 < p.s.lib->arts.size() ? ", " : "");
             }

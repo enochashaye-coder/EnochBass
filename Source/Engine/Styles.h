@@ -35,6 +35,7 @@ inline const char* artName (int a)
         "Slide", "Bend", "Vibrato", "Harmonic", "Growl", "Flutter-Tongue", "Fall", "Doit", "Scoop",
         "Subtone", "Shake", "Trill", "Tremolo", "Pizzicato", "Glissando", "Col Legno", "Arpeggio / Roll", "Mute (Harmon)",
         "Strum / Chord", "Slap" };
+    if (a >= (int) A_Count) return "Library key";     // v3.8: a profile's own key (named in the profile)
     return n[std::clamp (a, 0, (int) A_Count - 1)];
 }
 

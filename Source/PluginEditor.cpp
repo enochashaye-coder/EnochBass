@@ -445,6 +445,20 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
         m.addSeparator();
         m.addItem (4, "Previous take", proc.canGoBack());
         m.addItem (5, "Next take", proc.canGoForward());
+        // v3.8: favourite takes (kept in a file, so they are there in every project)
+        m.addSeparator();
+        m.addItem (6, "Keep this take as a favourite");
+        {
+            const auto favs = proc.favourites();
+            juce::PopupMenu load, del;
+            for (int i = 0; i < (int) favs.size() && i < 60; ++i)
+            {
+                const auto label = favs[(size_t) i].name + "   (" + juce::String (favs[(size_t) i].bars) + " bars, " + favs[(size_t) i].when + ")";
+                load.addItem (100 + i, label); del.addItem (200 + i, label);
+            }
+            m.addSubMenu ("Favourite takes", load, ! favs.empty());
+            m.addSubMenu ("Delete a favourite", del, ! favs.empty());
+        }
         juce::Component::SafePointer<EnochSoloEditor> self (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&tryOpts), [self] (int r)
         {
@@ -453,6 +467,9 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
             if (r >= 1 && r <= 3) self->setBoolParam (ids[r - 1], ! (self->proc.apvts.getRawParameterValue (ids[r - 1])->load() > 0.5f));
             if (r == 4) self->proc.historyBack();
             if (r == 5) self->proc.historyForward();
+            if (r == 6) self->askFavouriteName();
+            if (r >= 100 && r < 160) { juce::String msg; self->proc.loadFavourite (r - 100, msg); self->styleMsg = msg; }
+            if (r >= 200 && r < 260) { self->styleMsg = self->proc.deleteFavourite (r - 200) ? "Favourite deleted." : "Could not delete that favourite."; }
         });
     };
     for (auto* b : { &outBtn, &tapBtn, &tryOpts }) addAndMakeVisible (*b);
@@ -508,6 +525,21 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     zoomFitBtn.setTooltip ("Show the whole bass line");           zoomFitBtn.onClick = [this] { roll.zoomFit(); };
     resetChords.setTooltip ("Put every bar back to the song's own chords"); resetChords.onClick = [this] { proc.clearBarChords(); };
     for (auto* b : { &undoBtn, &redoBtn, &editBtn, &quantizeBtn, &deleteBtn, &zoomFitBtn, &resetChords }) addAndMakeVisible (*b);
+    // ---- v3.8
+    followBtn.setClickingTogglesState (true); ghostBtn.setClickingTogglesState (true); loopSelBtn.setClickingTogglesState (false);
+    followBtn.setToggleState (proc.followView.load(), juce::dontSendNotification);
+    ghostBtn.setToggleState (proc.ghostView.load(), juce::dontSendNotification);
+    followBtn.setTooltip ("Follow: the piano roll turns the page with the playhead while it plays (zoom in first). Off = the view stays where you put it.");
+    ghostBtn.setTooltip ("Ghost notes: show the other Enoch plugin's notes faintly behind these (Enoch Bass in Enoch Solo and the other way round), to line the parts up.");
+    loopSelBtn.setTooltip ("Loop the selected notes or bars with PLAY (Ctrl+L). Click again to stop looping.");
+    keysBtn.setTooltip ("Keyboard shortcuts of the piano roll (or press ? with the roll clicked)");
+    followBtn.onClick = [this] { proc.followView = followBtn.getToggleState(); };
+    ghostBtn.onClick = [this] { proc.ghostView = ghostBtn.getToggleState(); roll.repaint(); };
+    loopSelBtn.onClick = [this] { roll.toggleLoopSelection(); };
+    keysBtn.onClick = [this] { roll.setShowShortcuts (! roll.shortcutsShown()); roll.grabKeyboardFocus(); };
+    roll.onMessage = [this] (const juce::String& m) { styleMsg = m; };
+    routePanel.onEditorToggled = [this] { resized(); };
+    for (auto* b : { &followBtn, &ghostBtn, &loopSelBtn, &keysBtn }) addAndMakeVisible (*b);
 
     // zoom sliders
     for (auto* s : { &zoomH, &zoomV })
@@ -904,7 +936,7 @@ void EnochSoloEditor::refreshKeySwitchText()
         if (lib->noKeySwitches) t << "no key-switch notes are written (controllers only).";
         else for (size_t i = 0; i < lib->arts.size(); ++i)
         {
-            t << artName (lib->arts[i].art) << " = ";
+            t << juce::String (artLabel (lib.get(), lib->arts[i].art)) << " = ";
             for (size_t k = 0; k < lib->arts[i].press.size(); ++k) t << juce::String (noteName (lib->arts[i].press[k].note)) << (k + 1 < lib->arts[i].press.size() ? "+" : "");
             t << (i + 1 < lib->arts.size() ? "   |   " : "");
         }
@@ -993,6 +1025,10 @@ void EnochSoloEditor::timerCallback()
     const bool hostPlay = proc.hostIsPlaying() && proc.apvts.getRawParameterValue ("hostSync")->load() > 0.5f;
     play.setButtonText (hostPlay ? "HOST PLAYING" : (proc.isInternalPlaying() ? "STOP" : "PLAY"));
     play.setToggleState (proc.isInternalPlaying() || hostPlay, juce::dontSendNotification);
+    {   // v3.8: the loop button shows when PLAY loops a selection
+        const bool lp = proc.loopRegionOn();
+        if (loopSelBtn.getToggleState() != lp) { loopSelBtn.setToggleState (lp, juce::dontSendNotification); loopSelBtn.setButtonText (lp ? "Stop loop" : "Loop sel."); }
+    }
 
     {
         const bool live = proc.apvts.getRawParameterValue ("midiOut")->load() > 0.5f;
@@ -1020,7 +1056,7 @@ void EnochSoloEditor::timerCallback()
     const auto chordMsg = proc.getChordStatus();
     hint.setColour (juce::Label::textColourId, chordMsg.isNotEmpty() ? LF::red() : LF::dim());
     hint.setText (chordMsg.isNotEmpty() ? chordMsg
-                  : juce::String ("Tip: left-click a chord = select the bar (then use BUSY)  |  right-click a chord = chord menu  |  wheel over the bar numbers = zoom  |  keys 1-5 = tools"),
+                  : juce::String ("Tip: left-click a chord = select the bar (then use BUSY)  |  right-click a chord = chord menu  |  wheel over the bar numbers = zoom  |  keys 1-5 = tools  |  ? = all shortcuts"),
                   juce::dontSendNotification);
 
     {
@@ -1645,7 +1681,7 @@ void EnochSoloEditor::layoutBody()
         lGrid.setBounds (0, 0, 0, 0);
         rowLayout (tb, { { &toolSelect, 58 }, { &toolDraw, 52 }, { &toolErase, 56 }, { &toolSplit, 52 }, { &toolMute, 54 }, { nullptr, 8 },
                          { &undoBtn, 52 }, { &redoBtn, 52 }, { &editBtn, 64 }, { nullptr, 8 },
-                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 }, { nullptr, 6 }, { &clearAllBtn, 72 }, { &panicBtn, 64 } });
+                         { &gridBox, 92 }, { nullptr, 4 }, { &snapGrid, 110 }, { &snapScale, 118 }, { &quantizeBtn, 74 }, { &deleteBtn, 58 }, { nullptr, 6 }, { &clearAllBtn, 72 }, { &panicBtn, 64 }, { nullptr, 4 }, { &keysBtn, 28 } });
         // the toggles are drawn smaller, centred in the row
         for (auto* t : { &snapGrid, &snapScale }) t->setBounds (t->getBounds().reduced (0, 4));
         gridBox.setTooltip ("Grid used for the grid lines, snapping, quantize and new-note length");
@@ -1681,6 +1717,10 @@ void EnochSoloEditor::layoutBody()
         barCopy.setBounds (l1.removeFromRight (86).reduced (2, 0));
         l1.removeFromRight (10);
         resetChords.setBounds (l1.removeFromRight (104).reduced (2, 0));
+        loopSelBtn.setBounds (l1.removeFromRight (84).reduced (2, 0));   // v3.8: loop the selection, Ghost notes, Follow the playhead
+        ghostBtn.setBounds (l1.removeFromRight (64).reduced (2, 0));
+        followBtn.setBounds (l1.removeFromRight (68).reduced (2, 0));
+        l1.removeFromRight (6);
         barInfo.setBounds (l1);
         bp.removeFromTop (2);
         auto l2 = bp.removeFromTop (24);
@@ -1739,7 +1779,7 @@ void EnochSoloEditor::layoutBody()
         c->setVisible (false);
     roll.setBounds (r);
     routePanel.setVisible (routeOpen);
-    if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236))); routePanel.toFront (false); }
+    if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - (routePanel.isEditingProfile() ? juce::jmax (236, r.getHeight() - 40) : 236)))); routePanel.toFront (false); }   // v3.8: the profile editor gets the roll's height
     feelPanel.setVisible (feelOpen);
     if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); feelPanel.toFront (false); }
     outPanel.setVisible (outOpen);
@@ -1791,4 +1831,19 @@ void EnochSoloEditor::layoutBody()
         lStart.setBounds (lr.removeFromLeft (juce::jmax (70, lr.getWidth() - 62)));
         startBarBox.setBounds (lr.reduced (2, 0));
     }
+}
+
+
+//==============================================================================
+// v3.8: keep the current take as a favourite (named after its style, key and time; no pop-up window, so nothing can be left open
+// when the plugin is closed or removed)
+void EnochSoloEditor::askFavouriteName()
+{
+    juce::String name = "Take";
+    if (auto sn = proc.getSnapshot())
+        name = juce::String (sn->pattern.styleName) + "  -  " + juce::String (enochsolo::kNoteNames[juce::jlimit (0, 11, sn->pattern.s.keyRoot)]) + " " + juce::String (enochsolo::scaleName (sn->pattern.s.scale));
+    name << "  -  " << juce::Time::getCurrentTime().formatted ("%d %b %H:%M");
+    juce::String msg;
+    proc.starCurrentTake (name, msg);
+    styleMsg = msg;
 }

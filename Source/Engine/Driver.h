@@ -156,13 +156,30 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
             }
         }
         // ---- 5) transpose into the library's range + velocity curve (played notes only)
+        // v3.8 safety: a played note never lands on a key the profile uses as a switch (the instrument would switch instead of
+        // sounding: the "silent note" fault). Such a note moves by an octave, to the nearest free key, staying in range when it can.
+        std::array<bool, 128> keys {}; keys.fill (false);
+        if (L) keys = libKeyMask (*L);
+        auto freeKey = [&] (int p)
+        {
+            if (! keys[(size_t) p]) return p;
+            int best = -1, bestCost = 1 << 20;
+            for (int d : { 12, -12, 24, -24, 36, -36 })
+            {
+                const int q = p + d;
+                if (q < 0 || q > 127 || keys[(size_t) q]) continue;
+                const int cost = std::abs (d) + ((q < lo || q > hi) ? 100 : 0);
+                if (cost < bestCost) { bestCost = cost; best = q; }
+            }
+            return best >= 0 ? best : p;
+        };
         for (auto& e : t)
         {
             if (e.ks || (e.type != EV_ON && e.type != EV_OFF)) continue;
             int p = e.a + tr;
             while (p < lo && p + 12 <= 127) p += 12;
             while (p > hi && p - 12 >= 0) p -= 12;
-            e.a = std::clamp (p, 0, 127);
+            e.a = freeKey (std::clamp (p, 0, 127));
             if (e.type == EV_ON && L)
             {
                 const double u = std::pow (std::clamp (e.b / 127.0, 0.0, 1.0), L->velGamma);

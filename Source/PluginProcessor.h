@@ -12,6 +12,7 @@
 #include "OutputStage.h"  // v3.7: master volume, compressor, Safe Output limiter
 #include <array>   // v3.4 bar locks
 #include "TestPlayer.h"
+#include "Extras.h"   // v3.8: favourite takes, ghost notes, humanize
 
 class EnochSoloProcessor : public juce::AudioProcessor,
                            private juce::AudioProcessorValueTreeState::Listener,
@@ -161,6 +162,18 @@ public:
     void useTappedRhythm (const std::vector<TapHit>& hits, double bpm);
     void applyKeeps (const enochsolo::Pattern& old, bool keepRhythm, bool keepNotes, bool keepArts);
     std::atomic<int> editorW { 0 }, editorH { 0 };     // v3.7: this project's window size (0 = not set yet)
+    // ---- v3.8
+    std::atomic<bool> followView { true }, ghostView { true };    // piano roll: page with the playhead / show the other Enoch plugin's notes
+    std::atomic<double> loopRegionA { -1.0 }, loopRegionB { -1.0 }; // PLAY (not the DAW) loops these beats; -1 = off
+    void setLoopRegion (double a, double b) { if (b > a + 1e-3) { loopRegionA = a; loopRegionB = b; seekBeat.store (a); } else clearLoopRegion(); }
+    void clearLoopRegion() { loopRegionA = -1.0; loopRegionB = -1.0; }
+    bool loopRegionOn() const { return loopRegionB.load() > loopRegionA.load() + 1e-3 && loopRegionA.load() >= 0.0; }
+    std::vector<enochx::Favourite> favourites() const { return enochx::loadFavourites (JucePlugin_Name); }
+    bool starCurrentTake (const juce::String& name, juce::String& message);
+    bool loadFavourite (int index, juce::String& message);
+    bool deleteFavourite (int index);
+    const juce::String instanceId { juce::Uuid().toString().substring (0, 12) };
+    int lastSharedNumber = -1; juce::uint32 lastShareWrite = 0;
     void clearSoundFont();
     /** one-shot bass sound for the built-in preview: any single bass note recording (WAV / AIFF / FLAC / MP3) */
     bool loadBassSample (const juce::File& f, juce::String& message);

@@ -441,6 +441,28 @@ void RollView::timerCallback()
     const double prevBeat = lastBeat;
     lastBeat = pb;
     auto s = proc.getSnapshot();
+    // v3.8: ghost notes of the other Enoch plugin (checked once a second; the file only changes when its notes change)
+    if (proc.ghostView.load() && juce::Time::getMillisecondCounter() - ghostCheckAt > 1000)
+    {
+        ghostCheckAt = juce::Time::getMillisecondCounter();
+        const auto before = ghostStamp;
+        if (! enochx::readOtherShare (JucePlugin_Name, ghosts, ghostStamp)) { if (! ghosts.notes.empty()) { ghosts = {}; repaint(); } }
+        else if (ghostStamp != before) repaint();
+    }
+    // v3.8 Follow: when the playhead leaves the visible page, the page turns with it (not while you drag)
+    if (moved2 && pb >= 0 && proc.followView.load() && drag == Drag::None && snap && viewLen > 0)
+    {
+        const auto G = geo();
+        if (G.len > 0 && G.viewLen < G.len - 1e-6)
+        {
+            const double at = std::fmod (pb, G.len);
+            if (at < G.viewStart - 1e-6 || at > G.viewStart + G.viewLen * 0.97)
+            {
+                viewStart = at - G.viewLen * 0.03; clampView(); updateScrollBars(); repaint(); notifyView();
+                return;
+            }
+        }
+    }
     if ((s ? s->number : -1) != lastNumber) refresh();
     else if (moved2)
     {
@@ -704,6 +726,38 @@ void RollView::paint (juce::Graphics& g)
             if (bl) { g.setColour (juce::Colour (0xffd9b35a)); g.fillRect (x0, (float) G.notes.getY() + 4.f, x1 - x0, 3.f); }
         }
 
+        // v3.8 ghost notes: the other Enoch plugin's take, faint and outlined, under this one's notes
+        if (proc.ghostView.load() && ! ghosts.notes.empty())
+        {
+            juce::Graphics::ScopedSaveState gs (g);
+            g.reduceClipRegion (G.notes.getSmallestIntegerContainer());
+            const auto gc = juce::Colour (0xffc9a7ff);
+            int below = 0, above = 0;
+            for (auto& n : ghosts.notes)
+            {
+                if (n.start >= G.len) continue;
+                const float x = xOf (G, n.start), wN = std::max (3.f, (float) n.length * G.ppb - 1.f);
+                if (x + wN < G.notes.getX() || x > G.notes.getRight()) continue;
+                if (n.pitch < G.lo || n.pitch > G.hi)
+                {
+                    // out of view: a tick on the edge it is beyond, so the rhythm still lines up
+                    const bool low = n.pitch < G.lo; (low ? below : above)++;
+                    g.setColour (gc.withAlpha (n.track == 0 ? 0.55f : 0.30f));
+                    g.fillRect (x, low ? G.notes.getBottom() - 4.f : G.notes.getY(), wN, 3.f);
+                    continue;
+                }
+                juce::Rectangle<float> r (x, yOf (G, n.pitch) + 1.f, wN, std::max (2.f, G.rowH - 2.f));
+                g.setColour (gc.withAlpha (n.track == 0 ? 0.16f : 0.09f)); g.fillRoundedRectangle (r, 2.f);
+                g.setColour (gc.withAlpha (n.track == 0 ? 0.50f : 0.28f)); g.drawRoundedRectangle (r, 2.f, 1.f);
+            }
+            const juce::String lbl = "ghost notes: " + ghosts.plugin + (below > 0 ? "  (more below: scroll down)" : (above > 0 ? "  (more above: scroll up)" : ""));
+            g.setFont (juce::Font (juce::FontOptions (10.5f)));
+            const float lw = 14.f + 6.f * (float) lbl.length();
+            auto lb = juce::Rectangle<float> (G.notes.getRight() - lw - 6.f, G.notes.getBottom() - 22.f, lw, 16.f);
+            g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (lb, 4.f);
+            g.setColour (gc.withAlpha (0.85f)); g.drawText (lbl, lb, juce::Justification::centred);
+        }
+
         // notes: backing tracks first, solo on top
         for (int pass = 0; pass < 2; ++pass)
             for (auto& n : raw)
@@ -763,7 +817,7 @@ void RollView::paint (juce::Graphics& g)
         juce::Graphics::ScopedSaveState ss (g);
         g.reduceClipRegion (G.ks.getSmallestIntegerContainer());
         const auto& ks = artList (P.s.instrument);
-        const Library* lib = (P.s.lib && P.s.lib->inst == P.s.instrument && ! P.s.lib->standard) ? P.s.lib.get() : nullptr;
+        const Library* lib = artLib();
         int last = -1; g.setFont (juce::Font (juce::FontOptions (10.5f)));
         float lastX = -100;
         for (auto& e : P.playEvents)
@@ -776,12 +830,26 @@ void RollView::paint (juce::Graphics& g)
                 last = art;
                 const float x = xOf (G, e.t);
                 g.setColour (colourFor (art, T.accent)); g.fillRect (x, G.ks.getY() + 1, 2.f, G.ks.getHeight() - 2.f);
-                if (x - lastX > 46.f) { g.setColour (LF::text().withAlpha (0.85f)); g.drawText (artName (art), (int) x + 4, (int) G.ks.getY(), 90, 14, juce::Justification::centredLeft); lastX = x; }
+                if (x - lastX > 46.f) { g.setColour (LF::text().withAlpha (0.85f)); g.drawText (juce::String (artLabel (lib, art)), (int) x + 4, (int) G.ks.getY(), 120, 14, juce::Justification::centredLeft); lastX = x; }
             }
         if (P.s.exportMode != 0)
         {
             g.setColour (LF::dim()); g.setFont (juce::Font (juce::FontOptions (10.f)));
             g.drawText ("(key-switches are shown here for the test player; the exported MIDI follows your MIDI EXPORT choice)", G.ks.toNearestInt().withTrimmedLeft (4), juce::Justification::centredRight);
+        }
+    }
+
+    // ---------- v3.8 loop selection: the looped beats are marked on the ruler and over the notes
+    if (proc.loopRegionOn())
+    {
+        const float x0 = juce::jmax (G.notes.getX(), xOf (G, proc.loopRegionA.load())), x1 = juce::jmin (G.notes.getRight(), xOf (G, proc.loopRegionB.load()));
+        if (x1 > x0)
+        {
+            g.setColour (T.accent.withAlpha (0.55f)); g.fillRect (x0, G.ruler.getY(), x1 - x0, G.ruler.getHeight());
+            g.setColour (T.accent.withAlpha (0.06f)); g.fillRect (x0, G.notes.getY(), x1 - x0, G.notes.getHeight());
+            g.setColour (T.accent.withAlpha (0.8f)); g.drawVerticalLine ((int) x0, G.ruler.getY(), G.notes.getBottom()); g.drawVerticalLine ((int) x1, G.ruler.getY(), G.notes.getBottom());
+            g.setColour (juce::Colours::black); g.setFont (juce::Font (juce::FontOptions (10.f, juce::Font::bold)));
+            g.drawText ("LOOP", juce::Rectangle<float> (x0 + 3.f, G.ruler.getY(), juce::jmax (0.f, x1 - x0 - 6.f), G.ruler.getHeight()), juce::Justification::centredLeft);
         }
     }
 
@@ -804,6 +872,55 @@ void RollView::paint (juce::Graphics& g)
         g.setColour (juce::Colours::black.withAlpha (0.6f)); g.fillRoundedRectangle (G.notes.getX() + 4.f, G.notes.getBottom() - 22.f, 130.f, 18.f, 4.f);
         g.setColour (LF::text()); g.setFont (juce::Font (juce::FontOptions (12.f)));
         g.drawText (juce::String ((int) selected.size()) + " note" + (selected.size() == 1 ? "" : "s") + " selected", (int) G.notes.getX() + 10, (int) G.notes.getBottom() - 22, 124, 18, juce::Justification::centredLeft);
+    }
+    if (showKeys) drawShortcuts (g, G);
+}
+
+// v3.8: every keyboard shortcut of the piano roll (press ? to show / hide)
+void RollView::drawShortcuts (juce::Graphics& g, const Geo& G)
+{
+    static const char* rows[][2] = {
+        { "Up / Down", "Move the selected notes one step (scale-locked bars: next scale note)" },
+        { "Shift + Up / Down", "Move the selected notes an octave" },
+        { "Left / Right", "Select the previous / next note (Shift adds to the selection)" },
+        { "Alt + Left / Right", "Move the selected notes in time by the grid" },
+        { "Ctrl+A / Esc", "Select all / select none" },
+        { "Ctrl+C / X / V / D", "Copy / cut / paste / duplicate" },
+        { "Ctrl+Z / Ctrl+Y", "Undo / redo" },
+        { "Delete", "Delete the selected notes" },
+        { "Q", "Quantize the selected notes" },
+        { "L", "Legato: each note runs to the next" },
+        { "M", "Mute / unmute the selected notes" },
+        { "H", "Humanize the selected notes (timing and velocity)" },
+        { "Ctrl+L", "Loop the selection with PLAY (again = stop looping)" },
+        { "1 2 3 4 5", "Tools: select, draw, erase, split, mute" },
+        { "Mouse wheel", "Ruler: zoom time. Piano keys or Ctrl: zoom pitch" },
+        { "Drag past an edge", "The view scrolls that way (select, move, resize)" },
+        { "?", "Show / hide this list" } };
+    const int n = (int) (sizeof (rows) / sizeof (rows[0]));
+    (void) G;
+    // the whole list fits the roll: one column when there is room, two when the roll is short
+    const auto area = getLocalBounds().toFloat().reduced (10.f);
+    const float lineH = 18.f;
+    const int cols = (34.f + lineH * (float) n <= area.getHeight()) ? 1 : 2;
+    const int perCol = (n + cols - 1) / cols;
+    const float colW = cols == 1 ? 620.f : 560.f;
+    const float w = juce::jmin (area.getWidth(), colW * (float) cols + 28.f), h = juce::jmin (area.getHeight(), 34.f + lineH * (float) perCol + 8.f);
+    auto box = juce::Rectangle<float> (w, h).withCentre (area.getCentre());
+    g.setColour (juce::Colours::black.withAlpha (0.88f)); g.fillRoundedRectangle (box, 8.f);
+    g.setColour (LF::of (*this).accent.withAlpha (0.7f)); g.drawRoundedRectangle (box, 8.f, 1.2f);
+    auto r = box.reduced (14.f, 8.f);
+    g.setColour (LF::text()); g.setFont (juce::Font (juce::FontOptions (13.f, juce::Font::bold)));
+    g.drawText ("KEYBOARD SHORTCUTS  (click anywhere or press ? to close)", r.removeFromTop (22.f), juce::Justification::centredLeft);
+    const float cw = r.getWidth() / (float) cols;
+    for (int i = 0; i < n; ++i)
+    {
+        const int c = i / perCol, k = i % perCol;
+        auto line = juce::Rectangle<float> (r.getX() + cw * (float) c, r.getY() + lineH * (float) k, cw - 10.f, lineH);
+        g.setFont (juce::Font (juce::FontOptions (12.f, juce::Font::bold))); g.setColour (LF::of (*this).accent);
+        g.drawText (rows[i][0], line.removeFromLeft (140.f), juce::Justification::centredLeft);
+        g.setFont (juce::Font (juce::FontOptions (12.f))); g.setColour (LF::text());
+        g.drawText (rows[i][1], line, juce::Justification::centredLeft, true);
     }
 }
 
@@ -947,7 +1064,7 @@ void RollView::mouseMove (const juce::MouseEvent& e)
             if (i >= 0)
             {
                 auto& n = raw[(size_t) i];
-                h = juce::String (noteName (n.pitch)) + "   vel " + juce::String (n.vel) + "   " + artName (n.art) + (n.mute ? "   (muted)" : "");
+                h = juce::String (noteName (n.pitch)) + "   vel " + juce::String (n.vel) + "   " + juce::String (artLabel (artLib(), n.art)) + (n.mute ? "   (muted)" : "");
                 if (n.art == A_Bend) h << " (+" << n.bend << ")";
             }
             else h = tool == Tool::Draw ? "Click-drag to draw a note" : "Double-click to add a note";
@@ -1021,6 +1138,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
     grabKeyboardFocus();
     if (! snap) return;
     const auto g = geo(); const auto p = e.position;
+    if (showKeys) { setShowShortcuts (false); return; }     // v3.8: a click closes the shortcut list
     downPos = p; moved = false; duplicated = false; drag = Drag::None; rightDownInLane = false;
 
     // ---------------- the line above the velocity lane: drag to resize the lanes
@@ -1156,6 +1274,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
             selBeforeRubber = add ? selected : std::set<int>();
             if (! add) selected.clear();
             rubber = { p, p }; drag = Drag::Rubber;
+            rubberBeat = beatAt (g, p.x); rubberPitchF = (float) g.hi + 1.f - (p.y - g.notes.getY()) / g.rowH;
         }
         repaint();
     }
@@ -1176,6 +1295,7 @@ void RollView::setVelFromY (const Geo& g, float x0, float x1, float y)
 void RollView::mouseDrag (const juce::MouseEvent& e)
 {
     if (! snap || drag == Drag::None) return;
+    if (drag == Drag::Rubber || drag == Drag::Move || drag == Drag::Resize || drag == Drag::DrawLen) autoScrollFor (e.position);   // v3.8
     const auto g = geo(); const auto p = e.position;
 
     if (drag == Drag::Divider)
@@ -1219,7 +1339,10 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
     }
     if (drag == Drag::Rubber)
     {
-        rubber = juce::Rectangle<float>::leftTopRightBottom (std::min (downPos.x, p.x), std::min (downPos.y, p.y), std::max (downPos.x, p.x), std::max (downPos.y, p.y));
+        // v3.8: the corner where the drag started stays on the same beat and pitch while the view scrolls
+        const float ax = xOf (g, rubberBeat), ay = g.notes.getY() + ((float) g.hi + 1.f - rubberPitchF) * g.rowH;
+        const float px = juce::jlimit (g.notes.getX(), g.notes.getRight(), p.x), py = juce::jlimit (g.notes.getY(), g.notes.getBottom(), p.y);
+        rubber = juce::Rectangle<float>::leftTopRightBottom (std::min (ax, px), std::min (ay, py), std::max (ax, px), std::max (ay, py));
         selected = selBeforeRubber;
         for (auto& n : raw) if (n.track != 2 && noteRect (g, n).intersects (rubber)) selected.insert (n.id);
         repaint(); return;
@@ -1675,7 +1798,18 @@ void RollView::addEditItems (juce::PopupMenu& m, bool withSelection)
     m.addSubMenu ("Velocity", vm);
     juce::PopupMenu art;
     for (int a : artList (snap ? snap->pattern.s.instrument : 0)) art.addItem (200 + a, artName (a));
+    // v3.8: the instrument's own keys from its mapping profile (Pop, fret positions, Feedback ...), placed by hand
+    if (const auto* lib = artLib())
+    {
+        juce::PopupMenu own; int count = 0;
+        for (auto& a : lib->arts) if (enochsolo::isCustomArt (a.art)) { own.addItem (300 + (a.art - enochsolo::kCustomArt), juce::String (artLabel (lib, a.art))); ++count; }
+        if (count > 0) { art.addSeparator(); art.addSubMenu (juce::String (lib->name) + " keys", own); }
+    }
     m.addSubMenu ("Articulation", art);
+    juce::PopupMenu hm;
+    hm.addItem (60, "Light"); hm.addItem (61, "Medium   (H)"); hm.addItem (62, "Strong");
+    m.addSubMenu ("Humanize (timing + velocity)", hm);
+    m.addItem (63, proc.loopRegionOn() ? "Stop looping the selection   (Ctrl+L)" : "Loop the selection with PLAY   (Ctrl+L)", proc.loopRegionOn() || ! selected.empty() || barSelFirst() >= 0);
 }
 
 void RollView::showEditMenu (juce::Component& target)
@@ -1859,6 +1993,9 @@ void RollView::doOp (int id)
     auto sortByStart = [] (std::vector<Note*>& t) { std::stable_sort (t.begin(), t.end(), [] (const Note* a, const Note* b) { return a->start < b->start; }); };
 
     if (id >= 200 && id < 260) { setArtOnSelected (id - 200); return; }
+    if (id >= 300 && id < 300 + enochsolo::kMaxCustom) { setArtOnSelected (enochsolo::kCustomArt + (id - 300)); return; }   // v3.8 profile keys
+    if (id >= 60 && id <= 62) { humanizeSelected (id - 59); return; }
+    if (id == 63) { toggleLoopSelection(); return; }
     switch (id)
     {
         case 1: selectAll(); return;
@@ -1975,6 +2112,7 @@ bool RollView::keyPressed (const juce::KeyPress& k)
             case 'D': duplicateSelected(); return true;
             case 'Z': if (m.isShiftDown()) doRedo(); else doUndo(); return true;
             case 'Y': doRedo(); return true;
+            case 'L': toggleLoopSelection(); return true;     // v3.8
             default: break;
         }
         return false;
@@ -1984,10 +2122,161 @@ bool RollView::keyPressed (const juce::KeyPress& k)
     if (ch == 'M') { doOp (20); return true; }
     if (ch == 'Q') { quantizeSelected(); return true; }
     if (ch == 'L') { doOp (32); return true; }
-    if (k.isKeyCode (juce::KeyPress::leftKey))  { nudge (-step, 0); return true; }
-    if (k.isKeyCode (juce::KeyPress::rightKey)) { nudge (step, 0); return true; }
-    if (k.isKeyCode (juce::KeyPress::upKey))    { nudge (0, m.isShiftDown() ? 12 : 1); return true; }
-    if (k.isKeyCode (juce::KeyPress::downKey))  { nudge (0, m.isShiftDown() ? -12 : -1); return true; }
-    if (k == juce::KeyPress::escapeKey) { selected.clear(); barA = barB = -1; notifyBars(); repaint(); return true; }
+    // v3.8: Up / Down step the selected notes (by scale where the bar is scale-locked), Left / Right walk the selection from note to
+    // note, Alt + Left / Right move the notes in time (what Left / Right did before)
+    if (k.isKeyCode (juce::KeyPress::leftKey))  { if (m.isAltDown()) nudge (-step, 0); else selectNext (-1, m.isShiftDown()); return true; }
+    if (k.isKeyCode (juce::KeyPress::rightKey)) { if (m.isAltDown()) nudge (step, 0); else selectNext (1, m.isShiftDown()); return true; }
+    if (k.isKeyCode (juce::KeyPress::upKey))    { stepSelected (1, m.isShiftDown()); return true; }
+    if (k.isKeyCode (juce::KeyPress::downKey))  { stepSelected (-1, m.isShiftDown()); return true; }
+    if (ch == 'H') { humanizeSelected (2); return true; }
+    if (k.getTextCharacter() == '?' || (k.getKeyCode() == '/' && m.isShiftDown()) || k.isKeyCode (juce::KeyPress::F1Key)) { setShowShortcuts (! showKeys); return true; }
+    if (k == juce::KeyPress::escapeKey) { if (showKeys) { setShowShortcuts (false); return true; } selected.clear(); barA = barB = -1; notifyBars(); repaint(); return true; }
     return false;
+}
+
+
+//------------------------------------------------------------------------------ v3.8
+const enochsolo::Library* RollView::artLib() const
+{
+    // the profile of the instrument the solo / bass line plays on: the routed profile when there is one, else the main panel's
+    if (! snap) return nullptr;
+    const auto& S = snap->pattern.s;
+    if (S.routed && S.routes[0].lib && S.routes[0].lib->inst == S.instrument && ! S.routes[0].lib->standard) return S.routes[0].lib.get();
+    if (S.lib && S.lib->inst == S.instrument && ! S.lib->standard) return S.lib.get();
+    return nullptr;
+}
+
+void RollView::autoScrollFor (juce::Point<float> p)
+{
+    const auto G = geo();
+    bool changed = false;
+    if (viewLen > 0 && G.viewLen < G.len - 1e-6)
+    {
+        float over = 0.f;
+        if (p.x > G.notes.getRight()) over = p.x - G.notes.getRight();
+        else if (p.x < G.notes.getX()) over = p.x - G.notes.getX();
+        if (over != 0.f)
+        {
+            const double d = (double) juce::jlimit (-240.f, 240.f, over) * 0.25 / (double) G.ppb + (over > 0 ? 1.0 : -1.0) / 64.0;
+            const double before = viewStart;
+            viewStart = juce::jlimit (0.0, G.len - G.viewLen, G.viewStart + d);
+            changed = std::abs (viewStart - before) > 1e-9;
+        }
+    }
+    if (visRows < 128 && (drag == Drag::Rubber || drag == Drag::Move))
+    {
+        int dp = 0;
+        if (p.y < G.notes.getY()) dp = 1 + (int) ((G.notes.getY() - p.y) / 22.f);
+        else if (p.y > G.notes.getBottom()) dp = -(1 + (int) ((p.y - G.notes.getBottom()) / 22.f));
+        if (dp != 0)
+        {
+            const int before = topPitch;
+            topPitch = juce::jlimit (juce::jlimit (12, 128, visRows) - 1, 127, G.hi + juce::jlimit (-6, 6, dp)); vAuto = false;
+            changed = changed || topPitch != before;
+        }
+    }
+    if (changed)
+    {
+        clampView(); updateScrollBars(); notifyView(); repaint();
+        juce::Component::beginDragAutoRepeat (30);       // keeps scrolling while the mouse rests past the edge
+    }
+}
+
+int RollView::stepPitch (int pitch, double beat, int dir) const
+{
+    const double bbl = snap ? std::max (0.5, snap->pattern.barBeats) : 4.0;
+    const bool locked = proc.isScaleLocked ((int) std::floor (beat / bbl + 1e-6));
+    const bool snapOn = proc.apvts.getRawParameterValue ("snapScale")->load() >= 0.5f;
+    if ((locked || snapOn) && snap && ! snap->pattern.chords.empty())
+    {
+        const auto mask = snap->pattern.chordAt (beat).scaleMask;
+        if (mask != 0)
+            for (int q = pitch + dir; q >= 0 && q <= 127; q += dir)
+                if (inMask (mask, q)) return q;                  // the next note of the scale in that direction
+    }
+    return juce::jlimit (0, 127, pitch + dir);
+}
+
+void RollView::stepSelected (int dir, bool octave)
+{
+    if (selected.empty()) return;
+    auto v = raw;
+    bool any = false;
+    for (auto& n : v)
+        if (selected.count (n.id))
+        {
+            const int q = octave ? n.pitch + 12 * dir : stepPitch (n.pitch, n.start, dir);
+            if (q < 0 || q > 127) continue;
+            n.pitch = q; any = true;
+        }
+    if (! any) return;
+    for (auto& n : v) if (selected.count (n.id)) { proc.audition (n.pitch, n.vel); ensureVisible (n); break; }
+    commit (std::move (v));
+}
+
+void RollView::ensureVisible (const enochsolo::Note& n)
+{
+    const auto G = geo();
+    bool changed = false;
+    if (viewLen > 0 && G.viewLen < G.len - 1e-6 && (n.start < G.viewStart || n.start + juce::jmin (n.length, G.viewLen * 0.5) > G.viewStart + G.viewLen))
+    { viewStart = juce::jlimit (0.0, G.len - G.viewLen, n.start - G.viewLen * 0.25); changed = true; }
+    if (n.pitch > G.hi || n.pitch < G.lo)
+    { topPitch = juce::jlimit (juce::jlimit (12, 128, visRows) - 1, 127, n.pitch + visRows / 2); vAuto = false; changed = true; }
+    if (changed) { clampView(); updateScrollBars(); notifyView(); repaint(); }
+}
+
+void RollView::selectNext (int dir, bool extend)
+{
+    std::vector<const Note*> order;
+    for (auto& n : raw) if (n.track != 2) order.push_back (&n);
+    if (order.empty()) return;
+    std::stable_sort (order.begin(), order.end(), [] (const Note* a, const Note* b) { return std::abs (a->start - b->start) > 1e-9 ? a->start < b->start : a->pitch < b->pitch; });
+    int cur = -1;
+    for (int i = 0; i < (int) order.size(); ++i)
+        if (selected.count (order[(size_t) i]->id)) { if (dir > 0 || cur < 0) cur = i; if (dir < 0) break; }
+    if (dir > 0)                                         // the last selected note, walking right
+        for (int i = (int) order.size() - 1; i >= 0; --i) if (selected.count (order[(size_t) i]->id)) { cur = i; break; }
+    int next;
+    if (cur < 0)
+    {
+        // nothing selected: the first note on the page (or the last one, walking left)
+        const auto G = geo(); next = dir > 0 ? 0 : (int) order.size() - 1;
+        for (int i = 0; i < (int) order.size(); ++i) if (order[(size_t) i]->start >= G.viewStart - 1e-9) { next = i; break; }
+    }
+    else next = juce::jlimit (0, (int) order.size() - 1, cur + dir);
+    const Note& n = *order[(size_t) next];
+    if (! extend) selected.clear();
+    selected.insert (n.id); anchorId = n.id;
+    proc.audition (n.pitch, n.vel);
+    ensureVisible (n);
+    repaint();
+}
+
+void RollView::humanizeSelected (int amount)
+{
+    if (! snap) return;
+    std::set<int> ids = selected;
+    if (ids.empty()) { if (onMessage) onMessage ("Humanize: select some notes first (Ctrl+A for all)."); return; }
+    auto v = raw;
+    enochx::humanize (v, ids, amount, totalBeats(), juce::jmax (40.0, proc.getHostBpm()), (uint64_t) snap->number * 31ULL + (uint64_t) amount);
+    for (auto& n : v) if (ids.count (n.id)) n.weight = metricWeight (n.start);
+    commit (std::move (v));
+    if (onMessage) onMessage ("Humanized " + juce::String ((int) ids.size()) + " notes (" + (amount <= 1 ? "light" : amount == 2 ? "medium" : "strong") + "). Undo takes it back.");
+}
+
+void RollView::toggleLoopSelection()
+{
+    if (proc.loopRegionOn()) { proc.clearLoopRegion(); repaint(); if (onMessage) onMessage ("Loop selection off."); return; }
+    if (! snap) return;
+    double a = 1e9, b = -1.0;
+    const double bb = std::max (0.5, snap->pattern.barBeats);
+    if (! selected.empty()) for (auto& n : raw) if (selected.count (n.id)) { a = std::min (a, n.start); b = std::max (b, n.start + n.length); }
+    if (b < 0 && barSelFirst() >= 0) { a = barSelFirst() * bb; b = (barSelLast() + 1) * bb; }
+    if (b <= a) { if (onMessage) onMessage ("Loop selection: select notes or bars first."); return; }
+    // whole beats around the notes, so the loop keeps the groove
+    a = std::floor (a + 1e-6); b = std::min (totalBeats(), std::ceil (b - 1e-6));
+    if (b - a < 0.5) b = std::min (totalBeats(), a + 1.0);
+    proc.setLoopRegion (a, b);
+    repaint();
+    if (onMessage) onMessage ("PLAY now loops beats " + juce::String (a + 1.0, 2) + " to " + juce::String (b + 1.0, 2) + ". Ctrl+L again stops it.");
 }

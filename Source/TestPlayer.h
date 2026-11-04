@@ -95,7 +95,7 @@ public:
                 for (size_t i = 0; i < a.press.size(); ++i)
                 {
                     const int n = a.press[i].note; if (n < 0 || n > 127) continue;
-                    ksArt[(size_t) n] = (i == 0 && ! a.oneShot && ! a.hold && ksArt[(size_t) n] < 0) ? a.art : std::max (ksArt[(size_t) n], -1);
+                    ksArt[(size_t) n] = (i == 0 && ! a.oneShot && ! a.hold && ksArt[(size_t) n] < 0 && a.art < (int) enochsolo::A_Count) ? a.art : std::max (ksArt[(size_t) n], -1);   // v3.8: custom keys only switch, never pick a sound
                 }
             return;
         }

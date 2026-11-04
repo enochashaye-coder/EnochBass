@@ -142,6 +142,12 @@ public:
     void doRedo();
 
     std::function<void()> onBarSelection, onViewChanged, onToolChanged, onPhrasesChanged;
+    // ---- v3.8
+    void humanizeSelected (int amount);                // 1 light, 2 medium, 3 strong (H = medium)
+    void toggleLoopSelection();                        // PLAY loops the selected notes / bars (Ctrl+L)
+    void setShowShortcuts (bool on) { showKeys = on; repaint(); }
+    bool shortcutsShown() const { return showKeys; }
+    std::function<void (const juce::String&)> onMessage;   // a short line for the status bar
     void lockAllPhrases (bool lock) { proc.setAllPhrasesLocked (lock); repaint(); if (onPhrasesChanged) onPhrasesChanged(); }
 
 private:
@@ -235,6 +241,17 @@ private:
     float lastLaneX = 0;
     float laneHpx = 96.f, laneHAtDown = 96.f; bool overDivider = false;     // height of the velocity / controller lane (drag the line above it)
     bool nearDivider (const Geo& g, juce::Point<float> p) const;
+    // ---- v3.8
+    void autoScrollFor (juce::Point<float> p);
+    void selectNext (int dir, bool extend);
+    void stepSelected (int dir, bool octave);
+    int stepPitch (int pitch, double beat, int dir) const;
+    void ensureVisible (const enochsolo::Note& n);
+    const enochsolo::Library* artLib() const;
+    void drawShortcuts (juce::Graphics&, const Geo&);
+    double rubberBeat = 0; float rubberPitchF = 0;
+    bool showKeys = false;
+    enochx::GhostSet ghosts; juce::Time ghostStamp; juce::uint32 ghostCheckAt = 0;
     std::vector<enochsolo::CtrlPoint> stroke; double strokeT0 = 0, strokeT1 = 0; bool strokeLine = false; juce::Point<float> strokeStart;
     bool rightDownInLane = false;
 
@@ -436,6 +453,9 @@ private:
     OutputPanel outPanel { proc };
     TapPanel tapPanel { proc };
     juce::TextButton outBtn { "OUTPUT" }, tapBtn { "TAP" }, tryOpts { "v" };
+    // v3.8: Follow the playhead, ghost notes of the other Enoch plugin, loop the selection, the shortcut list, favourite takes
+    juce::TextButton followBtn { "Follow" }, ghostBtn { "Ghost" }, loopSelBtn { "Loop sel." }, keysBtn { "?" };
+    void askFavouriteName();
     bool outOpen = false, tapOpen = false, clipShown = false;
     int savedW = 0, savedH = 0; juce::uint32 sizeSaveAt = 0;
     bool feelOpen = false;

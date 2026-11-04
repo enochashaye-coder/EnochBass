@@ -3,6 +3,8 @@
 // Every library is a small table: for each articulation, which key-switch notes to press (and how), plus the expression / vibrato CC numbers.
 // Built-in tables come only from official manuals; anything more is loaded from the user's own .enochlib text files (see README).
 #include "Styles.h"
+#include <array>
+#include <algorithm>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -14,12 +16,18 @@ namespace enochsolo
 {
 struct KsPress { int note = 24; int vel = 100; };
 
+/** v3.8: a profile's own keys (anything the library has that Enoch's articulation list does not: "Pop", "Set fret position 3",
+    "Feedback" ...) use articulation numbers from kCustomArt up. They are placed by hand from the piano roll's Articulation menu. */
+constexpr int kCustomArt = 100, kMaxCustom = 64;
+inline bool isCustomArt (int a) { return a >= kCustomArt && a < kCustomArt + kMaxCustom; }
+
 struct LibArt
 {
     int art = A_Sustain;
     std::vector<KsPress> press;
     bool hold = false;        // the key-switch must be held while the note starts (released a moment after it)
     bool oneShot = false;     // sent before every note with this articulation (it does not stay switched on)
+    std::string name;         // v3.8: the library's own name for a custom key (empty for Enoch's articulations)
 };
 
 struct Library
@@ -57,6 +65,7 @@ inline const LibArt* libFind (const Library& l, int art)
 inline int libResolve (const Library& l, int art)
 {
     if (libFind (l, art)) return art;
+    if (art >= (int) A_Count) return A_Sustain;           // a custom key this profile does not have
     auto has = [&] (int a) { return libFind (l, a) != nullptr; };
     switch (art)
     {
@@ -69,6 +78,54 @@ inline int libResolve (const Library& l, int art)
 /** the note that identifies an articulation in the key-switch lane / test player (first key of its first press) */
 inline int libNoteOf (const LibArt& a) { return a.press.empty() ? -1 : a.press[0].note; }
 
+/** v3.8: the name shown for an articulation: a custom key's own name, otherwise Enoch's articulation name */
+inline std::string artLabel (const Library* l, int art)
+{
+    if (l != nullptr && art >= (int) A_Count)
+        for (auto& a : l->arts) if (a.art == art && ! a.name.empty()) return a.name;
+    return artName (art);
+}
+
+/** v3.8: every key the profile uses as a switch (articulations, custom keys, mode keys, strings, repetition key).
+    A played note must never land on one of these: the instrument would switch instead of sounding (the "silent note" fault). */
+inline std::array<bool, 128> libKeyMask (const Library& l)
+{
+    std::array<bool, 128> m {}; m.fill (false);
+    if (l.standard) return m;
+    auto mark = [&] (int n) { if (n >= 0 && n < 128) m[(size_t) n] = true; };
+    if (! l.noKeySwitches) for (auto& a : l.arts) for (auto& p : a.press) mark (p.note);
+    for (auto& p : l.init) mark (p.note);
+    for (int k : l.stringKeys) mark (k);
+    mark (l.repKey);
+    return m;
+}
+
+/** v3.8: the played range a profile really allows, with every key-switch outside it: [lo, hi] shrunk past any key inside it */
+inline void libSafeRange (const Library& l, int& lo, int& hi)
+{
+    const auto m = libKeyMask (l);
+    lo = std::clamp (l.lo, 0, 127); hi = std::clamp (l.hi, 0, 127);
+    // the longest run of free keys inside [lo, hi] is the range (keys usually sit below or above the instrument)
+    int bestA = lo, bestB = lo - 1, a = lo;
+    for (int n = lo; n <= hi + 1; ++n)
+    {
+        if (n > hi || m[(size_t) n]) { if (n - 1 - a > bestB - bestA) { bestA = a; bestB = n - 1; } a = n + 1; }
+    }
+    if (bestB >= bestA) { lo = bestA; hi = bestB; }
+}
+
+/** v3.8: problems with a profile (empty = fine): a key-switch inside the played range, a key used twice for different things */
+inline std::vector<std::string> libCheck (const Library& l)
+{
+    std::vector<std::string> out;
+    if (l.standard) return out;
+    const auto m = libKeyMask (l);
+    const int lo = std::clamp (l.lo + 0, 0, 127), hi = std::clamp (l.hi, 0, 127);
+    for (int n = lo; n <= hi; ++n) if (m[(size_t) n]) out.push_back ("key-switch " + std::to_string (n) + " is inside the played range " + std::to_string (lo) + "-" + std::to_string (hi));
+    for (auto& a : l.arts) if (a.art >= (int) A_Count && ! isCustomArt (a.art)) out.push_back ("articulation number " + std::to_string (a.art) + " is out of range");
+    return out;
+}
+
 inline const char* verifyText (int v) { return v == 0 ? "checked against the manual" : (v == 1 ? "partly checked" : "standard layout"); }
 
 //------------------------------------------------------------------------------ built-in tables
@@ -76,24 +133,78 @@ namespace libdetail
 {
 inline LibArt la (int art, std::vector<KsPress> p, bool hold = false, bool one = false) { LibArt a; a.art = art; a.press = std::move (p); a.hold = hold; a.oneShot = one; return a; }
 
-// Ilya Efimov guitars (Nylon, Acoustic, LP Electric, TC Electric): all four manuals share this key-switch layout.
-// Kontakt numbering (middle C = C3 = 60): A-1 = 21, G0 = 31, D#1 = 39 ... C7 = 120.
-inline Library ilyaGuitar (const char* name, const char* manual)
+// v3.8: the four Ilya Efimov guitars, key for key from their Kontakt key-switch pages (screenshots, Nov 2026).
+// Kontakt numbering (middle C = C3 = 60). Two layouts:
+//   Acoustic (AG) and Nylon (NG): keys 21-35 only.  LP and TC Electric: the same 21-35, plus 36-39 and 87-109.
+// "(velo)" keys: the first name is a low velocity, the second a high one (Mute / X-Note, Flag. nat. / Flag. art., Non vibrato / Vibrato,
+// Slide slow / fast, Pull off / Hammer on); "on/off" mode keys: 101-127 = on, 1-100 = off (as in the Efimov basses).
+enum EfimovGuitar { EG_Acoustic, EG_Nylon, EG_LP, EG_TC };
+inline Library ilyaGuitar (const char* name, EfimovGuitar g)
 {
+    const bool electric = (g == EG_LP || g == EG_TC);
+    const bool vibKey = (g != EG_Acoustic);              // G0: "Non vibrato / Vibrato" (the Acoustic has "Sustain" there)
     Library l; l.name = name; l.maker = "Ilya Efimov"; l.inst = I_Guitar; l.verify = 0;
+    auto cu = [] (int k, const char* nm, std::vector<KsPress> p, bool hold = false) { LibArt a = la (kCustomArt + k, std::move (p), hold, hold); a.name = nm; return a; };
+    std::vector<KsPress> sus;                            // back to plain notes: legato mode off (electric), vibrato off
+    if (electric) sus.push_back ({ 39, 40 });
+    if (vibKey)   sus.push_back ({ 31, 40 });
+    std::vector<KsPress> vib = sus; if (vibKey) vib.back() = { 31, 120 };
     l.arts = {
-        la (A_Sustain,   { { 39, 30 } }),                       // D#1 low = legato mode off
-        la (A_Staccato,  { { 39, 30 } }),
-        la (A_Legato,    { { 39, 110 } }),                      // D#1 high = legato mode on (hammer-ons and pull-offs use it too)
-        la (A_Slide,     { { 32, 30 } }, true, true),           // G#0 held: slide up one semitone into the note
-        la (A_Gliss,     { { 37, 100 } }, true, true),          // C#1 held: glissando
-        la (A_PalmMute,  { { 35, 30 } }, true, true),           // B0 low held: mute
-        la (A_Ghost,     { { 35, 110 } }, true, true),          // B0 high held: X-note (dead note)
-        la (A_Harmonic,  { { 30, 110 } }, true, true),          // F#0 high held: artificial flageolet
+        la (A_Sustain,   sus),
+        la (A_Staccato,  sus),
+        la (A_Slide,     { { 32, 30 } }, true, true),           // G#0 held: Slide up 1, slow
+        la (A_HammerOn,  { { 33, 110 } }, true, true),          // A0 held, high velocity: Hammer on
+        la (A_PullOff,   { { 33, 30 } }, true, true),           // A0 held, low velocity: Pull off
+        la (A_PalmMute,  { { 35, 30 } }, true, true),           // B0 held, low velocity: Mute
+        la (A_Ghost,     { { 35, 110 } }, true, true),          // B0 held, high velocity: X-Note (dead note)
+        la (A_Harmonic,  { { 30, 110 } }, true, true),          // F#0 held, high velocity: artificial flageolet
     };
+    if (vibKey) l.arts.push_back (la (A_Vibrato, vib));          // G0 high: vibrato on
+    if (electric)
+    {
+        std::vector<KsPress> leg { { 39, 120 } }; if (vibKey) leg.push_back ({ 31, 40 });
+        l.arts.push_back (la (A_Legato, leg));                   // D#1 high: auto legato on
+        l.arts.push_back (la (A_Gliss, { { 37, 100 } }, true, true));   // C#1 held: Gliss up / down
+    }
+    else l.arts.push_back (la (A_Legato, { { 33, 110 } }, true, true)); // no legato mode: legato notes are hammer-ons
+    // the library's other keys, by their own names
+    int k = 0;
+    l.arts.push_back (cu (k++, "Slide up 1 fast", { { 32, 110 } }, true));
+    l.arts.push_back (cu (k++, "Slide up 2 slow", { { 34, 30 } }, true));
+    l.arts.push_back (cu (k++, "Slide up 2 fast", { { 34, 110 } }, true));
+    l.arts.push_back (cu (k++, "Natural flageolet", { { 30, 30 } }, true));
+    l.arts.push_back (cu (k++, "Chord mode B on", { { 22, 120 } }));
+    l.arts.push_back (cu (k++, "Chord mode B off", { { 22, 40 } }));
+    l.arts.push_back (cu (k++, "Open chord mode on", { { 25, 120 } }));
+    l.arts.push_back (cu (k++, "Open chord mode off", { { 25, 40 } }));
+    l.arts.push_back (cu (k++, "Open string mode on", { { 27, 120 } }));
+    l.arts.push_back (cu (k++, "Open string mode off", { { 27, 40 } }));
+    if (! vibKey) l.arts.push_back (cu (k++, "Sustain (G0)", { { 31, 100 } }));
+    if (electric)
+    {
+        l.arts.push_back (cu (k++, "Repetition down", { { 38, 100 } }, true));
+        l.arts.push_back (cu (k++, "Feedback", { { 87, 100 } }, true));
+        l.arts.push_back (cu (k++, "Set fret position 0 / Shift fret position", { { 88, 100 } }));
+        l.arts.push_back (cu (k++, "Set fret position 1 / Shift fret position", { { 89, 100 } }));
+        for (int f = 2; f <= 19; ++f) l.arts.push_back (cu (k++, ("Set fret position " + std::to_string (f)).c_str(), { { 88 + f, 100 } }));
+        l.arts.push_back (cu (k++, "FX", { { 108, 100 } }, true));
+        l.arts.push_back (cu (k++, "Fretnoise", { { 109, 100 } }, true));
+        l.repKey = 36;                                           // C1: Repetition up (fast repeats alternate onto it)
+    }
+    l.init = { { 22, 40 }, { 25, 40 }, { 27, 40 } };             // chord modes and open-string mode off
+    if (vibKey) l.init.push_back ({ 31, 40 });                  // vibrato off
+    if (electric) l.init.push_back ({ 39, 40 });                // auto legato off until a legato note
+    l.tuning = { 40, 45, 50, 55, 59, 64 };                       // E A D G B E
+    l.stringKeys = { 21, 23, 24, 26, 28, 29 };                   // Select string E6, A, D, G, B, E1
+    l.maxFret = electric ? 22 : 19;
     l.ccExpr = 11; l.ccVib = 1;
-    l.note = "Key-switches: D#1 legato on/off, G#0 slide, C#1 gliss, B0 mute / X-note, F#0 harmonic. Vibrato on CC1.";
-    l.source = manual;
+    l.overlapMs = electric ? 25 : 0;                             // legato mode plays overlapping notes as hammer-ons / pull-offs
+    l.lo = 40; l.hi = electric ? 86 : 83;                        // the open low E up to the last fret: every key-switch stays outside
+    l.note = electric
+        ? "Kontakt key-switch page, key for key: strings A-1..F0, slide G#0 / A#0, hammer / pull A0, mute / X-note B0, flageolet F#0, vibrato G0, repetition C1 / D1, gliss C#1, auto legato D#1, feedback D#5, fret positions E5-B6, FX C7, fret noise C#7."
+        : (g == EG_Nylon ? "Kontakt key-switch page, key for key (keys 21-35): strings A-1..F0, chord modes, open strings, flageolet F#0, vibrato G0, slides G#0 / A#0, hammer / pull A0, mute / X-note B0."
+                         : "Kontakt key-switch page, key for key (keys 21-35): strings A-1..F0, chord modes, open strings, flageolet F#0, Sustain G0, slides G#0 / A#0, hammer / pull A0, mute / X-note B0.");
+    l.source = "Ilya Efimov Kontakt key-switch page (your screenshots). Velocity pairs: first name = low velocity";
     return l;
 }
 }
@@ -110,10 +221,10 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
 
     if (inst == I_Guitar)
     {
-        add (ilyaGuitar ("Ilya Efimov Nylon Guitar", "Ilya Efimov Nylon Guitar manual v1.1"));
-        add (ilyaGuitar ("Ilya Efimov Acoustic Guitar", "Ilya Efimov Acoustic Guitar manual"));
-        add (ilyaGuitar ("Ilya Efimov LP Electric Guitar", "Ilya Efimov LP Electric Guitar manual"));
-        add (ilyaGuitar ("Ilya Efimov TC Electric Guitar", "Ilya Efimov TC Electric Guitar manual"));
+        add (ilyaGuitar ("Ilya Efimov Nylon Guitar", EG_Nylon));
+        add (ilyaGuitar ("Ilya Efimov Acoustic Guitar", EG_Acoustic));
+        add (ilyaGuitar ("Ilya Efimov LP Electric Guitar", EG_LP));
+        add (ilyaGuitar ("Ilya Efimov TC Electric Guitar", EG_TC));
         Library m; m.name = "NI Session Guitarist - Electric Mint"; m.maker = "Native Instruments"; m.inst = I_Guitar; m.verify = 1;
         m.arts = { la (A_Slide, { { 47, 100 } }, true, true) };   // B1 held: slide modifier (Kontakt numbering: C1 = 36)
         m.note = "Only the slide key (B1) is checked against the manual; other articulations play as normal notes.";
@@ -170,55 +281,87 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
         // Slide Down / Slide Up keys F0 and G0, and "the legato control key (32)" = G#0. The key-switches therefore sit at 24..32 and the
         // bass itself is played an octave above its sounding pitch (low E = E1 = 40). Ghost (E-1), harmonics (A#-1) and slap (B-1) come from help text only.
         Library m; m.name = "Toontrack EZbass"; m.maker = "Toontrack"; m.inst = I_Bass; m.verify = 1;
+        // Layout from the EZbass key-switch summary you supplied (Toontrack numbering, C3 = 60). Hold = held while the note starts.
         m.arts = { la (A_Sustain, {}),
-                   la (A_Legato,   { { 32, 100 } }, true, true),     // G#0 legato control key (hold)
-                   la (A_HammerOn, { { 32, 100 } }, true, true),
-                   la (A_PullOff,  { { 32, 100 } }, true, true),
-                   la (A_Slide,    { { 31, 100 } }, true, true),     // G0 slide up (hold)
-                   la (A_Gliss,    { { 29, 100 } }, true, true),     // F0 slide down (hold)
-                   la (A_Ghost,    { { 16, 100 } }, true, true),     // E-1 ghost note
-                   la (A_PalmMute, { { 24, 100 } }, true, true),     // C0 palm mute (EBX libraries with recorded palm mutes)
-                   la (A_Harmonic, { { 22, 100 } }, true, true),     // A#-1 harmonics
-                   la (A_Slap,     { { 23, 100 } }, true, true) };   // B-1 slap / pop
+                   la (A_Legato,    { { 32, 100 } }, true, true),    // G#0 legato (hold)
+                   la (A_HammerOn,  { { 32, 100 } }, true, true),
+                   la (A_PullOff,   { { 32, 100 } }, true, true),
+                   la (A_Bend,      { { 30, 100 } }, true, true),    // F#0 slide (press and hold), mapped to Bend so it does not clash with G0
+                   la (A_Slide,     { { 31, 100 } }, false, true),   // G0 slide up (press)
+                   la (A_Gliss,     { { 29, 100 } }, false, true),   // F0 slide down (press)
+                   la (A_Ghost,     { { 28, 100 } }, false, true),   // E0 ghost note (press)
+                   la (A_PalmMute,  { { 24, 100 } }, true, true),    // C0 left-hand mute (hold)
+                   la (A_Mute,      { { 27, 100 } }, false, true),   // D#0 loud mute (press)
+                   la (A_Harmonic,  { { 22, 100 } }, true, true),    // A#-1 harmonic (hold)
+                   la (A_Slap,      { { 23, 100 } }, true, true) };  // B-1 slap / pop (hold)
+        { LibArt c1 = la (kCustomArt + 0, { { 21, 100 } }, true, true); c1.name = "Polyphony / disable legato"; m.arts.push_back (c1); }   // A-1 (hold)
+        { LibArt c2 = la (kCustomArt + 1, { { 25, 100 } }); c2.name = "Middle finger / down stroke"; m.arts.push_back (c2); }               // C#0
         m.ccExpr = 11; m.ccVib = 1;
+        m.repKey = 26;                                               // D0 repeater (press)
         m.transpose = 12; m.lo = 35; m.hi = 81; m.overlapMs = 15;
-        m.note = "Key-switches (Toontrack numbering, C3 = 60): legato G#0 (32), slide up G0, slide down F0, palm mute C0, ghost E-1, harmonic A#-1, slap B-1. Bass sent an octave up (low E = E1). Check one bar.";
-        m.source = "Toontrack EZbass release notes (palm mute C0, slide keys F0/G0, legato control key 32); ghost / harmonic / slap from help text";
+        m.note = "EZbass key-switches (Toontrack numbering, C3 = 60): legato G#0 (32), slide F#0 (hold), slide up G0, slide down F0, ghost E0, loud mute D#0, palm mute C0, harmonic A#-1, slap B-1, repeater D0. Polyphony A-1 and middle finger / down stroke C#0 are in the Articulation menu. Bass sent an octave up (low E = E1). Check one bar.";
+        m.source = "EZbass key-switch summary supplied by the user (not yet checked against the Toontrack manual)";
         add (m);
         Library pl; pl.name = "Plain bass (any bass sampler, no key-switches)"; pl.maker = ""; pl.inst = I_Bass; pl.verify = 1; pl.noKeySwitches = true;
         pl.note = "Notes only: no key-switch notes are written. Ghost, slide and mute are still shown in the piano roll and in the MIDI as note length and velocity.";
         pl.source = "plain MIDI";
         add (pl);
-        // Ilya Efimov basses (Kontakt numbering, C3 = 60). Shared key-switch layout of the Modern, Classic and Fretless Bass manuals:
-        //   strings A-1 (B), B-1 (E), C0 (A), D0 (D), E0 (G); mode keys C#0 chord, D#0 open strings, F0 X-note, F#0 easy legato, G0 auto legato
-        //   (velocity 101-127 = on, 0-100 = off); G#0 FX gliss, A0 slap/pop hold, A#0 gliss key; E4 repetition, F4 repetition X-mute,
-        //   F#4 fingered, G4 legato hold, G#4 slap, A4 flageolet hold, A#4 palm mute, B4 slide-up hold.
-        auto ilyaBass = [&] (const char* name, const char* manual, bool fiveString, bool slap, int fingeredKey)
+        // v3.8: the Ilya Efimov basses, key for key from their Kontakt key-switch pages (Modern and Classic screenshots, Nov 2026;
+        // the Fretless, Retro and Rock use the same keys). Kontakt numbering, C3 = 60. "on/off (velo)": 101-127 = on, 1-100 = off.
+        //   strings A-1 (B, five-string only), B-1 (E), C0 (A), D0 (D), E0 (G); C#0 chord mode, D#0 open strings, F0 X-note, F#0 easy legato,
+        //   G0 auto legato, G#0 FX glissando, A0 pop, A#0 gliss up / down; E4 repetition, F4 repetition mute, F#4 fingered, G4 hammer on / pull off,
+        //   G#4 slap, A4 flageolet, A#4 mute, B4 slide up, C5 hit 1, C#5 shift fret position -1/-3, D5 hit 2, D#5 shift fret position +1/+3,
+        //   E5..C#6 set fret position 0..9.
+        auto ilyaBass = [&] (const char* name, bool fiveString)
         {
-            Library b; b.name = name; b.maker = "Ilya Efimov"; b.inst = I_Bass; b.verify = 1;
-            const KsPress xOff { 29, 40 }, fing { fingeredKey, 100 };
+            Library b; b.name = name; b.maker = "Ilya Efimov"; b.inst = I_Bass; b.verify = 0;
+            const KsPress xOff { 29, 40 }, fing { 78, 100 };
+            auto cu = [] (int k, const char* nm, std::vector<KsPress> p, bool hold = false) { LibArt a = la (kCustomArt + k, std::move (p), hold, hold); a.name = nm; return a; };
             b.arts = { la (A_Sustain,  { fing, xOff }), la (A_Legato, { fing, xOff }), la (A_Staccato, { fing, xOff }), la (A_Marcato, { fing, xOff }),
-                       la (A_Ghost,    { { 29, 120 } }),                    // X-note mode on (dead notes) until the next articulation
-                       la (A_PalmMute, { { 82, 100 }, xOff }),
-                       la (A_Harmonic, { { 81, 100 } }, true, true),        // A4 flageolet (hold)
-                       la (A_Slide,    { { 83, 100 } }, true, true),        // B4 slide-up (hold)
-                       la (A_Gliss,    { { 34, 100 } }, true, true) };      // A#0 gliss key (hold)
-            if (slap) b.arts.push_back (la (A_Slap, { { 80, 100 }, xOff }));
+                       la (A_Ghost,    { { 29, 120 } }),                    // F0 X-note mode on (dead notes) until the next articulation
+                       la (A_HammerOn, { { 79, 100 } }, true, true),        // G4 Hammer on / Pull off (hold)
+                       la (A_PullOff,  { { 79, 100 } }, true, true),
+                       la (A_PalmMute, { { 82, 100 }, xOff }),              // A#4 Mute
+                       la (A_Harmonic, { { 81, 100 } }, true, true),        // A4 Flageolet (hold)
+                       la (A_Slide,    { { 83, 100 } }, true, true),        // B4 Slide up (hold)
+                       la (A_Gliss,    { { 34, 100 } }, true, true),        // A#0 Gliss up / down (hold)
+                       la (A_Slap,     { { 80, 100 }, xOff }) };            // G#4 Slap
+            int k = 0;
+            b.arts.push_back (cu (k++, "Pop", { { 33, 100 } }, true));
+            b.arts.push_back (cu (k++, "FX glissando", { { 32, 100 } }, true));
+            b.arts.push_back (cu (k++, "Repetition mute", { { 77, 100 } }, true));
+            b.arts.push_back (cu (k++, "Hit 1", { { 84, 100 } }, true));
+            b.arts.push_back (cu (k++, "Hit 2", { { 86, 100 } }, true));
+            b.arts.push_back (cu (k++, "Shift fret position -1", { { 85, 40 } }));
+            b.arts.push_back (cu (k++, "Shift fret position -3", { { 85, 120 } }));
+            b.arts.push_back (cu (k++, "Shift fret position +1", { { 87, 40 } }));
+            b.arts.push_back (cu (k++, "Shift fret position +3", { { 87, 120 } }));
+            b.arts.push_back (cu (k++, "Set fret position 0 / Shift fret position", { { 88, 100 } }));
+            b.arts.push_back (cu (k++, "Set fret position 1 / Shift fret position", { { 89, 100 } }));
+            for (int f = 2; f <= 9; ++f) b.arts.push_back (cu (k++, ("Set fret position " + std::to_string (f)).c_str(), { { 88 + f, 100 } }));
+            b.arts.push_back (cu (k++, "Chord mode on", { { 25, 120 } }));
+            b.arts.push_back (cu (k++, "Chord mode off", { { 25, 40 } }));
+            b.arts.push_back (cu (k++, "Open string mode on", { { 27, 120 } }));
+            b.arts.push_back (cu (k++, "Open string mode off", { { 27, 40 } }));
+            b.arts.push_back (cu (k++, "Easy legato on", { { 30, 120 } }));
+            b.arts.push_back (cu (k++, "Easy legato off", { { 30, 40 } }));
+            b.arts.push_back (cu (k++, "Auto legato on", { { 31, 120 } }));
+            b.arts.push_back (cu (k++, "Auto legato off", { { 31, 40 } }));
             b.init = { { 31, 120 }, { 30, 40 }, { 29, 40 }, { 27, 40 }, { 25, 40 } };   // auto legato on, easy legato / X-note / open strings / chord mode off
-            b.transpose = 12; b.hi = 75; b.overlapMs = 25; b.repKey = 76;
+            b.transpose = 12; b.hi = 75; b.overlapMs = 25; b.repKey = 76;            // E4 Repetition
             b.tuning = fiveString ? std::vector<int> { 23, 28, 33, 38, 43 } : std::vector<int> { 28, 33, 38, 43 };
             b.stringKeys = fiveString ? std::vector<int> { 21, 23, 24, 26, 28 } : std::vector<int> { 23, 24, 26, 28 };
             b.lo = fiveString ? 35 : 40; b.maxFret = 20;
             b.ccExpr = 11; b.ccVib = 1;
-            b.note = std::string ("Strings, auto legato by overlap, X-notes for dead notes, repetition key E4, slide B4, flageolet A4") + (slap ? ", slap G#4" : "") + ". Sent an octave up.";
-            b.source = manual;
+            b.note = std::string (fiveString ? "Five strings" : "Four strings") + ", key for key from the Kontakt key-switch page: auto legato by overlap, hammer / pull G4, X-notes F0, mute A#4, slap G#4, flageolet A4, slide B4, gliss A#0, repetition E4; Pop, hits and fret positions are in the Articulation menu. Sent an octave up.";
+            b.source = "Ilya Efimov Kontakt key-switch page (Modern and Classic screenshots; same keys on every Efimov bass)";
             add (b);
         };
-        ilyaBass ("Ilya Efimov Modern Bass", "Ilya Efimov Modern Bass manual (key-switch table)", true, true, 78);
-        ilyaBass ("Ilya Efimov Classic Bass", "Ilya Efimov Classic Bass manual (key-switch table)", false, true, 78);
-        ilyaBass ("Ilya Efimov Fretless Bass", "Ilya Efimov Fretless Bass manual (key-switch table; F#4 normal right hand)", true, false, 78);
-        ilyaBass ("Ilya Efimov Retro Bass", "assumed same layout as the Classic Bass manual (not checked)", false, false, 78);
-        ilyaBass ("Ilya Efimov Rock Bass", "assumed same layout as the Modern Bass manual (not checked)", true, true, 78);
+        ilyaBass ("Ilya Efimov Modern Bass", true);
+        ilyaBass ("Ilya Efimov Classic Bass", false);
+        ilyaBass ("Ilya Efimov Fretless Bass", true);
+        ilyaBass ("Ilya Efimov Retro Bass", false);
+        ilyaBass ("Ilya Efimov Rock Bass", true);
         // a DX10-style log drum in another plugin (FL Studio Fruity DX10, mda DX10 ...): it sounds an octave below the note played
         Library dx; dx.name = "Log drum VST: DX10 style (one octave up)"; dx.inst = I_Bass; dx.verify = 1; dx.noKeySwitches = true; dx.transpose = 12;
         dx.note = "Plain notes sent an octave up, because the DX10 'Log Drum' sounds an octave below the note it gets.";
@@ -235,6 +378,8 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
       ks = Sustain: 24@100                       (press note 24 with velocity 100)
       ks = Legato: 25@110, 26@40                 (several presses)
       ks = Slide: 32@40 hold oneshot             (held while the note starts / sent before every such note)
+      custom = Down stroke: 25@100 hold          (v3.8: the library's own key, placed by hand from the Articulation menu)
+      init = 31@120, 30@40                       (mode keys sent once at the start)
     Articulation names are the ones shown in Enoch Bass (Sustain, Legato, Staccato, Marcato, Ghost, PalmMute, HammerOn, PullOff, Slide, Bend, Vibrato,
     Harmonic, Growl, Flutter, Fall, Doit, Scoop, Subtone, Shake, Trill, Tremolo, Pizzicato, Gliss, ColLegno, Arpeggio, Mute, Strum). */
 inline int articulationFromName (std::string s)
@@ -307,12 +452,20 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
                 else l.stringKeys.push_back (nt);
             }
         }
-        else if (key == "ks")
+        else if (key == "ks" || key == "custom")
         {
             const size_t c = val.find (':'); if (c == std::string::npos) { error = "line " + std::to_string (lineNo) + ": ks needs 'Articulation: note@velocity'"; return false; }
-            const int art = articulationFromName (trim (val.substr (0, c)));
-            if (art < 0) { error = "line " + std::to_string (lineNo) + ": unknown articulation '" + trim (val.substr (0, c)) + "'"; return false; }
-            LibArt a; a.art = art;
+            int art = -1; std::string cname;
+            if (key == "custom")
+            {
+                int used = 0; for (auto& x : l.arts) if (x.art >= (int) A_Count) ++used;
+                if (used >= kMaxCustom) { error = "line " + std::to_string (lineNo) + ": too many custom keys (" + std::to_string (kMaxCustom) + " at most)"; return false; }
+                art = kCustomArt + used; cname = trim (val.substr (0, c));
+                if (cname.empty()) cname = "Key " + std::to_string (used + 1);
+            }
+            else art = articulationFromName (trim (val.substr (0, c)));
+            if (art < 0) { error = "line " + std::to_string (lineNo) + ": unknown articulation '" + trim (val.substr (0, c)) + "' (use custom = Name: note@velocity for the library's own keys)"; return false; }
+            LibArt a; a.art = art; a.name = cname;
             std::string rest = val.substr (c + 1); std::string lower; for (char ch : rest) lower += (char) std::tolower ((unsigned char) ch);
             a.hold = lower.find ("hold") != std::string::npos; a.oneShot = lower.find ("oneshot") != std::string::npos || lower.find ("one-shot") != std::string::npos;
             std::istringstream ps (rest); std::string tok;
@@ -362,7 +515,8 @@ inline std::string libraryToText (const Library& l)
     if (! l.init.empty()) { o << "init = "; for (size_t i = 0; i < l.init.size(); ++i) o << (i ? ", " : "") << l.init[i].note << "@" << l.init[i].vel; o << "\n"; }
     for (auto& a : l.arts)
     {
-        o << "ks = " << artName (a.art) << ": ";
+        if (a.art >= (int) A_Count) o << "custom = " << (a.name.empty() ? std::string ("Key") : a.name) << ": ";
+        else o << "ks = " << artName (a.art) << ": ";
         if (a.press.empty()) o << "none";
         for (size_t i = 0; i < a.press.size(); ++i) o << (i ? ", " : "") << a.press[i].note << "@" << a.press[i].vel;
         if (a.hold) o << " hold";

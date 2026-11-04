@@ -293,6 +293,7 @@ EnochSoloProcessor::~EnochSoloProcessor()
 {
     enochlog::write ("instance removal: start");
     stopTimer();
+    enochx::removeShare (JucePlugin_Name, instanceId);    // v3.8: its ghost notes leave with it
     alive->store (false);                  // v3.5: results of loads still on their way are dropped
     loader.removeAllJobs (true, 4000);
     enochlog::write ("instance removal: timer and file loader stopped");
@@ -1074,6 +1075,61 @@ void EnochSoloProcessor::timerCallback()
     }
     else if (needFinalize.exchange (false))
         refinalize();
+
+    // v3.8: publish this take's notes for the other Enoch plugin's ghost notes (at most twice a second, only when they changed)
+    if (auto sn = getSnapshot())
+        if (sn->number != lastSharedNumber && juce::Time::getMillisecondCounter() - lastShareWrite > 500)
+        {
+            lastSharedNumber = sn->number; lastShareWrite = juce::Time::getMillisecondCounter();
+            enochx::GhostSet g; g.plugin = JucePlugin_Name; g.id = instanceId; g.barBeats = sn->pattern.barBeats; g.lengthBeats = sn->lengthBeats;
+            for (auto& n : sn->pattern.raw) if (! n.mute && n.track != 2) g.notes.push_back ({ n.start, n.length, n.pitch, n.track });
+            enochx::publishShare (g);
+        }
+}
+
+bool EnochSoloProcessor::starCurrentTake (const juce::String& name, juce::String& message)
+{
+    auto sn = getSnapshot();
+    if (! sn || sn->pattern.raw.empty()) { message = "There are no notes to keep."; return false; }
+    auto favs = favourites();
+    if (favs.size() >= 200) { message = "200 favourite takes already: delete one first."; return false; }
+    enochx::Favourite fv;
+    fv.name = name.trim().isNotEmpty() ? name.trim() : juce::String ("Take ") + juce::String ((int) favs.size() + 1);
+    fv.when = juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H:%M");
+    fv.bars = sn->pattern.bars; fv.inst = sn->pattern.s.instrument; fv.notes = sn->pattern.raw;
+    favs.insert (favs.begin(), fv);
+    if (! enochx::saveFavourites (JucePlugin_Name, favs)) { message = "Could not write " + enochx::favFile (JucePlugin_Name).getFullPathName(); return false; }
+    message = "Kept as a favourite: " + fv.name;
+    return true;
+}
+
+bool EnochSoloProcessor::loadFavourite (int index, juce::String& message)
+{
+    const auto favs = favourites();
+    if (index < 0 || index >= (int) favs.size()) { message = "That favourite is gone."; return false; }
+    const auto& fv = favs[(size_t) index];
+    auto sn = getSnapshot();
+    const double total = sn ? sn->lengthBeats : 0.0;
+    std::vector<Note> raw;
+    for (auto n : fv.notes)
+    {
+        if (total > 0 && n.start >= total) continue;              // a longer take is cut to this project's length
+        if (total > 0) n.length = juce::jmin (n.length, total - n.start);
+        n.id = allocNoteId();
+        raw.push_back (n);
+    }
+    pushUndo();
+    commitRaw (std::move (raw));
+    message = "Favourite loaded: " + fv.name + (sn && fv.bars != sn->pattern.bars ? "  (it was " + juce::String (fv.bars) + " bars)" : juce::String()) + ". Undo brings the old take back.";
+    return true;
+}
+
+bool EnochSoloProcessor::deleteFavourite (int index)
+{
+    auto favs = favourites();
+    if (index < 0 || index >= (int) favs.size()) return false;
+    favs.erase (favs.begin() + index);
+    return enochx::saveFavourites (JucePlugin_Name, favs);
 }
 
 void EnochSoloProcessor::setChordText (const juce::String& t)
@@ -1441,7 +1497,29 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         const double len = audioSnap->lengthBeats;
         const double blockBeats = (double) n * bpm / (60.0 * sr);
         double b0 = useHost ? ppq - startOffset : internalBeat;
-        if (loop && len > 0 && b0 >= 0.0) b0 = std::fmod (b0, len);
+        // v3.8: where playback wraps: the whole take (Loop), or the selected bars / notes (Loop selection, our own PLAY only)
+        double wrapA = 0.0, wrapB = len; bool wrapOn = loop && len > 0;
+        if (! useHost && loopRegionOn() && len > 0)
+        {
+            wrapA = juce::jlimit (0.0, len, loopRegionA.load()); wrapB = juce::jlimit (0.0, len, loopRegionB.load());
+            if (wrapB > wrapA + 1e-3) { wrapOn = true; if (b0 < wrapA || b0 >= wrapB) { b0 = wrapA; internalBeat = wrapA; } }
+            else { wrapA = 0.0; wrapB = len; }
+        }
+        auto wrapInto = [&] (double b) { return (wrapOn && b >= wrapB) ? wrapA + std::fmod (b - wrapA, juce::jmax (1e-6, wrapB - wrapA)) : b; };
+        // v3.8: at the end of a looped selection, the notes of the take still sounding there get their note-off (nothing hangs)
+        auto releaseAtWrap = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double samplePos)
+        {
+            if (! (wrapB < len - 1e-6)) return;                 // the whole take loops: its own note-offs come before the end
+            const int at = juce::jlimit (0, n - 1, (int) samplePos);
+            for (auto& row : chaseHeld) row.fill (-1);
+            for (auto it = std::lower_bound (evs.begin(), evs.end(), wrapA - 64.0, [] (const Playback& e, double v) { return e.beat < v; }); it != evs.end() && it->beat < wrapB - 1e-9; ++it)
+            {
+                const auto& m = it->msg; const int c = juce::jlimit (0, 15, m.getChannel() - 1);
+                if (m.isNoteOn()) chaseHeld[(size_t) c][(size_t) m.getNoteNumber()] = 1; else if (m.isNoteOff()) chaseHeld[(size_t) c][(size_t) m.getNoteNumber()] = -1;
+            }
+            for (int c = 0; c < 16; ++c) for (int nt = 0; nt < 128; ++nt) if (chaseHeld[(size_t) c][(size_t) nt] > 0) dest.addEvent (juce::MidiMessage::noteOff (c + 1, nt), at);
+        };
+        if (wrapOn && b0 >= 0.0) b0 = wrapInto (b0);
         const bool discontinuity = ! wasRunning || expectedNext < 0 || std::abs (b0 - expectedNext) > std::max (0.02, blockBeats * 0.75);
         if (discontinuity && wasRunning) { player.allNotesOff(); intQ.clear(); if (sendMidiOut) flushHeld(); }
         // v3.7: MIDI Delay below 0 sends the external notes early (the take is known ahead), for a DAW that plays a live-monitored
@@ -1462,13 +1540,14 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             runWin (audioSnap->testEvents, playBuffer, from, to, sampleBase, false);
             if (! sendMidiOut) return;
             double a = from + leadBeats, b = to + leadBeats;
-            if (loop && len > 0)
+            if (wrapOn)
             {
-                if (a >= len) { a -= len; b -= len; }
-                if (b > len)
+                if (a >= wrapB) { const double d = a - wrapInto (a); a -= d; b -= d; }
+                if (b >= wrapB - 1e-12)                       // reaching the end exactly also wraps (its notes are released there)
                 {
-                    runWin (audioSnap->events, genBuffer, a, len, sampleBase, false);
-                    runWin (audioSnap->events, genBuffer, 0.0, b - len, sampleBase + (len - a) * 60.0 * sr / bpm, false);
+                    runWin (audioSnap->events, genBuffer, a, wrapB, sampleBase, false);
+                    releaseAtWrap (audioSnap->events, genBuffer, sampleBase + (wrapB - a) * 60.0 * sr / bpm);
+                    runWin (audioSnap->events, genBuffer, wrapA, wrapA + (b - wrapB), sampleBase + (wrapB - a) * 60.0 * sr / bpm, false);
                     return;
                 }
             }
@@ -1483,7 +1562,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             chasePending = false;
             auto chaseInto = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double at)
             {
-                if (loop && len > 0) at = std::fmod (at, len);
+                at = wrapInto (at);
                 for (auto& row : chaseHeld) row.fill (-1);
                 auto it = std::lower_bound (evs.begin(), evs.end(), at - 64.0, [] (const Playback& e, double v) { return e.beat < v; });
                 for (; it != evs.end() && it->beat < at - 1e-9; ++it)
@@ -1499,21 +1578,23 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (sendMidiOut) chaseInto (audioSnap->events, genBuffer, b0 + leadBeats);
         }
         double endBeat = b0 + blockBeats;
-        if (loop && len > 0 && endBeat > len)
+        if (wrapOn && endBeat > wrapB)
         {
-            emit (b0, len, 0.0);
-            const double wrapSample = (len - b0) * 60.0 * sr / bpm;
-            emit (0.0, endBeat - len, wrapSample);
-            expectedNext = endBeat - len;
+            // the notes still sounding at the wrap point are released, so a looped selection never leaves a note hanging
+            emit (b0, wrapB, 0.0);
+            const double wrapSample = (wrapB - b0) * 60.0 * sr / bpm;
+            releaseAtWrap (audioSnap->testEvents, playBuffer, wrapSample);
+            emit (wrapA, wrapA + (endBeat - wrapB), wrapSample);
+            expectedNext = wrapA + (endBeat - wrapB);
         }
         else
         {
-            if (! loop && b0 >= len) { if (wasRunning) { player.allNotesOff(); flushHeld(); } }
+            if (! wrapOn && b0 >= len) { if (wasRunning) { player.allNotesOff(); flushHeld(); } }
             else emit (b0, endBeat, 0.0);
             expectedNext = endBeat;
         }
         playBeat = b0;
-        if (! useHost) { internalBeat += blockBeats; if (loop && len > 0) internalBeat = std::fmod (internalBeat, len); else if (internalBeat > len + 1.0) internalPlaying = false; }
+        if (! useHost) { internalBeat += blockBeats; if (wrapOn) internalBeat = wrapInto (internalBeat); else if (internalBeat > len + 1.0) internalPlaying = false; }
     }
     else
     {
@@ -1706,6 +1787,8 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         state.setProperty ("lockedBars", juce::String (enochsolo::barlock::saveSaved (lockedBars)), nullptr);
         state.setProperty ("editorW", editorW.load(), nullptr);   // v3.7: window size of this project
         state.setProperty ("editorH", editorH.load(), nullptr);
+        state.setProperty ("followView", followView.load(), nullptr);   // v3.8
+        state.setProperty ("ghostView", ghostView.load(), nullptr);
         for (int i = 0; i < TestPlayer::kSlots; ++i)
         {
             state.setProperty ("sfPath_" + juce::String (i), sfPaths[(size_t) i], nullptr);
@@ -1856,6 +1939,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     lockedBars = enochsolo::barlock::loadSaved (vt.getProperty ("lockedBars").toString().toStdString());
     appliedScaleAll = scaleLockAll();
     editorW = (int) vt.getProperty ("editorW", 0); editorH = (int) vt.getProperty ("editorH", 0);
+    followView = (bool) vt.getProperty ("followView", true); ghostView = (bool) vt.getProperty ("ghostView", true);   // v3.8
     undoStack.clear(); redoStack.clear();
 
     // restore the exact notes (including edits) when they were saved
@@ -1872,7 +1956,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
             if (f.size() < 11) continue;
             Note n; n.id = f[0].getIntValue(); n.start = f[1].getDoubleValue(); n.length = f[2].getDoubleValue();
             n.pitch = juce::jlimit (0, 127, f[3].getIntValue()); n.vel = juce::jlimit (1, 127, f[4].getIntValue());
-            n.art = juce::jlimit (0, (int) A_Count - 1, f[5].getIntValue()); n.track = juce::jlimit (0, 2, f[6].getIntValue()); n.voice = f[7].getIntValue();
+            { const int a = f[5].getIntValue(); n.art = enochsolo::isCustomArt (a) ? a : juce::jlimit (0, (int) A_Count - 1, a); } n.track = juce::jlimit (0, 2, f[6].getIntValue()); n.voice = f[7].getIntValue();
             n.weight = f[8].getDoubleValue(); n.bend = f[9].getIntValue(); n.vib = f[10].getIntValue() != 0;
             n.mute = f.size() > 11 && f[11].getIntValue() != 0;
             n.role = f.size() > 12 ? f[12].getIntValue() : 0;

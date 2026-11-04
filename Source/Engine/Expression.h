@@ -280,16 +280,18 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         if (track == 2) continue;      // the chord pad is plain notes: no key-switches / expression
 
         // ---------------- key-switches (on change of articulation)
-        if (s.emitKS && L && L->inst == inst && ! L->standard)
+        // v3.8: a part routed to an instrument with its own mapping profile gets that profile's key-switches (not the main panel's)
+        const Library* LT = (s.routed && track < 3 && s.routes[track].lib && s.routes[track].lib->inst == inst) ? s.routes[track].lib.get() : L;
+        if (s.emitKS && LT && LT->inst == inst && ! LT->standard)
         {
             // instrument of choice: the library's own key-switch table
-            if (! L->noKeySwitches && ! L->arts.empty())
+            if (! LT->noKeySwitches && ! LT->arts.empty())
             {
                 int last = -1;
                 for (auto* n : line)
                 {
-                    const int art = libResolve (*L, n->art);
-                    const LibArt* e = libFind (*L, art);
+                    const int art = libResolve (*LT, n->art);
+                    const LibArt* e = libFind (*LT, art);
                     if (! e) continue;
                     const double t = std::max (0.0, n->start - ksLead);
                     if (e->oneShot || art != last)
@@ -569,6 +571,20 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
         std::array<driver::RouteSpec, 3> rs;
         for (int i = 0; i < 3; ++i) { rs[(size_t) i].channel = i; rs[(size_t) i].lib = i == 0 ? s.lib.get() : nullptr; }
         driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS);
+    }
+    // v3.8 safety for Enoch's standard key-switch layout (keys from the Key-switch Base Note up): a played note that lands on one of
+    // those keys moves up an octave, so the instrument plays it instead of switching on it (profiles are guarded in the driver)
+    const Library* L0 = (s.routed && s.routes[0].lib) ? s.routes[0].lib.get() : s.lib.get();
+    if (s.emitKS && s.exportMode == 0 && ! (L0 && ! L0->standard && L0->inst == s.instrument))
+    {
+        const int nks = (int) artList (s.instrument).size();
+        auto onKey = [&] (int a) { return a >= s.ksBase && a < s.ksBase + nks; };
+        for (auto& e : p.events)
+            if (! e.ks && e.track != 2 && (e.type == EV_ON || e.type == EV_OFF) && onKey (e.a))
+            {
+                int q = e.a + 12; while (onKey (q) && q + 12 <= 127) q += 12;
+                if (q <= 127 && ! onKey (q)) e.a = q;
+            }
     }
 }
 
