@@ -146,6 +146,16 @@ public:
     void humanizeSelected (int amount);                // 1 light, 2 medium, 3 strong (H = medium)
     void toggleLoopSelection();                        // PLAY loops the selected notes / bars (Ctrl+L)
     void setShowShortcuts (bool on) { showKeys = on; repaint(); }
+    // ---- v3.9: the view (zoom, scroll, lane, tool) saved with the project
+    juce::String getViewState() const;
+    void setViewState (const juce::String&);
+    // v3.9 hooks for the automatic tests
+    void testAddNote (double beat, int pitch) { addNoteAt (beat, pitch); }
+    juce::Rectangle<float> testNoteRect (int id) const { const auto G = geo(); for (auto& n : raw) if (n.id == id) return noteRect (G, n); return {}; }
+    juce::Rectangle<float> testRulerRect() const { return geo().ruler; }
+    bool testKsOn() const { return ksView().on; }
+    int testKsShift() const { return ksView().shift; }
+    int testKsCount() const { return (int) ksEvents().size(); }
     bool shortcutsShown() const { return showKeys; }
     std::function<void (const juce::String&)> onMessage;   // a short line for the status bar
     void lockAllPhrases (bool lock) { proc.setAllPhrasesLocked (lock); repaint(); if (onPhrasesChanged) onPhrasesChanged(); }
@@ -159,7 +169,7 @@ private:
         float ppb = 1.f, rowH = 8.f;
     };
     double wheelAccum = 0.0;
-    enum class Drag { None, Move, Resize, Rubber, Velocity, Seek, BarSel, DrawLen, EraseNotes, MuteNotes, LaneDraw, LaneErase, Key, Divider };
+    enum class Drag { None, Move, Resize, Rubber, Velocity, Seek, BarSel, DrawLen, EraseNotes, MuteNotes, LaneDraw, LaneErase, Key, Divider, ResizeStart, KsMove };
     struct ChordClip { bool has = false; int rootPc = 0; enochsolo::Quality q = enochsolo::Quality::Min7; };
 
     void timerCallback() override;
@@ -250,6 +260,20 @@ private:
     const enochsolo::Library* artLib() const;
     void drawShortcuts (juce::Graphics&, const Geo&);
     double rubberBeat = 0; float rubberPitchF = 0;
+    // ---- v3.9 key-switch notes: written for an external instrument's profile, shown on their keys in the roll
+    struct KsView { bool on = false; const enochsolo::Library* lib = nullptr; int shift = 0; std::array<bool, 128> row {}; };
+    struct KsEvent { int key = 0, vel = 0, noteId = -1; double t0 = 0, t1 = 0; };
+    KsView ksView() const;
+    const std::vector<KsEvent>& ksEvents() const;
+    juce::String ksName (const enochsolo::Library& l, int key, int vel) const;
+    int ksHit (const Geo&, juce::Point<float>) const;
+    juce::Rectangle<float> ksRect (const Geo&, const KsView&, const KsEvent&) const;
+    void showKsMenu (juce::Point<int> screenPos, int noteId);
+    void setArtOnNote (int noteId, int art);
+    void markKsNotes (std::vector<enochsolo::Note>& v, const std::set<int>& ids) const;
+    mutable std::vector<KsEvent> ksCache; mutable int ksCacheNumber = -1;
+    int ksDragNote = -1, ksDragRow = -1;
+    mutable bool hitLeft = false;
     bool showKeys = false;
     enochx::GhostSet ghosts; juce::Time ghostStamp; juce::uint32 ghostCheckAt = 0;
     std::vector<enochsolo::CtrlPoint> stroke; double strokeT0 = 0, strokeT1 = 0; bool strokeLine = false; juce::Point<float> strokeStart;
@@ -456,6 +480,10 @@ private:
     // v3.8: Follow the playhead, ghost notes of the other Enoch plugin, loop the selection, the shortcut list, favourite takes
     juce::TextButton followBtn { "Follow" }, ghostBtn { "Ghost" }, loopSelBtn { "Loop sel." }, keysBtn { "?" };
     void askFavouriteName();
+    // v3.9: the view and the open drawer come back when the window opens again
+    juce::String uiNow() const;
+    void restoreUi();
+    int uiTicks = 0; juce::String uiSaved; juce::uint32 uiSaveAt = 0;
     bool outOpen = false, tapOpen = false, clipShown = false;
     int savedW = 0, savedH = 0; juce::uint32 sizeSaveAt = 0;
     bool feelOpen = false;

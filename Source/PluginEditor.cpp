@@ -754,6 +754,7 @@ EnochSoloEditor::~EnochSoloEditor()
 {
     enochlog::write ("window closing");
     stopTimer();
+    proc.setUiState (uiNow());     // v3.9: the view as you left it
     roll.onBarSelection = nullptr; roll.onViewChanged = nullptr; roll.onToolChanged = nullptr;
     body.paintFn = nullptr;
     setLookAndFeel (nullptr);
@@ -976,6 +977,14 @@ void EnochSoloEditor::refreshBarPanel()
 
 void EnochSoloEditor::timerCallback()
 {
+    // v3.9: put the view back (once the roll has its notes), then keep the saved view up to date
+    if (uiTicks < 4) { if (++uiTicks == 4) restoreUi(); }
+    else if ((juce::int32) (juce::Time::getMillisecondCounter() - uiSaveAt) >= 0)
+    {
+        uiSaveAt = juce::Time::getMillisecondCounter() + 1000;
+        const auto u = uiNow();
+        if (u != uiSaved) { uiSaved = u; proc.setUiState (u); }
+    }
     if (proc.scaleLockAllPending()) proc.applyLocksNow();   // v3.4: the project-wide scale lock was switched
     // v3.7: remember the window size (this project, and as the default for new windows), saved a moment after resizing stops
     if (getWidth() != savedW || getHeight() != savedH)
@@ -1846,4 +1855,28 @@ void EnochSoloEditor::askFavouriteName()
     juce::String msg;
     proc.starCurrentTake (name, msg);
     styleMsg = msg;
+}
+
+
+//==============================================================================
+// v3.9: the piano roll's zoom, scroll, lane height, lane and tool, and the open drawer, saved with the project
+juce::String EnochSoloEditor::uiNow() const
+{
+    return roll.getViewState() + ";drawer=" + (routeOpen ? "route" : feelOpen ? "feel" : outOpen ? "out" : tapOpen ? "tap" : logOpen ? "ld" : advanced ? "adv" : "none");
+}
+
+void EnochSoloEditor::restoreUi()
+{
+    const auto st = proc.getUiState();
+    uiSaved = st;
+    if (st.isEmpty()) return;
+    roll.setViewState (st);
+    const auto d = st.fromFirstOccurrenceOf ("drawer=", false, false).upToFirstOccurrenceOf (";", false, false);
+    auto open = [] (juce::Button& b) { if (! b.getToggleState()) { b.setToggleState (true, juce::dontSendNotification); if (b.onClick) b.onClick(); } };
+    if (d == "route") open (routeBtn);
+    else if (d == "feel") open (feelBtn);
+    else if (d == "out") open (outBtn);
+    else if (d == "tap") open (tapBtn);
+    else if (d == "ld") open (ldBtn);
+    else if (d == "adv") open (advBtn);
 }

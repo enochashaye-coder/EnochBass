@@ -58,6 +58,10 @@ struct Settings
     RouteCfg routes[3];
     bool routed = false;
     bool dupToTrack1 = false;   // Enoch Bass: the log drum part plays a copy of the bass line on its own route
+    // v3.9: key-switches are written into the MIDI only while the main part plays on an external instrument (a routed VST / port, or the
+    // EXTERNAL sound source). On the built-in sound, a one-shot or a SoundFont every note is just a note.
+    bool ksActive = true;
+    bool ksGate = false;        // set for the MIDI that leaves Enoch (live out, drag, export): honours ksActive
     int clave = 1;                  // Latin genres: 0 off, 1 = 3-2 clave, 2 = 2-3 clave
     int voice2 = 0;                 // second voice: 0 off, 1 third below, 2 third above, 3 horn section, 4 call and response
     int exportMode = 0;             // 0 full (key-switches + expression), 1 no key-switches (articulations baked into the notes),
@@ -105,6 +109,7 @@ struct MidiEv
     int ord = 2;        // ordering at identical times: 0 = note off, 1 = key-switch / cc / bend, 2 = note on
     int art = 0;        // articulation of the note this event belongs to (note events only)
     bool ks = false;    // v3.0: a key-switch / mode key (never transposed or velocity-curved)
+    int noteId = -1;    // v3.9: the note a key-switch was written for (-1: strings, mode keys, keys you drew yourself)
     int ch = -1;        // v3.0: MIDI channel 0..15 set by the route (-1 = track number)
 };
 

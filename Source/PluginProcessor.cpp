@@ -420,6 +420,13 @@ Settings EnochSoloProcessor::currentSettings() const
     s.voice2 = juce::jlimit (0, 4, getI (apvts, "voice2"));
     s.clave = juce::jlimit (0, 2, getI (apvts, "clave"));
     if (auto lib = currentLibrary()) if (! lib->standard) s.lib = lib;
+    {
+        // v3.9: key-switches only travel with the MIDI while the main part plays on an external instrument: routed to a VST / port, or
+        // (without routing) the EXTERNAL sound source. The built-in sound, a one-shot or a SoundFont get plain notes.
+        const int slot = curSlot();
+        if (s.routed) { const auto d = getRoute (slot, 0).dest; s.ksActive = (d == RD_External || d == RD_Both || d == RD_Hardware); }
+        else s.ksActive = getI (apvts, ("src" + juce::String (slot)).toRawUTF8()) == (int) TestPlayer::S_External;
+    }
     s.grooveProfile = grooveProfile;
     s.grooveAmount = getF (apvts, "grooveAmount");
     s.grooveTempo = juce::jlimit (0, 2, getI (apvts, "grooveTempo"));
@@ -1066,6 +1073,10 @@ void EnochSoloProcessor::timerCallback()
     const int ts = getI (apvts, "ts");
     if (ts == 0 && (hostNum.load() != lastTsNum || hostDen.load() != lastTsDen)) needRegen = true;
     if (std::abs (hostBpm.load() - lastBpmUsed) > 0.5) needFinalize = true;
+    {   // v3.9: switching the sound source to / from EXTERNAL turns the key-switches in the MIDI on / off
+        const int src = getI (apvts, ("src" + juce::String (curSlot())).toRawUTF8()) * 16 + curSlot();
+        if (src != lastSrcForKs) { lastSrcForKs = src; needFinalize = true; }
+    }
 
     if (needRegen.exchange (false))
     {
@@ -1789,6 +1800,7 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         state.setProperty ("editorH", editorH.load(), nullptr);
         state.setProperty ("followView", followView.load(), nullptr);   // v3.8
         state.setProperty ("ghostView", ghostView.load(), nullptr);
+        state.setProperty ("uiState", getUiState(), nullptr);    // v3.9
         for (int i = 0; i < TestPlayer::kSlots; ++i)
         {
             state.setProperty ("sfPath_" + juce::String (i), sfPaths[(size_t) i], nullptr);
@@ -1940,6 +1952,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     appliedScaleAll = scaleLockAll();
     editorW = (int) vt.getProperty ("editorW", 0); editorH = (int) vt.getProperty ("editorH", 0);
     followView = (bool) vt.getProperty ("followView", true); ghostView = (bool) vt.getProperty ("ghostView", true);   // v3.8
+    setUiState (vt.getProperty ("uiState").toString());   // v3.9
     undoStack.clear(); redoStack.clear();
 
     // restore the exact notes (including edits) when they were saved

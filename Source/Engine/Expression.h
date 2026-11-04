@@ -6,6 +6,8 @@
 
 namespace enochsolo
 {
+/** v3.9: Note.voice of a key-switch note you drew in the piano roll (on one of the instrument's key-switch rows) */
+constexpr int kKsVoice = 7;
 namespace detail
 {
 
@@ -270,8 +272,19 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         std::stable_sort (line.begin(), line.end(), [] (const Note* a, const Note* b) { return a->start < b->start; });
 
         // ---------------- notes
+        const bool ksLive = s.emitKS && (! s.ksGate || s.ksActive);
+        // v3.9: a key-switch note you drew in the roll (on one of the instrument's key-switch rows) is sent at that key, held as drawn
+        const Library* LK = (s.routed && track < 3 && s.routes[track].lib) ? s.routes[track].lib.get() : L;
+        const int keyShift = (LK && LK->inst == inst && ! LK->standard) ? LK->transpose + ((s.routed && track < 3) ? s.routes[track].transpose : 0) : 0;
         for (auto* n : all)
         {
+            if (n->voice == kKsVoice && ksLive && track != 2)
+            {
+                MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch + keyShift, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 1; on.ks = true;
+                MidiEv off = on; off.t = n->start + std::max (0.02, n->length); off.type = EV_OFF; off.b = 0; off.ord = 0;
+                out.push_back (on); out.push_back (off);
+                continue;
+            }
             MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 2; on.art = n->art;
             MidiEv off = on; off.t = n->start + std::max (0.02, n->length); off.type = EV_OFF; off.b = 0; off.ord = 0;
             out.push_back (on); out.push_back (off);
@@ -282,32 +295,51 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         // ---------------- key-switches (on change of articulation)
         // v3.8: a part routed to an instrument with its own mapping profile gets that profile's key-switches (not the main panel's)
         const Library* LT = (s.routed && track < 3 && s.routes[track].lib && s.routes[track].lib->inst == inst) ? s.routes[track].lib.get() : L;
-        if (s.emitKS && LT && LT->inst == inst && ! LT->standard)
+        if (ksLive && LT && LT->inst == inst && ! LT->standard)
         {
-            // instrument of choice: the library's own key-switch table
+            // instrument of choice: the library's own key-switch table. Each key goes down just before its note (about 20 ms at any
+            // tempo) and is held until that note ends, the way a player holds a key-switch (EZbass: hold G0 while the note plays).
             if (! LT->noKeySwitches && ! LT->arts.empty())
             {
+                const double lead = std::clamp (20.0 * std::max (20.0, s.bpm) / 60000.0, 0.01, 0.08);
+                std::vector<MidiEv> ksOut;
                 int last = -1;
                 for (auto* n : line)
                 {
                     const int art = libResolve (*LT, n->art);
                     const LibArt* e = libFind (*LT, art);
                     if (! e) continue;
-                    const double t = std::max (0.0, n->start - ksLead);
+                    const double t = std::max (0.0, n->start - lead);
                     if (e->oneShot || art != last)
                     {
                         for (auto& pr : e->press)
                         {
-                            MidiEv on; on.t = t; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127); on.b = std::clamp (pr.vel, 1, 127); on.track = track; on.ord = 1; on.ks = true;
-                            MidiEv off = on; off.t = e->hold ? n->start + 0.1 : t + 0.05; off.type = EV_OFF; off.b = 0; off.ord = 0;
-                            out.push_back (on); out.push_back (off);
+                            MidiEv on; on.t = t; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127); on.b = std::clamp (pr.vel, 1, 127); on.track = track; on.ord = 1; on.ks = true; on.noteId = n->id;
+                            MidiEv off = on; off.t = std::max (t + 0.02, n->start + std::max (0.02, n->length) - 0.002); off.type = EV_OFF; off.b = 0; off.ord = 0;
+                            ksOut.push_back (on); ksOut.push_back (off);
                         }
                         if (! e->oneShot) last = art;
                     }
                 }
+                // the same key used again before its last use ended: the earlier one lets go just before the new one goes down
+                std::stable_sort (ksOut.begin(), ksOut.end(), [] (const MidiEv& a, const MidiEv& b) { return a.t != b.t ? a.t < b.t : a.ord < b.ord; });
+                for (size_t i = 0; i < ksOut.size(); ++i)
+                {
+                    if (ksOut[i].type != EV_ON) continue;
+                    for (size_t j = i + 1; j < ksOut.size(); ++j)
+                    {
+                        if (ksOut[j].a != ksOut[i].a) continue;
+                        if (ksOut[j].type == EV_OFF) break;                        // released in time
+                        // the next press of this key comes first: find this press's release and move it before that press
+                        for (size_t k = j + 1; k < ksOut.size(); ++k)
+                            if (ksOut[k].type == EV_OFF && ksOut[k].a == ksOut[i].a && ksOut[k].noteId == ksOut[i].noteId) { ksOut[k].t = std::max (ksOut[i].t + 0.005, ksOut[j].t - 0.004); break; }
+                        break;
+                    }
+                }
+                out.insert (out.end(), ksOut.begin(), ksOut.end());
             }
         }
-        else if (s.emitKS)
+        else if (ksLive)
         {
             int last = -1;
             for (auto* n : line)
@@ -514,12 +546,14 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
     // muted notes stay in the piano roll but never sound
     auto prepare = [&] (bool realize)
     {
-        std::vector<Note> v; v.reserve (p.raw.size());
-        for (auto& n : p.raw) if (! n.mute) v.push_back (n);
+        std::vector<Note> v, keyNotes; v.reserve (p.raw.size());
+        // v3.9: key-switches you drew stay exactly where you put them (never humanized, never turned into ornaments)
+        for (auto& n : p.raw) if (! n.mute) (n.voice == kKsVoice ? keyNotes : v).push_back (n);
         if (realize) detail::realizeOrnaments (p, v, s);
         detail::fretCheck (v, s);                                   // v3.1: no hammer-ons across strings
         if (s.humanize) detail::humanizeNotes (p, v, s);
-        else std::stable_sort (v.begin(), v.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+        v.insert (v.end(), keyNotes.begin(), keyNotes.end());
+        std::stable_sort (v.begin(), v.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
         for (auto& n : v) { n.pitch = std::clamp (n.pitch, 0, 127); n.vel = std::clamp (n.vel, 1, 127); }
         return v;
     };
@@ -529,7 +563,7 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
     { Settings sp = s; sp.emitKS = sp.emitBends = sp.emitCC = true; detail::buildEvents (p, p.notes, sp, p.playEvents, true, false); }
 
     // what gets exported
-    Settings se = s;
+    Settings se = s; se.ksGate = true;            // v3.9: the MIDI that leaves Enoch only has key-switches for an external instrument
     if (s.exportMode == 0) detail::buildEvents (p, p.notes, se, p.events, true, false);
     else
     {
@@ -562,7 +596,7 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
             rs[(size_t) i].transpose = rc.transpose;
             rs[(size_t) i].program = rc.program;
         }
-        driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS);
+        driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS && s.ksActive);
     }
     else if (s.lib && ! s.lib->standard && s.lib->inst == s.instrument)
     {
@@ -570,12 +604,12 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
         // (the same file as a routed part, on the usual channels 1 / 2 / 3)
         std::array<driver::RouteSpec, 3> rs;
         for (int i = 0; i < 3; ++i) { rs[(size_t) i].channel = i; rs[(size_t) i].lib = i == 0 ? s.lib.get() : nullptr; }
-        driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS);
+        driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS && s.ksActive);
     }
     // v3.8 safety for Enoch's standard key-switch layout (keys from the Key-switch Base Note up): a played note that lands on one of
     // those keys moves up an octave, so the instrument plays it instead of switching on it (profiles are guarded in the driver)
     const Library* L0 = (s.routed && s.routes[0].lib) ? s.routes[0].lib.get() : s.lib.get();
-    if (s.emitKS && s.exportMode == 0 && ! (L0 && ! L0->standard && L0->inst == s.instrument))
+    if (s.emitKS && s.ksActive && s.exportMode == 0 && ! (L0 && ! L0->standard && L0->inst == s.instrument))
     {
         const int nks = (int) artList (s.instrument).size();
         auto onKey = [&] (int a) { return a >= s.ksBase && a < s.ksBase + nks; };

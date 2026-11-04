@@ -159,7 +159,7 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
         // v3.8 safety: a played note never lands on a key the profile uses as a switch (the instrument would switch instead of
         // sounding: the "silent note" fault). Such a note moves by an octave, to the nearest free key, staying in range when it can.
         std::array<bool, 128> keys {}; keys.fill (false);
-        if (L) keys = libKeyMask (*L);
+        if (L && allowKs) keys = libKeyMask (*L);      // v3.9: on the built-in sound every note is just a note
         auto freeKey = [&] (int p)
         {
             if (! keys[(size_t) p]) return p;

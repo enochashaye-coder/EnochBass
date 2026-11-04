@@ -160,7 +160,7 @@ juce::Rectangle<float> RollView::noteRect (const Geo& g, const Note& n) const
 
 int RollView::hitTest (const Geo& g, juce::Point<float> p, bool& resizeZone) const
 {
-    resizeZone = false;
+    resizeZone = false; hitLeft = false;
     for (int i = (int) raw.size() - 1; i >= 0; --i)
     {
         if (raw[(size_t) i].track == 2) continue;
@@ -170,6 +170,7 @@ int RollView::hitTest (const Geo& g, juce::Point<float> p, bool& resizeZone) con
             // the right edge grabs a note for resizing; short notes get a smaller edge so they can still be moved
             const float zone = juce::jlimit (2.5f, 6.f, r.getWidth() * 0.4f);
             resizeZone = (p.x > r.getRight() - zone && r.getWidth() > 5.f);
+            hitLeft = ! resizeZone && r.getWidth() > 10.f && p.x < r.getX() + juce::jmin (zone, r.getWidth() * 0.3f);   // v3.9: the start edge
             return i;
         }
     }
@@ -250,6 +251,8 @@ void RollView::recomputeRange()
     if (! vAuto) return;
     int lo = 127, hi = 0;
     for (auto& n : raw) { lo = std::min (lo, n.pitch); hi = std::max (hi, n.pitch); }
+    if (const auto kv = ksView(); kv.on)                                       // v3.9: the key-switches Enoch wrote are in view too
+        for (auto& ev : ksEvents()) { const int r = ev.key - kv.shift; if (r >= 0 && r < 128) { lo = std::min (lo, r); hi = std::max (hi, r); } }
     if (lo > hi) { lo = 52; hi = 76; }
     lo = std::max (0, lo - 3); hi = std::min (127, hi + 3);
     while (hi - lo < 19) { if (lo > 0) --lo; if (hi - lo < 19 && hi < 127) ++hi; }
@@ -709,11 +712,22 @@ void RollView::paint (juce::Graphics& g)
         if (gb > 0 && gb * G.ppb > 7.f)
         {
             const bool trip = std::abs (gb * 3.0 - std::round (gb * 3.0)) < 1e-6 && std::abs (gb * 2.0 - std::round (gb * 2.0)) > 1e-6;
-            for (double t = 0; t <= G.len + 1e-6; t += gb)
-            { g.setColour (trip ? T.accent.withAlpha (0.07f * vis) : juce::Colours::white.withAlpha (0.025f * vis)); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
+            // v3.9: 16th and 32nd lines in their own bright colours, so they stand out from the background while editing
+            auto onGrid = [] (double t, double step) { const double r = std::fmod (t + 1e-7, step); return r < 2e-6 || step - r < 2e-6; };
+            for (int i = 0; i * gb <= G.len + 1e-6; ++i)
+            {
+                const double t = i * gb;
+                if (onGrid (t, 1.0)) continue;                                                   // beat lines are drawn below
+                juce::Colour c;
+                if (trip) c = T.accent.withAlpha (juce::jmin (1.f, 0.16f * vis));
+                else if (onGrid (t, 0.5)) c = juce::Colours::white.withAlpha (juce::jmin (1.f, 0.09f * vis));                 // 8ths
+                else if (onGrid (t, 0.25)) c = juce::Colour (0xff3fd8ff).withAlpha (juce::jmin (1.f, 0.30f * vis));            // 16ths: bright cyan
+                else c = juce::Colour (0xffc39bff).withAlpha (juce::jmin (1.f, 0.24f * vis));                                  // 32nds and finer: violet
+                g.setColour (c); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom());
+            }
         }
         for (double t = 0; t <= G.len + 1e-6; t += 1.0)
-        { g.setColour (juce::Colours::white.withAlpha (0.05f * vis)); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
+        { g.setColour (juce::Colours::white.withAlpha (juce::jmin (1.f, 0.11f * vis))); g.drawVerticalLine ((int) xOf (G, t), G.notes.getY(), G.notes.getBottom()); }
         for (int bar = 0; bar <= P.bars; ++bar)
         { g.setColour (juce::Colours::white.withAlpha (juce::jmax (0.06f, 0.16f * vis))); g.drawVerticalLine ((int) xOf (G, bar * bb), G.notes.getY(), G.notes.getBottom()); }
         // v3.4 bar locks: a strip along the top of the bar (accent = scale lock, gold = bar lock)
@@ -758,6 +772,38 @@ void RollView::paint (juce::Graphics& g)
             g.setColour (gc.withAlpha (0.85f)); g.drawText (lbl, lb, juce::Justification::centred);
         }
 
+        // v3.9 key-switches for the external instrument: their rows are tinted, and each key-switch Enoch wrote sits on its key,
+        // held under the note it plays, named after the articulation. This is exactly what goes into the MIDI.
+        if (const auto kv = ksView(); kv.on && kv.lib)
+        {
+            juce::Graphics::ScopedSaveState ks (g);
+            g.reduceClipRegion (G.notes.getSmallestIntegerContainer());
+            const auto kc = juce::Colour (0xffffa040);
+            for (int r = G.lo; r <= G.hi; ++r)
+                if (kv.row[(size_t) r])
+                {
+                    const float y = yOf (G, r);
+                    g.setColour (kc.withAlpha (0.045f)); g.fillRect (G.notes.getX(), y, G.notes.getWidth(), G.rowH);
+                    if (G.rowH >= 9.f)
+                    {
+                        g.setColour (kc.withAlpha (0.5f)); g.setFont (juce::Font (juce::FontOptions (juce::jmin (11.f, G.rowH - 1.f))));
+                        g.drawText (juce::String (noteName (r + kv.shift)) + "  " + ksName (*kv.lib, r + kv.shift, -1), juce::Rectangle<float> (G.notes.getX() + 4.f, y, 260.f, G.rowH), juce::Justification::centredLeft, true);
+                    }
+                }
+            const auto& evs = ksEvents();
+            for (auto& ev : evs)
+            {
+                auto r = ksRect (G, kv, ev);
+                if (r.isEmpty() || r.getRight() < G.notes.getX() || r.getX() > G.notes.getRight()) continue;
+                const bool dragging = drag == Drag::KsMove && ev.noteId == ksDragNote;
+                g.setColour (kc.withAlpha (ev.noteId >= 0 ? 0.62f : 0.35f)); g.fillRoundedRectangle (r, 2.f);
+                g.setColour (kc.brighter (0.4f)); g.drawRoundedRectangle (r, 2.f, 1.f);
+                if (r.getWidth() > 44.f && G.rowH >= 8.f)
+                { g.setColour (juce::Colours::black.withAlpha (0.85f)); g.setFont (juce::Font (juce::FontOptions (juce::jmin (10.5f, G.rowH - 1.f)))); g.drawText (ksName (*kv.lib, ev.key, ev.vel), r.reduced (3.f, 0.f), juce::Justification::centredLeft, true); }
+                if (dragging) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r.withY (yOf (G, ksDragRow) + 0.5f), 2.f, 1.5f); }
+            }
+        }
+
         // notes: backing tracks first, solo on top
         for (int pass = 0; pass < 2; ++pass)
             for (auto& n : raw)
@@ -768,6 +814,7 @@ void RollView::paint (juce::Graphics& g)
                 if (r.getRight() < G.notes.getX() || r.getX() > G.notes.getRight()) continue;
                 const bool sel = selected.count (n.id) > 0;
                 juce::Colour col = n.track == 2 ? juce::Colour (0xff5a4c3d) : n.track == 1 ? juce::Colour (0xff5d86a0)
+                                 : n.voice == kKsVoice ? juce::Colour (0xffffa040)
                                  : n.voice == 1 ? juce::Colour (0xff9a8666) : colourFor (n.art, T.accent);
                 if (n.mute)
                 {
@@ -1056,17 +1103,30 @@ void RollView::mouseMove (const juce::MouseEvent& e)
             h = hp >= 0 ? "Click = lock / unlock this phrase (a locked phrase is kept when you press Try another)   |   right-click = more" : "";
         }
         else if (g.chord.contains (p)) { hb = barAtX (g, p.x); h = "Click to select this bar and choose its chord (Shift-click / drag = several bars)"; }
-        else if (g.ruler.contains (p)) h = "Click to jump the player here  |  mouse wheel = zoom";
+        else if (g.ruler.contains (p)) h = "Click to jump the player here  |  double-click = play / stop  |  mouse wheel = zoom";
         else if (g.gutter.contains (p)) h = "Click a key to hear it  |  mouse wheel = zoom pitch";
         else if (g.notes.contains (p))
         {
             const int i = hitTest (g, p, rz);
+            rz = rz || hitLeft;
+            const auto kv = ksView();
             if (i >= 0)
             {
                 auto& n = raw[(size_t) i];
-                h = juce::String (noteName (n.pitch)) + "   vel " + juce::String (n.vel) + "   " + juce::String (artLabel (artLib(), n.art)) + (n.mute ? "   (muted)" : "");
-                if (n.art == A_Bend) h << " (+" << n.bend << ")";
+                if (n.voice == kKsVoice && kv.on && kv.lib) h = "key-switch " + juce::String (noteName (n.pitch + kv.shift)) + "  " + ksName (*kv.lib, n.pitch + kv.shift, n.vel) + "   vel " + juce::String (n.vel) + "   (you drew it: it is sent as it is)";
+                else
+                {
+                    h = juce::String (noteName (n.pitch)) + "   vel " + juce::String (n.vel) + "   " + juce::String (artLabel (artLib(), n.art)) + (n.mute ? "   (muted)" : "");
+                    if (n.art == A_Bend) h << " (+" << n.bend << ")";
+                }
             }
+            else if (const int k = ksHit (g, p); k >= 0 && kv.lib)
+            {
+                const auto& ev = ksEvents()[(size_t) k];
+                h = "key-switch " + juce::String (noteName (ev.key)) + "  " + ksName (*kv.lib, ev.key, ev.vel) + (ev.noteId >= 0 ? "   right-click = change / remove   drag up / down = another articulation" : "   (strings / mode key)");
+            }
+            else if (kv.on && kv.lib && kv.row[(size_t) juce::jlimit (0, 127, pitchAt (g, p.y))])
+                h = "key-switch row " + juce::String (noteName (pitchAt (g, p.y) + kv.shift)) + "  " + ksName (*kv.lib, pitchAt (g, p.y) + kv.shift, -1) + "   (draw here to add this key-switch by hand)";
             else h = tool == Tool::Draw ? "Click-drag to draw a note" : "Double-click to add a note";
         }
         else if (g.lane.contains (p) && ctrlLane() >= 0)
@@ -1215,6 +1275,17 @@ void RollView::mouseDown (const juce::MouseEvent& e)
     {
         bool rz = false; const int idx = hitTest (g, p, rz);
         pasteAt = std::max (0.0, snapBeat (beatAt (g, p.x), true));
+        // v3.9: a key-switch Enoch wrote for a note: right-click = change / remove it, drag up or down = another articulation
+        if (idx < 0 && tool != Tool::Draw)
+        {
+            const int k = ksHit (g, p);
+            if (k >= 0)
+            {
+                const auto ev = ksEvents()[(size_t) k];
+                if (e.mods.isPopupMenu()) { showKsMenu (e.getScreenPosition(), ev.noteId); return; }
+                if (ev.noteId >= 0) { ksDragNote = ev.noteId; ksDragRow = pitchAt (g, p.y); drag = Drag::KsMove; repaint(); return; }
+            }
+        }
         if (e.mods.isPopupMenu())
         {
             if (idx >= 0 && ! selected.count (raw[(size_t) idx].id)) selected = { raw[(size_t) idx].id };
@@ -1254,7 +1325,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
                 selected = newSel; anchorId = newAnchor; duplicated = true;
             }
             dragOrig = raw; downBeat = beatAt (g, p.x); downPitch = pitchAt (g, p.y);
-            drag = rz ? Drag::Resize : Drag::Move;
+            drag = rz ? Drag::Resize : (hitLeft && ! e.mods.isAltDown() ? Drag::ResizeStart : Drag::Move);
             for (auto& n : raw) if (n.id == anchorId) { proc.audition (n.pitch, n.vel, true); lastAuditioned = n.pitch; }
         }
         else if (tool == Tool::Draw)
@@ -1265,6 +1336,7 @@ void RollView::mouseDown (const juce::MouseEvent& e)
             n.start = juce::jlimit (0.0, std::max (0.0, g.len - len), snapBeat (beatAt (g, p.x), true));
             n.length = len; n.pitch = snapPitch (pitchAt (g, p.y), n.start);
             n.vel = 96; n.art = A_Sustain; n.track = 0; n.voice = 0; n.id = proc.allocNoteId(); n.weight = metricWeight (n.start);
+            { const auto kv = ksView(); const int rp = juce::jlimit (0, 127, pitchAt (g, p.y)); if (kv.on && kv.row[(size_t) rp]) { n.pitch = rp; std::vector<Note> one { n }; markKsNotes (one, { n.id }); n = one[0]; } }
             raw.push_back (n); selected = { n.id }; anchorId = n.id; downBeat = n.start; moved = true; drag = Drag::DrawLen;
             proc.audition (n.pitch, n.vel, true);
         }
@@ -1295,7 +1367,7 @@ void RollView::setVelFromY (const Geo& g, float x0, float x1, float y)
 void RollView::mouseDrag (const juce::MouseEvent& e)
 {
     if (! snap || drag == Drag::None) return;
-    if (drag == Drag::Rubber || drag == Drag::Move || drag == Drag::Resize || drag == Drag::DrawLen) autoScrollFor (e.position);   // v3.8
+    if (drag == Drag::Rubber || drag == Drag::Move || drag == Drag::Resize || drag == Drag::ResizeStart || drag == Drag::DrawLen) autoScrollFor (e.position);   // v3.8
     const auto g = geo(); const auto p = e.position;
 
     if (drag == Drag::Divider)
@@ -1320,6 +1392,7 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
         return;
     }
     if (drag == Drag::Velocity) { setVelFromY (g, lastLaneX, p.x, p.y); lastLaneX = p.x; repaint(); return; }
+    if (drag == Drag::KsMove) { const int r = pitchAt (g, p.y); if (r != ksDragRow) { ksDragRow = r; repaint(); } return; }   // v3.9
     if (drag == Drag::EraseNotes) { eraseAt (g, p); return; }
     if (drag == Drag::MuteNotes) { muteAt (g, p); return; }
     if (drag == Drag::LaneErase)
@@ -1376,11 +1449,26 @@ void RollView::mouseDrag (const juce::MouseEvent& e)
             {
                 raw[i] = dragOrig[i];
                 raw[i].start = dragOrig[i].start + dBeat;
-                raw[i].pitch = pitchFor (juce::jlimit (0, 127, dragOrig[i].pitch + dPitch), raw[i].start, dPitch > 0 ? 1 : (dPitch < 0 ? -1 : 0));
+                { const int want = juce::jlimit (0, 127, dragOrig[i].pitch + dPitch); const auto kv = ksView();
+                  raw[i].pitch = (kv.on && kv.row[(size_t) want]) ? want : pitchFor (want, raw[i].start, dPitch > 0 ? 1 : (dPitch < 0 ? -1 : 0)); }
                 if (dPitch != 0 || dBeat != 0) raw[i].weight = metricWeight (raw[i].start);
             }
         const int ap = juce::jlimit (0, 127, a->pitch + dPitch);
         if (ap != lastAuditioned && dPitch != 0) { lastAuditioned = ap; proc.audition (snapPitch (ap, a->start + dBeat), a->vel, true); }
+    }
+    else if (drag == Drag::ResizeStart)
+    {
+        // v3.9: the start edge: the note begins earlier or later, its end stays where it is
+        const double minLen = snapIsOn() && gridBeats() > 0 ? gridBeats() : 1.0 / 32.0;
+        const double dStart = snapBeat (a->start + (beatAt (g, p.x) - downBeat)) - a->start;
+        for (size_t i = 0; i < raw.size() && i < dragOrig.size(); ++i)
+            if (selected.count (dragOrig[i].id))
+            {
+                raw[i] = dragOrig[i];
+                const double end = dragOrig[i].start + dragOrig[i].length;
+                const double ns = juce::jlimit (0.0, end - minLen, dragOrig[i].start + dStart);
+                raw[i].start = ns; raw[i].length = end - ns; raw[i].weight = metricWeight (ns);
+            }
     }
     else if (drag == Drag::Resize)
     {
@@ -1449,7 +1537,20 @@ void RollView::mouseUp (const juce::MouseEvent& e)
             refresh (true);
             return;
         }
-        case Drag::Move: case Drag::Resize: case Drag::Velocity: case Drag::DrawLen: case Drag::EraseNotes: case Drag::MuteNotes:
+        case Drag::KsMove:
+        {
+            // dropped on another key of the instrument: the note takes that key's articulation
+            const auto kv = ksView(); const int note = ksDragNote; ksDragNote = -1;
+            if (kv.on && kv.lib != nullptr && note >= 0)
+            {
+                const int key = ksDragRow + kv.shift;
+                for (auto& la : kv.lib->arts)
+                    if (! la.press.empty() && la.press[0].note == key) { setArtOnNote (note, la.art); return; }
+            }
+            repaint(); return;
+        }
+        case Drag::Move: case Drag::Resize: case Drag::ResizeStart: case Drag::Velocity: case Drag::DrawLen: case Drag::EraseNotes: case Drag::MuteNotes:
+            if (moved && d == Drag::Move) { std::vector<Note> v = raw; markKsNotes (v, selected); raw = v; }   // v3.9: notes moved onto / off key rows
             if (moved) commit (raw);
             else { raw = dragOrig; repaint(); }
             break;
@@ -1462,6 +1563,7 @@ void RollView::mouseDoubleClick (const juce::MouseEvent& e)
     if (snap && nearDivider (geo(), e.position)) return;
     if (! snap) return;
     const auto g = geo();
+    if (g.ruler.contains (e.position)) { proc.setInternalPlaying (! proc.isInternalPlaying()); return; }   // v3.9: double-click the ruler = play / stop
     if (g.lane.getHeight() > 0 && g.lane.contains (e.position) && ctrlLane() >= 0)
     {
         // double-click a lane: give the bar under the mouse (or the selected bars) back to the automatic data
@@ -1497,7 +1599,9 @@ void RollView::addNoteAt (double beat, int pitch)
     n.length = len;
     n.pitch = pitchFor (pitch, n.start, 0);
     n.vel = 96; n.art = A_Sustain; n.track = 0; n.voice = 0; n.id = proc.allocNoteId(); n.weight = metricWeight (n.start);
+    { const auto kv = ksView(); const int rp = juce::jlimit (0, 127, pitch); if (kv.on && kv.row[(size_t) rp]) n.pitch = rp; }
     auto v = raw; v.push_back (n);
+    markKsNotes (v, { n.id });
     selected = { n.id };
     proc.audition (n.pitch, n.vel);
     commit (std::move (v));
@@ -2201,15 +2305,17 @@ void RollView::stepSelected (int dir, bool octave)
 {
     if (selected.empty()) return;
     auto v = raw;
+    const auto kvS = ksView();
     bool any = false;
     for (auto& n : v)
         if (selected.count (n.id))
         {
-            const int q = octave ? n.pitch + 12 * dir : stepPitch (n.pitch, n.start, dir);
+            const int q = octave ? n.pitch + 12 * dir : ((kvS.on && n.voice == kKsVoice) ? n.pitch + dir : stepPitch (n.pitch, n.start, dir));
             if (q < 0 || q > 127) continue;
             n.pitch = q; any = true;
         }
     if (! any) return;
+    markKsNotes (v, selected);
     for (auto& n : v) if (selected.count (n.id)) { proc.audition (n.pitch, n.vel); ensureVisible (n); break; }
     commit (std::move (v));
 }
@@ -2279,4 +2385,159 @@ void RollView::toggleLoopSelection()
     proc.setLoopRegion (a, b);
     repaint();
     if (onMessage) onMessage ("PLAY now loops beats " + juce::String (a + 1.0, 2) + " to " + juce::String (b + 1.0, 2) + ". Ctrl+L again stops it.");
+}
+
+
+//------------------------------------------------------------------------------ v3.9 key-switch notes
+RollView::KsView RollView::ksView() const
+{
+    KsView v;
+    const auto* lib = artLib();
+    if (! snap || lib == nullptr || lib->noKeySwitches) return v;
+    const auto& S = snap->pattern.s;
+    if (! (S.ksActive && S.emitKS && S.exportMode == 0)) return v;
+    v.on = true; v.lib = lib;
+    v.shift = lib->transpose + (S.routed ? S.routes[0].transpose : 0);
+    v.row.fill (false);
+    const auto mask = enochsolo::libKeyMask (*lib);
+    for (int k = 0; k < 128; ++k) if (mask[(size_t) k] && k - v.shift >= 0 && k - v.shift < 128) v.row[(size_t) (k - v.shift)] = true;
+    return v;
+}
+
+const std::vector<RollView::KsEvent>& RollView::ksEvents() const
+{
+    const int num = snap ? snap->number : -1;
+    if (num == ksCacheNumber) return ksCache;
+    ksCacheNumber = num; ksCache.clear();
+    if (! snap) return ksCache;
+    // pair each key-switch press of the main part with its release (the MIDI that leaves Enoch)
+    std::vector<const MidiEv*> open;
+    for (auto& e : snap->pattern.events)
+    {
+        if (! e.ks || e.track != 0 || (e.type != EV_ON && e.type != EV_OFF)) continue;
+        if (e.type == EV_ON) { open.push_back (&e); continue; }
+        for (size_t i = 0; i < open.size(); ++i)
+            if (open[i]->a == e.a)
+            {
+                KsEvent k; k.key = e.a; k.vel = open[i]->b; k.noteId = open[i]->noteId; k.t0 = open[i]->t; k.t1 = std::max (open[i]->t + 0.02, e.t);
+                ksCache.push_back (k); open.erase (open.begin() + (long) i); break;
+            }
+    }
+    return ksCache;
+}
+
+juce::String RollView::ksName (const enochsolo::Library& l, int key, int vel) const
+{
+    // the articulation this key (and velocity) stands for in the profile
+    const LibArt* best = nullptr; bool exact = false;
+    for (auto& a : l.arts)
+    {
+        for (auto& p : a.press)
+            if (p.note == key && ! exact)
+            {
+                const bool velOk = vel < 0 || std::abs (p.vel - vel) < 8;
+                if (best == nullptr || velOk) { best = &a; exact = velOk; }
+            }
+        if (exact) break;
+    }
+    if (best != nullptr) return juce::String (artLabel (&l, best->art));
+    for (size_t i = 0; i < l.stringKeys.size(); ++i) if (l.stringKeys[i] == key) return "string " + juce::String ((int) (l.stringKeys.size() - i));
+    if (l.repKey == key) return "repetition";
+    for (auto& p : l.init) if (p.note == key) return "mode key";
+    return "key-switch";
+}
+
+juce::Rectangle<float> RollView::ksRect (const Geo& G, const KsView& kv, const KsEvent& ev) const
+{
+    const int r = ev.key - kv.shift;
+    if (r < G.lo || r > G.hi) return {};
+    const float x0 = xOf (G, ev.t0), x1 = xOf (G, ev.t1);
+    return { x0, yOf (G, r) + 1.f, std::max (3.f, x1 - x0), std::max (2.f, G.rowH - 2.f) };
+}
+
+int RollView::ksHit (const Geo& G, juce::Point<float> p) const
+{
+    const auto kv = ksView();
+    if (! kv.on) return -1;
+    const auto& evs = ksEvents();
+    for (int i = (int) evs.size() - 1; i >= 0; --i)
+        if (ksRect (G, kv, evs[(size_t) i]).expanded (1.f, 0.5f).contains (p)) return i;
+    return -1;
+}
+
+void RollView::setArtOnNote (int noteId, int art)
+{
+    auto v = raw; bool found = false;
+    for (auto& n : v) if (n.id == noteId) { n.art = art; if (art != A_Bend) n.bend = 0; else if (n.bend == 0) n.bend = 1; found = true; }
+    if (found) commit (std::move (v));
+}
+
+void RollView::showKsMenu (juce::Point<int> screenPos, int noteId)
+{
+    const auto kv = ksView();
+    juce::PopupMenu m;
+    if (noteId < 0 || kv.lib == nullptr)
+    {
+        m.addItem (1, "This key chooses the string / sets a mode (it follows the notes)", false);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }));
+        return;
+    }
+    m.addSectionHeader ("Key-switch for this note");
+    m.addItem (1, "Play this note plainly (no articulation)");
+    juce::PopupMenu to;
+    for (auto& la : kv.lib->arts)
+        if (! la.press.empty() && la.art != A_Sustain)
+            to.addItem (1000 + la.art, juce::String (artLabel (kv.lib, la.art)) + "   (" + noteName (la.press[0].note) + ")");
+    m.addSubMenu ("Change to", to);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
+                     [safe = juce::Component::SafePointer<RollView> (this), noteId] (int r)
+                     {
+                         if (safe == nullptr || r == 0) return;
+                         if (r == 1) safe->setArtOnNote (noteId, A_Sustain);
+                         else if (r >= 1000) safe->setArtOnNote (noteId, r - 1000);
+                     });
+}
+
+void RollView::markKsNotes (std::vector<Note>& v, const std::set<int>& ids) const
+{
+    // notes placed on one of the instrument's key-switch rows are key-switches (sent at that key, with their own velocity);
+    // notes moved off those rows are notes again
+    const auto kv = ksView();
+    if (! kv.on || kv.lib == nullptr) return;
+    for (auto& n : v)
+    {
+        if (! ids.count (n.id) || n.track != 0) continue;
+        const bool onKey = n.pitch >= 0 && n.pitch < 128 && kv.row[(size_t) n.pitch];
+        if (onKey && n.voice != kKsVoice)
+        {
+            n.voice = kKsVoice; n.art = A_Sustain;
+            const int key = n.pitch + kv.shift;
+            for (auto& la : kv.lib->arts) if (! la.press.empty() && la.press[0].note == key) { n.vel = la.press[0].vel; break; }
+        }
+        else if (! onKey && n.voice == kKsVoice) n.voice = 0;
+    }
+}
+
+//------------------------------------------------------------------------------ v3.9 the view, saved with the project
+juce::String RollView::getViewState() const
+{
+    juce::String s;
+    s << "vs=" << juce::String (viewStart, 4) << ";vl=" << juce::String (viewLen, 4) << ";rows=" << visRows << ";top=" << topPitch << ";auto=" << (vAuto ? 1 : 0)
+      << ";lane=" << laneSel << ";laneH=" << juce::String (laneHpx, 1) << ";tool=" << (int) tool;
+    return s;
+}
+
+void RollView::setViewState (const juce::String& st)
+{
+    if (st.isEmpty()) return;
+    juce::StringPairArray kv;
+    for (auto& tok : juce::StringArray::fromTokens (st, ";", "")) kv.set (tok.upToFirstOccurrenceOf ("=", false, false).trim(), tok.fromFirstOccurrenceOf ("=", false, false).trim());
+    if (kv.containsKey ("lane")) setLane (kv["lane"].getIntValue());
+    if (kv.containsKey ("laneH")) { setLaneHeight (kv["laneH"].getFloatValue()); if (onLaneHeightChanged) onLaneHeightChanged (laneHpx); }
+    if (kv.containsKey ("tool")) setTool ((Tool) juce::jlimit (0, 4, kv["tool"].getIntValue()));
+    vAuto = kv["auto"].getIntValue() != 0;
+    if (! vAuto) { visRows = juce::jlimit (12, 128, kv["rows"].getIntValue()); topPitch = juce::jlimit (0, 127, kv["top"].getIntValue()); }
+    else recomputeRange();
+    viewLen = juce::jmax (0.0, kv["vl"].getDoubleValue()); viewStart = juce::jmax (0.0, kv["vs"].getDoubleValue());
+    clampView(); updateScrollBars(); repaint(); notifyView();
 }

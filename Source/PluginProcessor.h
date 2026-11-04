@@ -167,6 +167,10 @@ public:
     std::atomic<double> loopRegionA { -1.0 }, loopRegionB { -1.0 }; // PLAY (not the DAW) loops these beats; -1 = off
     void setLoopRegion (double a, double b) { if (b > a + 1e-3) { loopRegionA = a; loopRegionB = b; seekBeat.store (a); } else clearLoopRegion(); }
     void clearLoopRegion() { loopRegionA = -1.0; loopRegionB = -1.0; }
+    // v3.9: the piano roll's view and the open drawer, saved with the project (read by the host from any thread, so locked)
+    void setUiState (const juce::String& st) { const juce::SpinLock::ScopedLockType l (uiLock); uiState = st; }
+    juce::String getUiState() const { const juce::SpinLock::ScopedLockType l (uiLock); return uiState; }
+    juce::String uiState; mutable juce::SpinLock uiLock;
     bool loopRegionOn() const { return loopRegionB.load() > loopRegionA.load() + 1e-3 && loopRegionA.load() >= 0.0; }
     std::vector<enochx::Favourite> favourites() const { return enochx::loadFavourites (JucePlugin_Name); }
     bool starCurrentTake (const juce::String& name, juce::String& message);
@@ -174,6 +178,7 @@ public:
     bool deleteFavourite (int index);
     const juce::String instanceId { juce::Uuid().toString().substring (0, 12) };
     int lastSharedNumber = -1; juce::uint32 lastShareWrite = 0;
+    int lastSrcForKs = -1;
     void clearSoundFont();
     /** one-shot bass sound for the built-in preview: any single bass note recording (WAV / AIFF / FLAC / MP3) */
     bool loadBassSample (const juce::File& f, juce::String& message);
