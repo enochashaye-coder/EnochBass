@@ -536,7 +536,8 @@ private:
                                     { "fall", A_Fall }, { "doit", A_Doit }, { "growl", A_Growl }, { "flutter", A_Flutter }, { "bend", A_Bend }, { "sustain", A_Sustain },
                                     { "marcato", A_Marcato }, { "accent", A_Marcato }, { "scoop", A_Scoop }, { "shake", A_Shake }, { "strum", A_Strum } };
             for (auto& k : ks) if (nm.contains (k.w)) return k.a;
-            if (bass && nm.contains ("slap")) return (int) enochsolo::A_Count - 1;     // Enoch Bass: Slap is its last articulation
+            if (bass && nm.contains ("pop") && ! nm.contains ("polyphony")) { const int a = enochsolo::articulationFromName ("pop"); if (a >= 0) return a; }
+            if (bass && nm.contains ("slap")) return enochsolo::articulationFromName ("slap");
             return -1;
         };
         auto momentary = [] (int a) { return a == A_Slide || a == A_HammerOn || a == A_PullOff || a == A_Harmonic || a == A_PalmMute || a == A_Ghost || a == A_Gliss || a == A_Fall || a == A_Doit || a == A_Scoop; };

@@ -4,6 +4,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 #include "EnochLook.h"
+#include "ArtPanel.h"
 #include <map>
 
 class FeelPanel : public juce::Component
@@ -29,6 +30,8 @@ public:
         knob ("mechNoise", "MECH NOISE", "NONE",  "MORE",  "Keys, valves, fingers on strings, dampers, pedal, bow changes, breaths. 50% = natural");
         knob ("micPos",    "MIC",        "CLOSE", "FAR",   "Microphone distance: close = fuller lows and air, far = darker with more room");
         knob ("glideTime", "GLIDE TIME", "FAST",  "SLOW",  "How long a glide takes: fast and subtle at the left, slow slides at the right");
+        knob ("artAmount", "ARTICULATION", "PLAIN", "EXPRESSIVE", "How much the player articulates: slides into chord changes, hammer-ons in runs, ghost pickups, muted passages, slide-outs, "
+                                                                 "scoops and falls, vibrato, slap and pop... chosen phrase by phrase for the genre. 60% = natural. Turning it writes the take again: the same notes with new articulations");
 
         combo (roomBox, "roomType", "ROOM", "Reverb room of the preview (the REVERB amount stays in Advanced)");
         combo (glideBox, "glideMode", "GLIDE", "Off: legato notes change pitch at once (slides still slide).  Legato glide: legato articulations glide (default).\n"
@@ -51,9 +54,9 @@ public:
         addAndMakeVisible (resetBtn);
 
         // ---- page 2: modulation matrix + creative effect
-        for (int t = 0; t < 2; ++t)
+        for (int t = 0; t < 3; ++t)
         {
-            auto* b = tabs.add (new juce::TextButton (t == 0 ? "SOUND & FEEL" : "MODULATION & FX"));
+            auto* b = tabs.add (new juce::TextButton (t == 0 ? "SOUND & FEEL" : (t == 1 ? "MODULATION & FX" : "ARTICULATION")));
             b->getProperties().set ("seg", true);
             b->setClickingTogglesState (false);
             b->onClick = [this, t] { page = t; showPage(); };
@@ -86,8 +89,12 @@ public:
         fxBox.setTooltip ("Creative effect on the preview: tape wobble, lo-fi, wide, telephone / radio, warm saturation");
         fxLbl.setText ("CREATIVE FX", juce::dontSendNotification); fxLbl.setFont (EnochLookAndFeel::fnt (11.f, "SemiBold", 0.05f));
         addChildComponent (fxBox); addChildComponent (fxLbl);
+        addChildComponent (artPage);          // v3.11 / v2.11: the ARTICULATION page
         showPage();
     }
+
+    /** v3.11: open the drawer on the ARTICULATION page */
+    void showArticulation() { page = 2; showPage(); }
 
     void paint (juce::Graphics& g) override
     {
@@ -109,6 +116,7 @@ public:
         humanBtn.setBounds (head.removeFromRight (230).reduced (2, 2));
         hint.setBounds (head);
         r.removeFromTop (10);
+        artPage.setBounds (r);
         {   // page 2 layout
             auto r2 = r;
             auto right2 = r2.removeFromRight (juce::jmin (380, r2.getWidth() * 2 / 5));
@@ -163,9 +171,11 @@ private:
         for (auto& kv : labels) kv.second->setVisible (p1);
         for (auto* c : { &roomBox, &glideBox, &outBox, &speedBox, &subBox, &feelBox }) c->setVisible (p1);
         humanBtn.setVisible (p1); hint.setVisible (p1); resetBtn.setVisible (p1);
-        for (auto* row : rows) for (juce::Component* c : { (juce::Component*) &row->num, (juce::Component*) &row->src, (juce::Component*) &row->dst, (juce::Component*) &row->amt }) c->setVisible (! p1);
+        const bool p2 = page == 1;
+        artPage.setVisible (page == 2);
+        for (auto* row : rows) for (juce::Component* c : { (juce::Component*) &row->num, (juce::Component*) &row->src, (juce::Component*) &row->dst, (juce::Component*) &row->amt }) c->setVisible (p2);
         for (juce::Component* c : { (juce::Component*) &lfo1, (juce::Component*) &lfo2, (juce::Component*) &fxAmtK, (juce::Component*) &lfo1L, (juce::Component*) &lfo2L, (juce::Component*) &fxAmtL, (juce::Component*) &fxBox, (juce::Component*) &fxLbl })
-            c->setVisible (! p1);
+            c->setVisible (p2);
     }
     void addChoice (juce::ComboBox& c, const char* id)
     {
@@ -244,4 +254,5 @@ private:
     juce::ToggleButton humanBtn { "Human Play (phrasing engine)" };
     juce::TextButton resetBtn { "Reset" };
     std::unique_ptr<juce::ButtonParameterAttachment> btnAtt;
+    ArtPanel artPage { proc };
 };

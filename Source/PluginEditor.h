@@ -300,16 +300,28 @@ private:
     float needle = 0.f, peakHold = 0.f; int peakLamp = 0;
 };
 
-class DragPad : public juce::Component
+class DragPad : public juce::Component, public juce::SettableTooltipClient
 {
 public:
-    explicit DragPad (EnochSoloProcessor& p) : proc (p) { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+    explicit DragPad (EnochSoloProcessor& p) : proc (p)
+    {
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        setTooltip ("Drag the take into your DAW. Every file is checked first (key-switches present and before their notes, nothing stuck, "
+                    "nothing out of range or after the end) and repaired if needed.");
+    }
     void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override { file = proc.writeMidiToTemp(); dragging = false; }
+    void mouseDown (const juce::MouseEvent&) override
+    {
+        file = proc.writeMidiToTemp(); dragging = false;
+        checked = proc.lastMidiCheck;          // v3.11: what the MIDI check found
+        setTooltip (checked + ". Drag the take into your DAW: every file is checked and repaired before it leaves Enoch.");
+        repaint();
+    }
     void mouseDrag (const juce::MouseEvent& e) override;
 private:
     EnochSoloProcessor& proc;
     juce::File file; bool dragging = false;
+    juce::String checked;
 };
 
 //==============================================================================

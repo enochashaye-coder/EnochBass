@@ -1118,6 +1118,7 @@ void RollView::mouseMove (const juce::MouseEvent& e)
                 {
                     h = juce::String (noteName (n.pitch)) + "   vel " + juce::String (n.vel) + "   " + juce::String (artLabel (artLib(), n.art)) + (n.mute ? "   (muted)" : "");
                     if (n.art == A_Bend) h << " (+" << n.bend << ")";
+                    if (n.why > 0 && n.voice == 0 && n.track == 0) h << "   |   why: " << artbrain::whyText (n.why);     // v3.11: the planner's reason
                 }
             }
             else if (const int k = ksHit (g, p); k >= 0 && kv.lib)
@@ -2074,7 +2075,7 @@ void RollView::nudge (double dBeat, int dPitch)
 void RollView::setArtOnSelected (int art)
 {
     if (selected.empty()) return;
-    auto v = raw; for (auto& n : v) if (selected.count (n.id)) { n.art = art; if (art != A_Bend) n.bend = 0; else if (n.bend == 0) n.bend = 1; }
+    auto v = raw; for (auto& n : v) if (selected.count (n.id)) { n.art = art; n.why = 0; if (art != A_Bend) n.bend = 0; else if (n.bend == 0) n.bend = 1; }
     commit (std::move (v));
 }
 
@@ -2468,7 +2469,7 @@ int RollView::ksHit (const Geo& G, juce::Point<float> p) const
 void RollView::setArtOnNote (int noteId, int art)
 {
     auto v = raw; bool found = false;
-    for (auto& n : v) if (n.id == noteId) { n.art = art; if (art != A_Bend) n.bend = 0; else if (n.bend == 0) n.bend = 1; found = true; }
+    for (auto& n : v) if (n.id == noteId) { n.art = art; n.why = 0; if (art != A_Bend) n.bend = 0; else if (n.bend == 0) n.bend = 1; found = true; }
     if (found) commit (std::move (v));
 }
 

@@ -260,6 +260,7 @@ public:
     juce::String getChordStatus() const { return chordStatus; }
 
     juce::File writeMidiToTemp();                       // used for drag & drop
+    juce::String lastMidiCheck;                          // v3.11: what the MIDI check found in the last file written (message thread)
     bool saveMidiTo (const juce::File& f);
     juce::String suggestedFileName() const;
 

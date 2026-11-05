@@ -66,6 +66,14 @@ inline int libResolve (const Library& l, int art)
 {
     if (libFind (l, art)) return art;
     if (art >= (int) A_Count) return A_Sustain;           // a custom key this profile does not have
+    // v2.10: pop -> the profile's own "Pop" key, else its slap key; slide out (fall) -> its slide-down / gliss key; dead mute -> its mute
+    if (art == A_Pop)
+    {
+        for (auto& a : l.arts) if (a.art >= (int) A_Count) { std::string nm; for (char c : a.name) nm += (char) std::tolower ((unsigned char) c); if (nm == "pop") return a.art; }
+        return libFind (l, A_Slap) ? (int) A_Slap : (int) A_Sustain;
+    }
+    if (art == A_Fall) return libFind (l, A_Gliss) ? (int) A_Gliss : (int) A_Sustain;
+    if (art == A_Mute) return libFind (l, A_PalmMute) ? (int) A_PalmMute : (int) A_Sustain;
     auto has = [&] (int a) { return libFind (l, a) != nullptr; };
     switch (art)
     {
@@ -387,7 +395,7 @@ inline int articulationFromName (std::string s)
     std::string k; for (char c : s) if (std::isalnum ((unsigned char) c)) k += (char) std::tolower ((unsigned char) c);
     struct E { const char* n; int a; };
     static const E t[] = { { "sustain", A_Sustain }, { "legato", A_Legato }, { "staccato", A_Staccato }, { "marcato", A_Marcato }, { "accent", A_Marcato }, { "ghost", A_Ghost },
-        { "dead", A_Ghost }, { "palmmute", A_PalmMute }, { "hammeron", A_HammerOn }, { "pulloff", A_PullOff }, { "slide", A_Slide }, { "slap", A_Slap }, { "pop", A_Slap }, { "bend", A_Bend }, { "vibrato", A_Vibrato },
+        { "dead", A_Ghost }, { "palmmute", A_PalmMute }, { "hammeron", A_HammerOn }, { "pulloff", A_PullOff }, { "slide", A_Slide }, { "slap", A_Slap }, { "pop", A_Pop }, { "bend", A_Bend }, { "vibrato", A_Vibrato },
         { "harmonic", A_Harmonic }, { "growl", A_Growl }, { "flutter", A_Flutter }, { "flutter-tongue", A_Flutter }, { "fall", A_Fall }, { "doit", A_Doit }, { "scoop", A_Scoop },
         { "subtone", A_Subtone }, { "shake", A_Shake }, { "trill", A_Trill }, { "tremolo", A_Tremolo }, { "pizzicato", A_Pizz }, { "pizz", A_Pizz }, { "gliss", A_Gliss },
         { "glissando", A_Gliss }, { "collegno", A_ColLegno }, { "arpeggio", A_Arpeggio }, { "mute", A_Mute }, { "harmon", A_Mute }, { "strum", A_Strum } };

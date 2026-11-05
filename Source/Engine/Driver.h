@@ -21,6 +21,8 @@ struct RouteSpec
     const Library* lib = nullptr; // the mapping profile (null = plain notes)
     int transpose = 0;            // extra semitones set on the route
     int program = -1;             // overrides the profile's program when >= 0
+    int repMode = 1;              // v3.11 repetition keys: 0 never, 1 every second fast repeat (natural), 2 every repeat within a beat
+    float repAmt = 1.0f;          // how fast a repeat must be to use the key (1 = within half a beat, 2 = within a beat)
 };
 
 inline bool isLegatoArt (int a) { return a == A_Legato || a == A_HammerOn || a == A_PullOff || a == A_Slide || a == A_Gliss; }
@@ -28,7 +30,10 @@ inline bool isLegatoArt (int a) { return a == A_Legato || a == A_HammerOn || a =
 /** String choice like a player's hand: a Viterbi search over (string, fret) that keeps the hand in position, prefers short moves,
     takes open strings when they fit and never asks for a stretch beyond 4 frets between notes closer than an 8th note.
     Returns the string index (into tuning) for every pitch, -1 when no string can play it. */
-inline std::vector<int> solveStrings (const std::vector<int>& pitch, const std::vector<double>& start, const std::vector<int>& tuning, int maxFret)
+/** joined (v3.11, optional): notes played as a hammer-on, pull-off or slide from the note before. They stay on that note's string
+    whenever the string can reach them, so the articulation the plan chose is one the hand can really play. */
+inline std::vector<int> solveStrings (const std::vector<int>& pitch, const std::vector<double>& start, const std::vector<int>& tuning, int maxFret,
+                                      const std::vector<char>* joined = nullptr)
 {
     const int n = (int) pitch.size(), S = (int) tuning.size();
     std::vector<int> out ((size_t) n, -1);
@@ -56,6 +61,7 @@ inline std::vector<int> solveStrings (const std::vector<int>& pitch, const std::
                 if (span > 4) c += (span - 4) * 2.5 * speed + 1.0;          // a position shift
                 else c += span * 0.15 * speed;
                 c += std::abs (s - p) * 0.25 * speed;                        // string crossing
+                if (joined && (size_t) i < joined->size() && (*joined)[(size_t) i] && s != p) c += 6.0;   // a hammer-on / pull-off / slide never changes string
                 if (s == p && f == pf && pitch[(size_t) i] == pitch[(size_t) (i - 1)]) c -= 0.1;
                 c += 0.02 * f + (f == 0 ? -0.15 : 0.0);
                 if (c < cost[(size_t) i][(size_t) s]) { cost[(size_t) i][(size_t) s] = c; from[(size_t) i][(size_t) s] = p; }
@@ -123,7 +129,9 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
             {
                 std::vector<int> pitches; std::vector<double> starts;
                 for (int i : line) { pitches.push_back (t[(size_t) i].a); starts.push_back (t[(size_t) i].t); }
-                const auto strings = solveStrings (pitches, starts, L->tuning, L->maxFret);
+                std::vector<char> joined;
+                for (int i : line) { const int a = t[(size_t) i].art; joined.push_back ((char) (a == A_HammerOn || a == A_PullOff || a == A_Slide || a == A_Legato)); }
+                const auto strings = solveStrings (pitches, starts, L->tuning, L->maxFret, &joined);
                 int last = -1;
                 const double lead = 30.0 * beatsPerMs;
                 for (size_t k = 0; k < line.size(); ++k)
@@ -137,15 +145,15 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
                 }
             }
             // ---- 4) repetition keys: fast repeats of one pitch alternate with the repetition key (no machine-gun retrigger)
-            if (allowKs && L->repKey >= 0)
+            if (allowKs && L->repKey >= 0 && r.repMode != 0 && r.repAmt > 0.01f)
             {
                 bool alt = false;
                 for (size_t k = 1; k < line.size(); ++k)
                 {
                     auto& cur = t[(size_t) line[k]];
                     const auto& prv = t[(size_t) line[k - 1]];
-                    const bool fastRepeat = cur.a == prv.a && cur.t - prv.t < 0.51;
-                    alt = fastRepeat ? ! alt : false;
+                    const bool fastRepeat = cur.a == prv.a && cur.t - prv.t < (r.repMode == 2 ? 1.01 : 0.51 * std::min (2.0f, r.repAmt));
+                    alt = fastRepeat ? (r.repMode == 2 ? true : ! alt) : false;
                     if (alt)
                     {
                         const int off = offOf[(size_t) line[k]];
@@ -195,6 +203,10 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
         if (L && allowKs)
             for (auto& k : L->init)
             {
+                // v3.11: a mode key that the first note's own key-switch presses anyway (within 50 ms) is not pressed twice at the start
+                bool firstUses = false;
+                for (auto& e : t) if (e.ks && e.type == EV_ON && e.a == k.note && e.t < 50.0 * beatsPerMs) { firstUses = true; break; }
+                if (firstUses) continue;
                 addAt (EV_ON, k.note, k.vel, -1, true);
                 MidiEv off; off.t = 12.0 * beatsPerMs; off.type = EV_OFF; off.a = k.note; off.b = 0; off.track = track; off.ord = 0; off.ks = true; t.push_back (off);
             }

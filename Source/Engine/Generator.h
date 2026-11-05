@@ -1,5 +1,6 @@
 // Enoch Bass - generation engine (header only, no JUCE dependency)
 #pragma once
+#include <functional>
 #include <vector>
 #include <array>
 #include <string>
@@ -61,6 +62,12 @@ struct Settings
     // v3.9: key-switches are written into the MIDI only while the main part plays on an external instrument (a routed VST / port, or the
     // EXTERNAL sound source). On the built-in sound, a one-shot or a SoundFont every note is just a note.
     bool ksActive = true;
+    float artAmount = 0.6f;     // v3.10 / v2.10: ARTICULATION knob (0 plain .. 1 very expressive)
+    // v3.11 / v2.11: the ARTICULATION panel, one value per family (see ArtBrain.h: legato, slide, ghost, palm, vibrato, bend, harmonic,
+    // slap, short, accent, colour, repetition). famAmt 0..2 (1 = the style's natural amount), famLock 0 auto / 1 never / 2 always.
+    float famAmt[12] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    int famLock[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    float artVary = 0.3f;       // 0 = the same choices every time .. 1 = more variation between close choices and repeated riffs
     bool ksGate = false;        // set for the MIDI that leaves Enoch (live out, drag, export): honours ksActive
     int clave = 1;                  // Latin genres: 0 off, 1 = 3-2 clave, 2 = 2-3 clave
     int voice2 = 0;                 // second voice: 0 off, 1 third below, 2 third above, 3 horn section, 4 call and response
@@ -96,6 +103,7 @@ struct Note
     int bend = 0;       // semitones of bend for A_Bend
     bool vib = false;
     bool mute = false;  // kept in the piano roll but never sounds / exported
+    int why = 0;        // v3.11: why the articulation planner chose this note's articulation (artbrain::whyText)
     int role = 0;       // bass: the job of the note (root, fifth, approach...), so a chord change keeps the line musical (see BassGen.h)
 };
 
@@ -110,6 +118,7 @@ struct MidiEv
     int art = 0;        // articulation of the note this event belongs to (note events only)
     bool ks = false;    // v3.0: a key-switch / mode key (never transposed or velocity-curved)
     int noteId = -1;    // v3.9: the note a key-switch was written for (-1: strings, mode keys, keys you drew yourself)
+    int srcId = -1;     // v3.11: the note a played note-on / note-off belongs to (the MIDI check pairs key-switches with their notes)
     int ch = -1;        // v3.0: MIDI channel 0..15 set by the route (-1 = track number)
 };
 
@@ -1459,6 +1468,7 @@ inline Pattern Generator::makeShell (const Settings& sIn)
 
 } // namespace enochsolo
 #include "Rhythm.h"
+#include "ArtBrain.h"     // v3.10 / v2.10: phrase-aware articulations
 namespace enochsolo
 {
 inline Pattern Generator::generate (const Settings& sIn)
@@ -1511,6 +1521,7 @@ inline Pattern Generator::generate (const Settings& sIn)
     if (p.hasSolo && s.voice2 != 0 && s.instrument != I_Bass) applySecondVoice (p, s, 12 * s.octaveShift);
     std::stable_sort (p.raw.begin(), p.raw.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
     rhythm::apply (p, s);                                            // v2.7: double time / fast subdivisions
+    artbrain::apply (p, s, st, s.artAmount);                         // v2.10: articulations, phrase by phrase
     for (auto& n : p.raw) n.id = p.nextId++;
     finalize (p, s);
     return p;

@@ -3,6 +3,7 @@
 // Enoch Bass - ornament realisation, humanisation and MIDI event building (header only)
 // Included at the end of Generator.h
 #pragma once
+#include <map>
 
 namespace enochsolo
 {
@@ -285,7 +286,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
                 out.push_back (on); out.push_back (off);
                 continue;
             }
-            MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 2; on.art = n->art;
+            MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 2; on.art = n->art; on.srcId = n->id;
             MidiEv off = on; off.t = n->start + std::max (0.02, n->length); off.type = EV_OFF; off.b = 0; off.ord = 0;
             out.push_back (on); out.push_back (off);
         }
@@ -321,21 +322,58 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
                         if (! e->oneShot) last = art;
                     }
                 }
-                // the same key used again before its last use ended: the earlier one lets go just before the new one goes down
+                // the same key used again before its last use ended. A held key (EZbass G#0 legato) simply stays down through both notes,
+                // the way a player keeps holding it through a run (v3.11); a short press lets go just before the new one goes down.
                 std::stable_sort (ksOut.begin(), ksOut.end(), [] (const MidiEv& a, const MidiEv& b) { return a.t != b.t ? a.t < b.t : a.ord < b.ord; });
+                std::array<bool, 128> holdK {}; holdK.fill (false);
+                for (auto& a : LT->arts) if (a.hold) for (auto& pr : a.press) if (pr.note >= 0 && pr.note < 128) holdK[(size_t) pr.note] = true;
+                std::vector<char> gone (ksOut.size(), 0);
+                auto offOf = [&] (size_t from, int key, int id) -> int
+                { for (size_t k = from; k < ksOut.size(); ++k) if (! gone[k] && ksOut[k].type == EV_OFF && ksOut[k].a == key && ksOut[k].noteId == id) return (int) k; return -1; };
                 for (size_t i = 0; i < ksOut.size(); ++i)
                 {
-                    if (ksOut[i].type != EV_ON) continue;
+                    if (gone[i] || ksOut[i].type != EV_ON) continue;
+                    const int key = ksOut[i].a;
+                    const int myOff = offOf (i + 1, key, ksOut[i].noteId);
+                    if (myOff < 0) continue;
+                    // every later press of this key that comes while it is still down (by time: a merge can move the release later)
                     for (size_t j = i + 1; j < ksOut.size(); ++j)
                     {
-                        if (ksOut[j].a != ksOut[i].a) continue;
-                        if (ksOut[j].type == EV_OFF) break;                        // released in time
-                        // the next press of this key comes first: find this press's release and move it before that press
-                        for (size_t k = j + 1; k < ksOut.size(); ++k)
-                            if (ksOut[k].type == EV_OFF && ksOut[k].a == ksOut[i].a && ksOut[k].noteId == ksOut[i].noteId) { ksOut[k].t = std::max (ksOut[i].t + 0.005, ksOut[j].t - 0.004); break; }
+                        if (gone[j] || ksOut[j].a != key || ksOut[j].type != EV_ON) continue;
+                        if (ksOut[j].t >= ksOut[(size_t) myOff].t - 1e-9) break;      // released in time
+                        if (ksOut[j].t - ksOut[i].t < 0.01)                          // the same key for a chord / double-stop: pressed once
+                        {
+                            const int nextOff = offOf (j + 1, key, ksOut[j].noteId);
+                            if (nextOff >= 0) { ksOut[(size_t) myOff].t = std::max (ksOut[(size_t) myOff].t, ksOut[(size_t) nextOff].t); gone[(size_t) nextOff] = 1; }
+                            gone[j] = 1;
+                            continue;
+                        }
+                        if (holdK[(size_t) key])
+                        {
+                            const int nextOff = offOf (j + 1, key, ksOut[j].noteId);
+                            if (nextOff >= 0) { ksOut[(size_t) myOff].t = std::max (ksOut[(size_t) myOff].t, ksOut[(size_t) nextOff].t); gone[(size_t) nextOff] = 1; }
+                            gone[j] = 1;                                           // keep holding: no second press
+                            continue;
+                        }
+                        ksOut[(size_t) myOff].t = std::max (ksOut[i].t + 0.005, ksOut[j].t - 0.004);
                         break;
                     }
                 }
+                // two different held keys never overlap: the earlier one lets go just before the next one goes down
+                for (size_t i = 0; i < ksOut.size(); ++i)
+                {
+                    if (gone[i] || ksOut[i].type != EV_ON || ! holdK[(size_t) ksOut[i].a]) continue;
+                    const int myOff = offOf (i + 1, ksOut[i].a, ksOut[i].noteId);
+                    if (myOff < 0) continue;
+                    for (size_t j = i + 1; j < ksOut.size(); ++j)
+                    {
+                        if (gone[j] || ksOut[j].type != EV_ON || ksOut[j].a == ksOut[i].a || ! holdK[(size_t) ksOut[j].a]) continue;
+                        if (ksOut[j].t >= ksOut[(size_t) myOff].t - 1e-9) break;
+                        ksOut[(size_t) myOff].t = std::max (ksOut[i].t + 0.005, ksOut[j].t - 0.002);
+                        break;
+                    }
+                }
+                { std::vector<MidiEv> kept; for (size_t i = 0; i < ksOut.size(); ++i) if (! gone[i]) kept.push_back (ksOut[i]); ksOut.swap (kept); }
                 out.insert (out.end(), ksOut.begin(), ksOut.end());
             }
         }
@@ -527,7 +565,9 @@ inline void fretCheck (std::vector<Note>& v, const Settings& s)
     std::vector<int> pitch; std::vector<double> start;
     for (auto i : idx) { pitch.push_back (v[i].pitch); start.push_back (v[i].start); }
     const auto& tun = bass ? bs4 : gtr;
-    const auto str = driver::solveStrings (pitch, start, tun, bass ? 20 : 22);
+    std::vector<char> joined;
+    for (auto i : idx) { const int a = v[i].art; joined.push_back ((char) (a == A_HammerOn || a == A_PullOff || a == A_Slide)); }
+    const auto str = driver::solveStrings (pitch, start, tun, bass ? 20 : 22, &joined);
     for (size_t k = 1; k < idx.size(); ++k)
     {
         Note& n = v[idx[k]];
@@ -555,6 +595,22 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
         v.insert (v.end(), keyNotes.begin(), keyNotes.end());
         std::stable_sort (v.begin(), v.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
         for (auto& n : v) { n.pitch = std::clamp (n.pitch, 0, 127); n.vel = std::clamp (n.vel, 1, 127); }
+        // v3.11: a note never rings into the next note of the same pitch on its part (that would re-strike a key still held)
+        {
+            std::map<long, size_t> lastOf;
+            for (size_t i = 0; i < v.size(); ++i)
+            {
+                if (v[i].voice == kKsVoice) continue;
+                const long key = (long) v[i].track * 128 + v[i].pitch;
+                auto it = lastOf.find (key);
+                if (it != lastOf.end())
+                {
+                    auto& pn = v[it->second];
+                    if (pn.start + pn.length > v[i].start - 0.004) pn.length = std::max (0.02, v[i].start - pn.start - 0.004);
+                }
+                lastOf[key] = i;
+            }
+        }
         return v;
     };
     p.notes = prepare (s.realizeOrnaments);
@@ -595,6 +651,7 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
             rs[(size_t) i].lib = rc.lib ? rc.lib.get() : (i == 0 ? s.lib.get() : nullptr);
             rs[(size_t) i].transpose = rc.transpose;
             rs[(size_t) i].program = rc.program;
+            rs[(size_t) i].repMode = s.famLock[11] == 1 ? 0 : (s.famLock[11] == 2 ? 2 : 1); rs[(size_t) i].repAmt = s.famAmt[11];
         }
         driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS && s.ksActive);
     }
@@ -603,7 +660,8 @@ inline void Generator::finalize (Pattern& p, const Settings& sIn)
         // no routing set: the instrument of choice still gets its octave, range, legato overlap, string and repetition keys
         // (the same file as a routed part, on the usual channels 1 / 2 / 3)
         std::array<driver::RouteSpec, 3> rs;
-        for (int i = 0; i < 3; ++i) { rs[(size_t) i].channel = i; rs[(size_t) i].lib = i == 0 ? s.lib.get() : nullptr; }
+        for (int i = 0; i < 3; ++i) { rs[(size_t) i].channel = i; rs[(size_t) i].lib = i == 0 ? s.lib.get() : nullptr;
+                                      rs[(size_t) i].repMode = s.famLock[11] == 1 ? 0 : (s.famLock[11] == 2 ? 2 : 1); rs[(size_t) i].repAmt = s.famAmt[11]; }
         driver::apply (p.events, rs, s.bpm, s.instrument, s.exportMode == 0 && s.emitKS && s.ksActive);
     }
     // v3.8 safety for Enoch's standard key-switch layout (keys from the Key-switch Base Note up): a played note that lands on one of

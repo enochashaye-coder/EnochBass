@@ -3,6 +3,7 @@
 #include "PluginEditor.h"
 #include "Sounds.h"
 #include "Engine/ChordDetect.h"
+#include "Engine/MidiCheck.h"
 #include "Engine/Transcribe.h"
 
 static std::shared_ptr<enochsolo::BassSample> loadBassSample_ (const juce::File& f, juce::String& m) { return enochsolo::loadBassSample (f, m); }
@@ -29,12 +30,12 @@ juce::StringArray choices (int n, const char* (*f) (int))
     juce::StringArray a; for (int i = 0; i < n; ++i) a.add (f (i)); return a;
 }
 
-float getF (const juce::AudioProcessorValueTreeState& a, const char* id) { return a.getRawParameterValue (id)->load(); }
+float getF (const juce::AudioProcessorValueTreeState& a, const char* id) { auto* v = a.getRawParameterValue (id); return v != nullptr ? v->load() : 0.0f; }   // a missing parameter reads as 0, never a crash
 int getI (const juce::AudioProcessorValueTreeState& a, const char* id) { return (int) std::lround (getF (a, id)); }
 bool getB (const juce::AudioProcessorValueTreeState& a, const char* id) { return getF (a, id) > 0.5f; }
 
 // parameters that change the notes (need a full regenerate with the same seed) / only the expression pass
-const char* kGenIds[] = { "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift", "speed", "subdiv" };
+const char* kGenIds[] = { "artAmount", "artVary", "fa0", "fa1", "fa2", "fa3", "fa4", "fa5", "fa6", "fa7", "fa8", "fa9", "fa10", "fa11", "fl0", "fl1", "fl2", "fl3", "fl4", "fl5", "fl6", "fl7", "fl8", "fl9", "fl10", "fl11", "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift", "speed", "subdiv" };
 const char* kFinIds[] = { "library", "humanize", "hTiming", "hVel", "hLength", "hFeel", "feel", "ksBase", "bendRange", "emitKS", "emitBends", "emitCC", "realize", "exportMode" };
 }
 
@@ -206,6 +207,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
         l.add (std::make_unique<juce::AudioParameterChoice> (P { "outMode", 1 }, "Preview Output", juce::StringArray { "Stereo", "Mono" }, 0));
         l.add (std::make_unique<juce::AudioParameterChoice> (P { "glideMode", 1 }, "Glide Mode", juce::StringArray { "Off", "Legato glide", "Always glide", "Overlap glide", "Portamento" }, 1));
         pct ("glideTime", "Glide Time (fast - slow)", 0.f, 100.f, 20.f);
+        pct ("artAmount", "Articulation (plain - expressive)", 0.f, 100.f, 60.f);   // v3.10 / v2.10
+        // v3.11 / v2.11 ARTICULATION panel: variation, and an amount + lock per articulation family (see Engine/ArtBrain.h)
+        pct ("artVary", "Articulation Variation", 0.f, 100.f, 30.f);
+        for (int i = 0; i < enochsolo::artbrain::F_Count; ++i)
+        {
+            const juce::String fam (enochsolo::artbrain::familyName (i));
+            l.add (std::make_unique<juce::AudioParameterFloat> (P { "fa" + juce::String (i), 1 }, "Articulation Amount: " + fam, juce::NormalisableRange<float> (0.f, 200.f, 1.f), 100.f,
+                                                                juce::AudioParameterFloatAttributes().withLabel ("%")));
+            l.add (std::make_unique<juce::AudioParameterChoice> (P { "fl" + juce::String (i), 1 }, "Articulation Lock: " + fam, juce::StringArray { "Auto", "Never", "Always" }, 0,
+                                                                 juce::AudioParameterChoiceAttributes().withAutomatable (false)));
+        }
         l.add (std::make_unique<juce::AudioParameterBool> (P { "humanPlay", 1 }, "Human Play (phrasing engine)", true));
         l.add (std::make_unique<juce::AudioParameterChoice> (P { "speed", 1 }, "Speed", juce::StringArray { "Normal", "Double time (2x)" }, 0,
                                                              juce::AudioParameterChoiceAttributes().withAutomatable (false)));
@@ -420,12 +432,19 @@ Settings EnochSoloProcessor::currentSettings() const
     s.voice2 = juce::jlimit (0, 4, getI (apvts, "voice2"));
     s.clave = juce::jlimit (0, 2, getI (apvts, "clave"));
     if (auto lib = currentLibrary()) if (! lib->standard) s.lib = lib;
+    s.artAmount = getF (apvts, "artAmount") / 100.f;    // v3.10 / v2.10
+    s.artVary = getF (apvts, "artVary") / 100.f;         // v3.11 / v2.11
+    for (int i = 0; i < 12; ++i)
+    {
+        s.famAmt[i] = getF (apvts, ("fa" + juce::String (i)).toRawUTF8()) / 100.f;
+        s.famLock[i] = getI (apvts, ("fl" + juce::String (i)).toRawUTF8());
+    }
     {
         // v3.9: key-switches only travel with the MIDI while the main part plays on an external instrument: routed to a VST / port, or
         // (without routing) the EXTERNAL sound source. The built-in sound, a one-shot or a SoundFont get plain notes.
         const int slot = curSlot();
         if (s.routed) { const auto d = getRoute (slot, 0).dest; s.ksActive = (d == RD_External || d == RD_Both || d == RD_Hardware); }
-        else s.ksActive = getI (apvts, ("src" + juce::String (slot)).toRawUTF8()) == (int) TestPlayer::S_External;
+        else { auto* sp = srcParams[(size_t) slot]; s.ksActive = sp != nullptr && (int) sp->load() == (int) TestPlayer::S_External; }   // null for instruments this plugin does not have
     }
     s.grooveProfile = grooveProfile;
     s.grooveAmount = getF (apvts, "grooveAmount");
@@ -1074,7 +1093,8 @@ void EnochSoloProcessor::timerCallback()
     if (ts == 0 && (hostNum.load() != lastTsNum || hostDen.load() != lastTsDen)) needRegen = true;
     if (std::abs (hostBpm.load() - lastBpmUsed) > 0.5) needFinalize = true;
     {   // v3.9: switching the sound source to / from EXTERNAL turns the key-switches in the MIDI on / off
-        const int src = getI (apvts, ("src" + juce::String (curSlot())).toRawUTF8()) * 16 + curSlot();
+        auto* sp = srcParams[(size_t) curSlot()];
+        const int src = (sp != nullptr ? (int) sp->load() : 0) * 16 + curSlot();
         if (src != lastSrcForKs) { lastSrcForKs = src; needFinalize = true; }
     }
 
@@ -1264,7 +1284,11 @@ bool EnochSoloProcessor::saveMidiTo (const juce::File& f)
 {
     auto snap = getSnapshot();
     if (! snap) return false;
-    const auto bytes = MidiWriter::build (snap->pattern);
+    // v3.11: every file that leaves Enoch is checked and repaired first (Engine/MidiCheck.h)
+    auto pat = snap->pattern;
+    const auto rep = midicheck::repair (pat);
+    lastMidiCheck = juce::String (rep.text());
+    const auto bytes = MidiWriter::build (pat);
     f.deleteFile();
     return f.replaceWithData (bytes.data(), bytes.size());
 }

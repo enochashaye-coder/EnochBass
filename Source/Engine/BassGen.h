@@ -546,18 +546,8 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
             const bool strong = n.weight >= 0.55;
             if (n.role == BR_Harmonic || (n.length >= 1.0 && rng.chance (st.harm * 0.5) && n.pitch + 12 <= hi))
             { if (n.role != BR_Harmonic) n.pitch += 12; n.role = BR_Harmonic; n.art = A_Harmonic; continue; }
-            if (st.slap > 0.05f && (n.role == BR_Root || n.role == BR_Octave || n.role == BR_Fifth) && (strong || n.role == BR_Octave) && rng.chance (st.slap))
-            { n.art = A_Slap; n.vel = std::min (127, n.vel + 8); n.length = std::min (n.length, 0.4); continue; }
-            if (k > 0 && aiv >= 1 && aiv <= 5 && gapPrev <= 1.01 && rng.chance (st.slide * (n.role == BR_Root && bar_notes[k - 1].role == BR_Approach ? 1.6 : 1.0)))
-            { n.art = A_Slide; continue; }
-            if (k > 0 && aiv >= 1 && aiv <= 3 && gapPrev <= 0.55)
-            {
-                if (iv > 0 && rng.chance (st.hammer)) { n.art = A_HammerOn; continue; }
-                if (iv < 0 && rng.chance (st.pull)) { n.art = A_PullOff; continue; }
-            }
-            if (st.palm > 0.05f && n.length <= 0.55 && rng.chance (st.palm)) { n.art = A_PalmMute; n.length *= 0.7; continue; }
-            if (n.length <= 0.3 && rng.chance (st.stacc)) { n.art = A_Staccato; continue; }
-            if (strong && n.weight >= 0.8 && rng.chance (0.15 + st.dyn * 0.2)) { n.art = A_Marcato; n.vel = std::min (127, n.vel + 8); }
+            // v2.10: every other articulation is chosen by the articulation brain (Engine/ArtBrain.h), phrase by phrase
+            (void) gapPrev; (void) aiv; (void) strong; (void) iv;
         }
         for (auto& n : bar_notes) { prevPitch = n.pitch; out.push_back (n); }
     }

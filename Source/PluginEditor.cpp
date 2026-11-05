@@ -46,7 +46,8 @@ void DragPad::paint (juce::Graphics& g)
     auto tx = b.withTrimmedLeft (ic + 26.f).withTrimmedRight (8.f);
     LF::ledText (g, "DRAG MIDI", tx.withTrimmedBottom (tx.getHeight() * 0.48f), LF::fnt (14.5f, "Bold", 0.08f), juce::Justification::bottomLeft, t.accent.interpolatedWith (juce::Colours::white, 0.15f));
     g.setColour (LF::text().withAlpha (0.65f)); g.setFont (LF::fnt (11.f));
-    g.drawFittedText ("into your instrument track", tx.withTrimmedTop (tx.getHeight() * 0.56f).toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
+    g.drawFittedText (checked.isEmpty() ? juce::String ("into your instrument track") : (checked.startsWith ("MIDI check: OK") ? juce::String ("checked: OK") : juce::String ("checked: repaired")),
+                      tx.withTrimmedTop (tx.getHeight() * 0.56f).toNearestInt(), juce::Justification::topLeft, 1, 0.8f);
 }
 
 //==============================================================================
@@ -1790,7 +1791,7 @@ void EnochSoloEditor::layoutBody()
     routePanel.setVisible (routeOpen);
     if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - (routePanel.isEditingProfile() ? juce::jmax (236, r.getHeight() - 40) : 236)))); routePanel.toFront (false); }   // v3.8: the profile editor gets the roll's height
     feelPanel.setVisible (feelOpen);
-    if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); feelPanel.toFront (false); }
+    if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236))); feelPanel.toFront (false); }
     outPanel.setVisible (outOpen);
     if (outOpen) { outPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 200))); outPanel.toFront (false); }
     tapPanel.setVisible (tapOpen);

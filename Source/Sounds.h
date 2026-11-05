@@ -29,6 +29,7 @@ namespace snd
 {
 constexpr float kPi = 3.14159265358979f, kTwoPi = 6.28318530717959f;
 constexpr int kArtSlap = 27;              // Enoch Bass only (A_Slap)
+constexpr int kArtPop = 28;               // Enoch Bass only (A_Pop, v2.10)
 constexpr int kInstGuitar = 0, kInstSax = 1, kInstViolin = 2, kInstPiano = 3, kInstTrumpet = 4, kInstBass = 5;
 
 enum Kind { K_Piano = 0, K_Rhodes, K_Wurli, K_FMEP, K_Organ, K_Poly, K_Pluck, K_Sax, K_Brass, K_Bow, K_Sub, K_Log, K_Lead, K_LogDrum, K_Classic,
@@ -1038,7 +1039,7 @@ private:
         for (int i = 0; i < N; ++i) ex[i] = rng.next();
         const int pp = std::max (1, (int) std::lround (p.p[2] * (float) N));
         for (int i = N - 1; i >= pp; --i) ex[i] -= ex[i - pp];
-        const float hard = std::min (1.f, p.p[3] * (0.55f + 0.7f * vel) + (art == A_Marcato || art == kArtSlap ? 0.15f : 0.f));
+        const float hard = std::min (1.f, p.p[3] * (0.55f + 0.7f * vel) + (art == A_Marcato || art == kArtSlap ? 0.15f : (art == kArtPop ? 0.25f : 0.f)));
         const float a = 0.06f + 0.9f * hard * hard;
         float y = 0.f;
         for (int pass = 0; pass < 2; ++pass) for (int i = 0; i < N; ++i) { y += (ex[i] - y) * a; ex[i] = y; }

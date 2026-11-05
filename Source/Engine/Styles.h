@@ -7,6 +7,7 @@
 #include <cassert>
 #include "Theory.h"
 
+#define ENOCH_BASS_ENGINE 1   // v2.10: the articulation brain's bass rules (Engine/ArtBrain.h)
 namespace enochsolo
 {
 
@@ -25,16 +26,16 @@ enum Art
     A_Sustain = 0, A_Legato, A_Staccato, A_Marcato, A_Ghost, A_PalmMute, A_HammerOn, A_PullOff,
     A_Slide, A_Bend, A_Vibrato, A_Harmonic, A_Growl, A_Flutter, A_Fall, A_Doit, A_Scoop,
     A_Subtone, A_Shake, A_Trill, A_Tremolo, A_Pizz, A_Gliss, A_ColLegno, A_Arpeggio, A_Mute,
-    A_Strum, A_Slap, A_Count
+    A_Strum, A_Slap, A_Pop, A_Count
 };
 
 inline const char* artName (int a)
 {
     static const char* n[] = {
         "Sustain", "Legato", "Staccato", "Marcato / Accent", "Ghost / Dead Note", "Palm Mute", "Hammer-On", "Pull-Off",
-        "Slide", "Bend", "Vibrato", "Harmonic", "Growl", "Flutter-Tongue", "Fall", "Doit", "Scoop",
-        "Subtone", "Shake", "Trill", "Tremolo", "Pizzicato", "Glissando", "Col Legno", "Arpeggio / Roll", "Mute (Harmon)",
-        "Strum / Chord", "Slap" };
+        "Slide", "Bend", "Vibrato", "Harmonic", "Growl", "Flutter-Tongue", "Slide Out", "Doit", "Scoop",
+        "Subtone", "Shake", "Trill", "Tremolo", "Pizzicato", "Glissando", "Col Legno", "Arpeggio / Roll", "Dead Mute",
+        "Strum / Chord", "Slap", "Pop" };
     if (a >= (int) A_Count) return "Library key";     // v3.8: a profile's own key (named in the profile)
     return n[std::clamp (a, 0, (int) A_Count - 1)];
 }
@@ -47,7 +48,7 @@ inline const std::vector<int>& artList (int inst)
     static const std::vector<int> violin  = { A_Sustain, A_Legato, A_Staccato, A_Marcato, A_Pizz, A_Tremolo, A_Trill, A_Gliss, A_Harmonic, A_Vibrato, A_Scoop, A_Fall, A_ColLegno };
     static const std::vector<int> piano   = { A_Sustain, A_Staccato, A_Marcato, A_Ghost, A_Trill, A_Tremolo, A_Gliss, A_Arpeggio };
     static const std::vector<int> trumpet = { A_Sustain, A_Legato, A_Staccato, A_Marcato, A_Growl, A_Flutter, A_Fall, A_Doit, A_Scoop, A_Shake, A_Mute, A_Trill, A_Ghost };
-    static const std::vector<int> bass    = { A_Sustain, A_Legato, A_Staccato, A_PalmMute, A_Ghost, A_HammerOn, A_PullOff, A_Slide, A_Harmonic, A_Slap, A_Marcato };
+    static const std::vector<int> bass    = { A_Sustain, A_Legato, A_Staccato, A_PalmMute, A_Ghost, A_HammerOn, A_PullOff, A_Slide, A_Harmonic, A_Slap, A_Marcato, A_Pop, A_Fall, A_Mute };   // v2.10: pop, slide out, dead / loud mute appended (older key-switch numbers unchanged)
     switch (inst) { case I_Bass: return bass; case I_Guitar: return guitar; case I_Sax: return sax; case I_Violin: return violin; case I_Piano: return piano; default: return trumpet; }
 }
 
