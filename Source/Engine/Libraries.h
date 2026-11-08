@@ -28,7 +28,13 @@ struct LibArt
     bool hold = false;        // the key-switch must be held while the note starts (released a moment after it)
     bool oneShot = false;     // sent before every note with this articulation (it does not stay switched on)
     std::string name;         // v3.8: the library's own name for a custom key (empty for Enoch's articulations)
+    // v3.12 / v2.12: when the key goes down, relative to its note (a technique, not a label)
+    int when = 0;             // KW_Before: down a pre-roll before the note; KW_During: pressed while the note sounds (EZbass F0 / G0 slide
+                              // down / up the held note); KW_Replace: the key is the sound itself (EZbass E0 ghost tap): no pitched note
+    double atFrac = 0.6;      // KW_During: where in the note the key is pressed (never closer than 80 ms to its end)
+    double pressMs = 0;       // a press that is not held: how long it stays down (0 = until the note ends, as before)
 };
+enum KsWhen { KW_Before = 0, KW_During = 1, KW_Replace = 2 };
 
 struct Library
 {
@@ -53,6 +59,11 @@ struct Library
     int program = -1, bankMsb = -1, bankLsb = -1;
     int velMin = 1, velMax = 127; double velGamma = 1.0;   // velocity curve
     int pedalCC = 64; bool halfPedal = false;             // sustain pedal: continuous (Pianoteq) or on/off
+    // ---- v3.12 / v2.12 performance settings
+    double preRollMs = 20;        // how long before its note a key-switch goes down (never on the note's own tick)
+    bool overlapLegato = false;   // the instrument plays any two overlapping notes as legato (EZbass, Efimov auto legato): plain notes
+                                  // therefore never overlap the next note; only notes meant to be joined do
+    int detachKey = -1;           // held while notes must sound together without legato (EZbass A-1 "polyphony")
 };
 
 inline const LibArt* libFind (const Library& l, int art)
@@ -285,30 +296,38 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
     }
     else if (inst == I_Bass)
     {
-        // Toontrack EZbass. Toontrack names notes with middle C = C3 (= 60), so C0 = 24. The release notes give: palm mute C0,
-        // Slide Down / Slide Up keys F0 and G0, and "the legato control key (32)" = G#0. The key-switches therefore sit at 24..32 and the
-        // bass itself is played an octave above its sounding pitch (low E = E1 = 40). Ghost (E-1), harmonics (A#-1) and slap (B-1) come from help text only.
-        Library m; m.name = "Toontrack EZbass"; m.maker = "Toontrack"; m.inst = I_Bass; m.verify = 1;
-        // Layout from the EZbass key-switch summary you supplied (Toontrack numbering, C3 = 60). Hold = held while the note starts.
+        // Toontrack EZbass (Toontrack numbering, middle C = C3 = 60, so C0 = 24). v2.12: every key as you tested and described it in
+        // EZbass (Nov 2026), as a technique with its own timing:
+        //   G#0 legato: held through a run of overlapping notes (EZbass also legatos overlapping notes by itself; G#0 makes it a real
+        //       hammer-on / pull-off, and trills). F#0 slide: held, glides between two overlapping notes at any distance.
+        //   F0 / G0 slide down / up: pressed WHILE a note is held, the held note slides away (a slide-out). E0 ghost: the key makes the
+        //   ghost tap itself (no pitched note). A#-1 harmonic and B-1 slap / pop: held before and through their note. A-1 polyphony:
+        //   held while notes must overlap without legato. D0 repeater: a stutter (repeats the previous note), so it is NOT used for repeated
+        //   notes, only placed by hand. C0 palm mute: from Toontrack's release notes (not in the list you tested).
+        Library m; m.name = "Toontrack EZbass"; m.maker = "Toontrack"; m.inst = I_Bass; m.verify = 0;
+        auto during = [] (int art, int key) { LibArt a = la (art, { { key, 100 } }, false, true); a.when = KW_During; a.atFrac = 0.55; a.pressMs = 40; return a; };
+        LibArt ghost = la (A_Ghost, { { 28, 100 } }, false, true); ghost.when = KW_Replace; ghost.pressMs = 60;
         m.arts = { la (A_Sustain, {}),
-                   la (A_Legato,    { { 32, 100 } }, true, true),    // G#0 legato (hold)
+                   la (A_Legato,    { { 32, 100 } }, true, true),    // G#0 legato (held through the run)
                    la (A_HammerOn,  { { 32, 100 } }, true, true),
                    la (A_PullOff,   { { 32, 100 } }, true, true),
-                   la (A_Bend,      { { 30, 100 } }, true, true),    // F#0 slide (press and hold), mapped to Bend so it does not clash with G0
-                   la (A_Slide,     { { 31, 100 } }, false, true),   // G0 slide up (press)
-                   la (A_Gliss,     { { 29, 100 } }, false, true),   // F0 slide down (press)
-                   la (A_Ghost,     { { 28, 100 } }, false, true),   // E0 ghost note (press)
-                   la (A_PalmMute,  { { 24, 100 } }, true, true),    // C0 left-hand mute (hold)
-                   la (A_Mute,      { { 27, 100 } }, false, true),   // D#0 loud mute (press)
-                   la (A_Harmonic,  { { 22, 100 } }, true, true),    // A#-1 harmonic (hold)
-                   la (A_Slap,      { { 23, 100 } }, true, true) };  // B-1 slap / pop (hold)
-        { LibArt c1 = la (kCustomArt + 0, { { 21, 100 } }, true, true); c1.name = "Polyphony / disable legato"; m.arts.push_back (c1); }   // A-1 (hold)
-        { LibArt c2 = la (kCustomArt + 1, { { 25, 100 } }); c2.name = "Middle finger / down stroke"; m.arts.push_back (c2); }               // C#0
+                   la (A_Slide,     { { 30, 100 } }, true, true),    // F#0 slide between two overlapping notes (held)
+                   la (A_Gliss,     { { 30, 100 } }, true, true),
+                   during (A_Fall, 29),                              // F0 slide down: pressed while the note is held
+                   during (A_Doit, 31),                              // G0 slide up: pressed while the note is held
+                   ghost,                                            // E0 ghost tap (the key is the sound)
+                   la (A_PalmMute,  { { 24, 100 } }, true, true),    // C0 palm mute (release notes)
+                   la (A_Harmonic,  { { 22, 100 } }, true, true),    // A#-1 harmonic (held)
+                   la (A_Slap,      { { 23, 100 } }, true, true) };  // B-1 slap / pop (held)
+        { LibArt c1 = la (kCustomArt + 0, { { 21, 100 } }, true, true); c1.name = "Polyphony (no legato)"; m.arts.push_back (c1); }   // A-1 (held)
+        { LibArt c2 = la (kCustomArt + 1, { { 26, 100 } }, false, true); c2.name = "Repeater (stutter)"; c2.pressMs = 40; m.arts.push_back (c2); }   // D0
         m.ccExpr = 11; m.ccVib = 1;
-        m.repKey = 26;                                               // D0 repeater (press)
-        m.transpose = 12; m.lo = 35; m.hi = 81; m.overlapMs = 15;
-        m.note = "EZbass key-switches (Toontrack numbering, C3 = 60): legato G#0 (32), slide F#0 (hold), slide up G0, slide down F0, ghost E0, loud mute D#0, palm mute C0, harmonic A#-1, slap B-1, repeater D0. Polyphony A-1 and middle finger / down stroke C#0 are in the Articulation menu. Bass sent an octave up (low E = E1). Check one bar.";
-        m.source = "EZbass key-switch summary supplied by the user (not yet checked against the Toontrack manual)";
+        m.repKey = -1;                                               // D0 is a stutter, not a repetition key: repeated notes are just played
+        m.transpose = 12; m.lo = 35; m.hi = 81;
+        m.overlapMs = 20; m.overlapLegato = true; m.detachKey = 21; m.preRollMs = 20;
+        m.note = "EZbass (Toontrack numbering, C3 = 60): legato G#0 held through a run, slide F#0 between overlapping notes, slide down F0 / up G0 pressed while a note is held, "
+                 "ghost tap E0, harmonic A#-1, slap / pop B-1, polyphony A-1 for notes that ring together, palm mute C0. Repeater D0 is in the Articulation menu. Sent an octave up (low E = E1).";
+        m.source = "Your EZbass test and description (Nov 2026); palm mute C0 from Toontrack's release notes";
         add (m);
         Library pl; pl.name = "Plain bass (any bass sampler, no key-switches)"; pl.maker = ""; pl.inst = I_Bass; pl.verify = 1; pl.noKeySwitches = true;
         pl.note = "Notes only: no key-switch notes are written. Ghost, slide and mute are still shown in the piano roll and in the MIDI as note length and velocity.";
@@ -357,6 +376,7 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
             b.arts.push_back (cu (k++, "Auto legato off", { { 31, 40 } }));
             b.init = { { 31, 120 }, { 30, 40 }, { 29, 40 }, { 27, 40 }, { 25, 40 } };   // auto legato on, easy legato / X-note / open strings / chord mode off
             b.transpose = 12; b.hi = 75; b.overlapMs = 25; b.repKey = 76;            // E4 Repetition
+            b.overlapLegato = true; b.preRollMs = 20;                                // auto legato is on: only joined notes may overlap
             b.tuning = fiveString ? std::vector<int> { 23, 28, 33, 38, 43 } : std::vector<int> { 28, 33, 38, 43 };
             b.stringKeys = fiveString ? std::vector<int> { 21, 23, 24, 26, 28 } : std::vector<int> { 23, 24, 26, 28 };
             b.lo = fiveString ? 35 : 40; b.maxFret = 20;
@@ -388,6 +408,9 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
       ks = Slide: 32@40 hold oneshot             (held while the note starts / sent before every such note)
       custom = Down stroke: 25@100 hold          (v3.8: the library's own key, placed by hand from the Articulation menu)
       init = 31@120, 30@40                       (mode keys sent once at the start)
+      ks = Fall: 29@100 oneshot during at=0.6 press=40   (v3.12: pressed while the note sounds, 60% into it, for 40 ms)
+      ks = Ghost: 28@100 oneshot replace press=60        (v3.12: the key is the sound; no pitched note is sent)
+      preroll_ms = 20   overlap_is_legato = 1   detach_key = 21   (v3.12 performance settings)
     Articulation names are the ones shown in Enoch Bass (Sustain, Legato, Staccato, Marcato, Ghost, PalmMute, HammerOn, PullOff, Slide, Bend, Vibrato,
     Harmonic, Growl, Flutter, Fall, Doit, Scoop, Subtone, Shake, Trill, Tremolo, Pizzicato, Gliss, ColLegno, Arpeggio, Mute, Strum). */
 inline int articulationFromName (std::string s)
@@ -396,7 +419,7 @@ inline int articulationFromName (std::string s)
     struct E { const char* n; int a; };
     static const E t[] = { { "sustain", A_Sustain }, { "legato", A_Legato }, { "staccato", A_Staccato }, { "marcato", A_Marcato }, { "accent", A_Marcato }, { "ghost", A_Ghost },
         { "dead", A_Ghost }, { "palmmute", A_PalmMute }, { "hammeron", A_HammerOn }, { "pulloff", A_PullOff }, { "slide", A_Slide }, { "slap", A_Slap }, { "pop", A_Pop }, { "bend", A_Bend }, { "vibrato", A_Vibrato },
-        { "harmonic", A_Harmonic }, { "growl", A_Growl }, { "flutter", A_Flutter }, { "flutter-tongue", A_Flutter }, { "fall", A_Fall }, { "doit", A_Doit }, { "scoop", A_Scoop },
+        { "harmonic", A_Harmonic }, { "growl", A_Growl }, { "flutter", A_Flutter }, { "flutter-tongue", A_Flutter }, { "fall", A_Fall }, { "slideout", A_Fall }, { "doit", A_Doit }, { "scoop", A_Scoop },
         { "subtone", A_Subtone }, { "shake", A_Shake }, { "trill", A_Trill }, { "tremolo", A_Tremolo }, { "pizzicato", A_Pizz }, { "pizz", A_Pizz }, { "gliss", A_Gliss },
         { "glissando", A_Gliss }, { "collegno", A_ColLegno }, { "arpeggio", A_Arpeggio }, { "mute", A_Mute }, { "harmon", A_Mute }, { "strum", A_Strum } };
     for (auto& e : t) if (k == e.n) return e.a;
@@ -439,6 +462,9 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
         else if (key == "transpose") l.transpose = std::clamp (std::atoi (val.c_str()), -48, 48);
         else if (key == "range") { int a2 = 0, b2 = 127; if (std::sscanf (val.c_str(), "%d - %d", &a2, &b2) >= 1 || std::sscanf (val.c_str(), "%d-%d", &a2, &b2) >= 1) { l.lo = std::clamp (a2, 0, 127); l.hi = std::clamp (b2, 0, 127); } }
         else if (key == "overlap_ms") l.overlapMs = std::clamp (std::atof (val.c_str()), 0.0, 500.0);
+        else if (key == "preroll_ms") l.preRollMs = std::clamp (std::atof (val.c_str()), 0.0, 200.0);
+        else if (key == "overlap_is_legato") l.overlapLegato = std::atoi (val.c_str()) != 0;
+        else if (key == "detach_key") l.detachKey = std::clamp (std::atoi (val.c_str()), -1, 127);
         else if (key == "repetition_key") l.repKey = std::clamp (std::atoi (val.c_str()), -1, 127);
         else if (key == "program") l.program = std::clamp (std::atoi (val.c_str()), -1, 127);
         else if (key == "bank_msb") l.bankMsb = std::clamp (std::atoi (val.c_str()), -1, 127);
@@ -476,6 +502,10 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
             LibArt a; a.art = art; a.name = cname;
             std::string rest = val.substr (c + 1); std::string lower; for (char ch : rest) lower += (char) std::tolower ((unsigned char) ch);
             a.hold = lower.find ("hold") != std::string::npos; a.oneShot = lower.find ("oneshot") != std::string::npos || lower.find ("one-shot") != std::string::npos;
+            if (lower.find ("during") != std::string::npos) a.when = KW_During;
+            else if (lower.find ("replace") != std::string::npos) a.when = KW_Replace;
+            { const size_t pm = lower.find ("press="); if (pm != std::string::npos) a.pressMs = std::clamp (std::atof (lower.c_str() + pm + 6), 0.0, 1000.0); }
+            { const size_t af = lower.find ("at="); if (af != std::string::npos) a.atFrac = std::clamp (std::atof (lower.c_str() + af + 3), 0.05, 0.95); }
             std::istringstream ps (rest); std::string tok;
             while (std::getline (ps, tok, ','))
             {
@@ -509,6 +539,9 @@ inline std::string libraryToText (const Library& l)
     if (l.transpose != 0) o << "transpose = " << l.transpose << "\n";
     if (l.lo != 0 || l.hi != 127) o << "range = " << l.lo << "-" << l.hi << "\n";
     if (l.overlapMs > 0) o << "overlap_ms = " << l.overlapMs << "\n";
+    if (l.preRollMs != 20) o << "preroll_ms = " << l.preRollMs << "\n";
+    if (l.overlapLegato) o << "overlap_is_legato = 1\n";
+    if (l.detachKey >= 0) o << "detach_key = " << l.detachKey << "\n";
     if (l.repKey >= 0) o << "repetition_key = " << l.repKey << "\n";
     if (l.program >= 0) o << "program = " << l.program << "\n";
     if (l.bankMsb >= 0) o << "bank_msb = " << l.bankMsb << "\n";
@@ -529,6 +562,9 @@ inline std::string libraryToText (const Library& l)
         for (size_t i = 0; i < a.press.size(); ++i) o << (i ? ", " : "") << a.press[i].note << "@" << a.press[i].vel;
         if (a.hold) o << " hold";
         if (a.oneShot) o << " oneshot";
+        if (a.when == KW_During) o << " during at=" << a.atFrac;
+        if (a.when == KW_Replace) o << " replace";
+        if (a.pressMs > 0) o << " press=" << a.pressMs;
         o << "\n";
     }
     return o.str();

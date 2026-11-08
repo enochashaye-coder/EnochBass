@@ -103,6 +103,8 @@ struct Note
     int bend = 0;       // semitones of bend for A_Bend
     bool vib = false;
     bool mute = false;  // kept in the piano roll but never sounds / exported
+    bool keyPlayed = false;  // v3.12: while key-switches are notes, this note is played by its key-switch note (a repetition key): not sent itself
+    bool ksManual = false;   // v3.12: its key-switches were made editable notes in the roll: Enoch writes none of its own for it
     int why = 0;        // v3.11: why the articulation planner chose this note's articulation (artbrain::whyText)
     int role = 0;       // bass: the job of the note (root, fifth, approach...), so a chord change keeps the line musical (see BassGen.h)
 };
@@ -118,6 +120,8 @@ struct MidiEv
     int art = 0;        // articulation of the note this event belongs to (note events only)
     bool ks = false;    // v3.0: a key-switch / mode key (never transposed or velocity-curved)
     int noteId = -1;    // v3.9: the note a key-switch was written for (-1: strings, mode keys, keys you drew yourself)
+    bool drawn = false;      // v3.12: a key-switch drawn as a note in the roll (the roll shows the note, not a preview)
+    bool manualKs = false;   // v3.12: from a note whose key-switches you edit by hand (no automatic string / repeat / mode keys)
     int srcId = -1;     // v3.11: the note a played note-on / note-off belongs to (the MIDI check pairs key-switches with their notes)
     int ch = -1;        // v3.0: MIDI channel 0..15 set by the route (-1 = track number)
 };

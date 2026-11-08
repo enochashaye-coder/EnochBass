@@ -89,6 +89,7 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
         const int tr = (L ? L->transpose : 0) + r.transpose;
         const int lo = L ? L->lo : 0, hi = L ? L->hi : 127;
 
+        std::vector<MidiEv> extraKs;          // v3.12: key-switches added by the performance steps (joined in at the end)
         // ---- 1) pair note-ons with their note-offs (played notes only, key-switches stay as they are)
         std::vector<int> onIdx;
         std::vector<int> offOf (t.size(), -1);
@@ -124,6 +125,34 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
                     if (std::abs (t[(size_t) po].t - cur.t) < 0.25) t[(size_t) po].t = cur.t + ov;
                 }
             }
+            // ---- 2b) v3.12: an instrument that plays ANY overlap as legato (EZbass, Efimov auto legato): a plain note always ends a moment
+            //      before the next one starts, so the instrument plucks it. Notes that start together (a double-stop) keep ringing
+            //      together with the instrument's no-legato key held (EZbass A-1 polyphony).
+            if (L->overlapLegato)
+            {
+                const double gap = 8.0 * beatsPerMs;
+                for (size_t k = 1; k < line.size(); ++k)
+                {
+                    const auto& cur = t[(size_t) line[k]];
+                    const int prev = line[k - 1], po = offOf[(size_t) prev];
+                    if (po < 0 || isLegatoArt (cur.art)) continue;
+                    const double ps = t[(size_t) prev].t;
+                    if (cur.t - ps < 0.01) continue;                                  // starts together: handled below
+                    if (t[(size_t) po].t > cur.t - gap) t[(size_t) po].t = std::max (ps + 0.01, cur.t - gap);
+                }
+                if (allowKs && L->detachKey >= 0)
+                    for (size_t k = 1; k < line.size(); ++k)
+                    {
+                        const int a = line[k - 1], b = line[k];
+                        if (std::abs (t[(size_t) b].t - t[(size_t) a].t) >= 0.01 || offOf[(size_t) a] < 0 || offOf[(size_t) b] < 0) continue;
+                        if (t[(size_t) a].manualKs || t[(size_t) b].manualKs) continue;
+                        MidiEv on; on.t = std::max (0.0, t[(size_t) a].t - L->preRollMs * beatsPerMs); on.type = EV_ON; on.a = L->detachKey; on.b = 100;
+                        on.track = track; on.ord = 1; on.ks = true;
+                        MidiEv off = on; off.type = EV_OFF; off.b = 0; off.ord = 0;
+                        off.t = std::max (t[(size_t) offOf[(size_t) a]].t, t[(size_t) offOf[(size_t) b]].t);
+                        extraKs.push_back (on); extraKs.push_back (off);
+                    }
+            }
             // ---- 3) string selection: the solver's string, sent only when it changes
             if (allowKs && ! L->tuning.empty() && L->stringKeys.size() == L->tuning.size() && line.size() > 0)
             {
@@ -136,6 +165,7 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
                 const double lead = 30.0 * beatsPerMs;
                 for (size_t k = 0; k < line.size(); ++k)
                 {
+                    if (t[(size_t) line[k]].manualKs) continue;           // v3.12: keys you edit by hand
                     const int s = strings[k];
                     if (s < 0 || s == last) continue;
                     MidiEv on; on.t = std::max (0.0, t[(size_t) line[k]].t - lead); on.type = EV_ON; on.a = L->stringKeys[(size_t) s]; on.b = 100; on.track = track; on.ord = 1; on.ks = true;
@@ -151,6 +181,7 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
                 for (size_t k = 1; k < line.size(); ++k)
                 {
                     auto& cur = t[(size_t) line[k]];
+                    if (cur.manualKs) continue;                          // v3.12: keys you edit by hand
                     const auto& prv = t[(size_t) line[k - 1]];
                     const bool fastRepeat = cur.a == prv.a && cur.t - prv.t < (r.repMode == 2 ? 1.01 : 0.51 * std::min (2.0f, r.repAmt));
                     alt = fastRepeat ? (r.repMode == 2 ? true : ! alt) : false;
@@ -200,7 +231,9 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
         if (L && L->bankMsb >= 0) addAt (EV_CC, 0, L->bankMsb, -3, true);
         if (L && L->bankLsb >= 0) addAt (EV_CC, 32, L->bankLsb, -3, true);
         if (prog >= 0) addAt (EV_PC, std::clamp (prog, 0, 127), 0, -2, true);
-        if (L && allowKs)
+        bool anyManual = false;                                       // v3.12: when you edit the key-switches by hand, the mode keys are yours too
+        for (auto& e : t) if (e.type == EV_ON && ! e.ks && e.manualKs) { anyManual = true; break; }
+        if (L && allowKs && ! anyManual)
             for (auto& k : L->init)
             {
                 // v3.11: a mode key that the first note's own key-switch presses anyway (within 50 ms) is not pressed twice at the start
@@ -211,6 +244,7 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
                 MidiEv off; off.t = 12.0 * beatsPerMs; off.type = EV_OFF; off.a = k.note; off.b = 0; off.track = track; off.ord = 0; off.ks = true; t.push_back (off);
             }
         // ---- 7) the route's channel
+        for (auto& e : extraKs) t.push_back (e);
         for (auto& e : t) { e.ch = std::clamp (r.channel, 0, 15); out.push_back (e); }
     }
     std::stable_sort (out.begin(), out.end(), [] (const MidiEv& a, const MidiEv& b) { return std::abs (a.t - b.t) > 1e-9 ? a.t < b.t : a.ord < b.ord; });

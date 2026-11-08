@@ -1773,7 +1773,7 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         juce::String notes;
         for (auto& n : snap->pattern.raw)
             notes << n.id << ',' << juce::String (n.start, 5) << ',' << juce::String (n.length, 5) << ',' << n.pitch << ',' << n.vel << ',' << n.art << ','
-                  << n.track << ',' << n.voice << ',' << juce::String (n.weight, 3) << ',' << n.bend << ',' << (n.vib ? 1 : 0) << ',' << (n.mute ? 1 : 0) << ',' << n.role << ';';
+                  << n.track << ',' << n.voice << ',' << juce::String (n.weight, 3) << ',' << n.bend << ',' << (n.vib ? 1 : 0) << ',' << (n.mute ? 1 : 0) << ',' << n.role << ',' << ((n.ksManual ? 1 : 0) | (n.keyPlayed ? 2 : 0)) << ';';
         state.setProperty ("notes", notes, nullptr);
         state.setProperty ("notesNextId", snap->pattern.nextId, nullptr);
         state.setProperty ("notesCleared", snap->pattern.raw.empty(), nullptr);
@@ -1997,6 +1997,7 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
             n.weight = f[8].getDoubleValue(); n.bend = f[9].getIntValue(); n.vib = f[10].getIntValue() != 0;
             n.mute = f.size() > 11 && f[11].getIntValue() != 0;
             n.role = f.size() > 12 ? f[12].getIntValue() : 0;
+            { const int kf = f.size() > 13 ? f[13].getIntValue() : 0; n.ksManual = (kf & 1) != 0; n.keyPlayed = (kf & 2) != 0; }   // v2.12
             raw.push_back (n);
         }
         const bool cleared = (bool) vt.getProperty ("notesCleared", false);     // v3.1: a roll you cleared on purpose stays blank

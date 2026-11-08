@@ -81,6 +81,9 @@ private:
 class RollView : public juce::Component, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
+    void editKeySwitchesAsNotes();          // v3.12: every key-switch of the take becomes a note you can edit
+    void automaticKeySwitches();            // v3.12: back to the key-switches Enoch writes from the articulations
+    bool keySwitchesAreNotes() const;
     /** height of the velocity / controller lane in pixels: drag the thin line above it (up = taller lane, down = more room for notes) */
     void setLaneHeight (float h) { laneHpx = juce::jlimit (28.f, 900.f, h); repaint(); }
     float getLaneHeight() const { return laneHpx; }
@@ -262,7 +265,7 @@ private:
     double rubberBeat = 0; float rubberPitchF = 0;
     // ---- v3.9 key-switch notes: written for an external instrument's profile, shown on their keys in the roll
     struct KsView { bool on = false; const enochsolo::Library* lib = nullptr; int shift = 0; std::array<bool, 128> row {}; };
-    struct KsEvent { int key = 0, vel = 0, noteId = -1; double t0 = 0, t1 = 0; };
+    struct KsEvent { int key = 0, vel = 0, noteId = -1, src = -1; double t0 = 0, t1 = 0; };   // src: a note played on this key (repetition)
     KsView ksView() const;
     const std::vector<KsEvent>& ksEvents() const;
     juce::String ksName (const enochsolo::Library& l, int key, int vel) const;

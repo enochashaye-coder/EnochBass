@@ -816,7 +816,7 @@ void RollView::paint (juce::Graphics& g)
                 juce::Colour col = n.track == 2 ? juce::Colour (0xff5a4c3d) : n.track == 1 ? juce::Colour (0xff5d86a0)
                                  : n.voice == kKsVoice ? juce::Colour (0xffffa040)
                                  : n.voice == 1 ? juce::Colour (0xff9a8666) : colourFor (n.art, T.accent);
-                if (n.mute)
+                if (n.mute || n.keyPlayed)          // v3.12: a repeat played by its repetition-key note is drawn like a muted note
                 {
                     g.setColour (col.withAlpha (0.18f)); g.fillRoundedRectangle (r, 2.5f);
                     g.setColour (juce::Colour (0xff8d8678)); g.drawRoundedRectangle (r, 2.5f, sel ? 1.8f : 1.f);
@@ -1284,7 +1284,10 @@ void RollView::mouseDown (const juce::MouseEvent& e)
             {
                 const auto ev = ksEvents()[(size_t) k];
                 if (e.mods.isPopupMenu()) { showKsMenu (e.getScreenPosition(), ev.noteId); return; }
-                if (ev.noteId >= 0) { ksDragNote = ev.noteId; ksDragRow = pitchAt (g, p.y); drag = Drag::KsMove; repaint(); return; }
+                // v3.12: the key-switches become notes you can move, stretch, delete and re-velocity; this one is grabbed straight away
+                editKeySwitchesAsNotes();
+                if (drag == Drag::None) { mouseDown (e); return; }
+                return;
             }
         }
         if (e.mods.isPopupMenu())
@@ -1901,6 +1904,13 @@ void RollView::addEditItems (juce::PopupMenu& m, bool withSelection)
     vm.addItem (50, "Soft (55)"); vm.addItem (51, "Medium (80)"); vm.addItem (52, "Loud (105)"); vm.addItem (53, "Max (127)");
     vm.addItem (54, "Crescendo"); vm.addItem (55, "Decrescendo"); vm.addItem (56, "Randomise a little");
     m.addSubMenu ("Velocity", vm);
+    {   // v3.12: key-switches you can edit
+        const bool asNotes = keySwitchesAreNotes();
+        juce::PopupMenu km;
+        km.addItem (70, "Edit key-switches as notes (move, stretch, delete, velocity)", ksView().on && ! ksEvents().empty());
+        km.addItem (71, "Back to automatic key-switches (removes the key-switch notes)", asNotes);
+        m.addSubMenu ("Key-switches", km);
+    }
     juce::PopupMenu art;
     for (int a : artList (snap ? snap->pattern.s.instrument : 0)) art.addItem (200 + a, artName (a));
     // v3.8: the instrument's own keys from its mapping profile (Pop, fret positions, Feedback ...), placed by hand
@@ -2091,6 +2101,8 @@ void RollView::doRedo() { proc.redo(); selected.clear(); refresh (true); }
 
 void RollView::doOp (int id)
 {
+    if (id == 70) { editKeySwitchesAsNotes(); return; }
+    if (id == 71) { automaticKeySwitches(); return; }
     if (! snap) return;
     const double total = totalBeats();
     const double gb = gridBeats() > 0 ? gridBeats() : 0.25;
@@ -2416,11 +2428,12 @@ const std::vector<RollView::KsEvent>& RollView::ksEvents() const
     for (auto& e : snap->pattern.events)
     {
         if (! e.ks || e.track != 0 || (e.type != EV_ON && e.type != EV_OFF)) continue;
+        if (e.drawn) continue;                              // v3.12: a key-switch you drew / made editable: it is the note itself
         if (e.type == EV_ON) { open.push_back (&e); continue; }
         for (size_t i = 0; i < open.size(); ++i)
             if (open[i]->a == e.a)
             {
-                KsEvent k; k.key = e.a; k.vel = open[i]->b; k.noteId = open[i]->noteId; k.t0 = open[i]->t; k.t1 = std::max (open[i]->t + 0.02, e.t);
+                KsEvent k; k.key = e.a; k.vel = open[i]->b; k.noteId = open[i]->noteId; k.t0 = open[i]->t; k.t1 = std::max (open[i]->t + 0.02, e.t); k.src = open[i]->srcId;
                 ksCache.push_back (k); open.erase (open.begin() + (long) i); break;
             }
     }
@@ -2473,6 +2486,46 @@ void RollView::setArtOnNote (int noteId, int art)
     if (found) commit (std::move (v));
 }
 
+bool RollView::keySwitchesAreNotes() const
+{
+    for (auto& n : raw) if (n.track == 0 && n.ksManual) return true;
+    return false;
+}
+
+void RollView::editKeySwitchesAsNotes()
+{
+    // v3.12: everything Enoch would send as key-switches for this take (articulations, legato runs, strings, repeats, mode keys)
+    // becomes ordinary orange notes on the key rows, exactly where and as long as they are now. The notes keep their articulations
+    // (legato overlaps and lengths still follow them), but Enoch writes no key-switches of its own for them any more.
+    const auto kv = ksView();
+    if (! kv.on || kv.lib == nullptr) return;
+    const auto evs = ksEvents();
+    auto v = raw;
+    std::set<int> made;
+    for (auto& ev : evs)
+    {
+        const int r = ev.key - kv.shift;
+        if (r < 0 || r > 127) continue;
+        Note n; n.start = std::max (0.0, ev.t0); n.length = std::max (0.02, ev.t1 - ev.t0); n.pitch = r; n.vel = juce::jlimit (1, 127, ev.vel);
+        n.art = A_Sustain; n.track = 0; n.voice = kKsVoice; n.id = proc.allocNoteId(); n.weight = 0.0;
+        v.push_back (n); made.insert (n.id);
+        if (ev.src >= 0) for (auto& q : v) if (q.id == ev.src && q.voice != kKsVoice) q.keyPlayed = true;   // a repeat played on the repetition key
+    }
+    for (auto& n : v) if (n.track == 0 && n.voice != kKsVoice) n.ksManual = true;
+    raw = v;
+    commit (std::move (v));
+    if (onMessage) onMessage ("Key-switches are now notes: move, stretch, delete, copy or change their velocity. Right-click > Key-switches > Back to automatic to undo.");
+}
+
+void RollView::automaticKeySwitches()
+{
+    auto v = raw;
+    v.erase (std::remove_if (v.begin(), v.end(), [] (const Note& n) { return n.track == 0 && n.voice == kKsVoice; }), v.end());
+    for (auto& n : v) { n.ksManual = false; n.keyPlayed = false; }
+    selected.clear();
+    commit (std::move (v));
+}
+
 void RollView::showKsMenu (juce::Point<int> screenPos, int noteId)
 {
     const auto kv = ksView();
@@ -2480,9 +2533,13 @@ void RollView::showKsMenu (juce::Point<int> screenPos, int noteId)
     if (noteId < 0 || kv.lib == nullptr)
     {
         m.addItem (1, "This key chooses the string / sets a mode (it follows the notes)", false);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }));
+        m.addItem (50, "Edit key-switches as notes (move, stretch, delete, velocity)");
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea ({ screenPos.x, screenPos.y, 1, 1 }),
+                         [safe = juce::Component::SafePointer<RollView> (this)] (int r) { if (safe != nullptr && r == 50) safe->editKeySwitchesAsNotes(); });
         return;
     }
+    m.addItem (50, "Edit key-switches as notes (move, stretch, delete, velocity)");
+    m.addSeparator();
     m.addSectionHeader ("Key-switch for this note");
     m.addItem (1, "Play this note plainly (no articulation)");
     juce::PopupMenu to;
@@ -2494,6 +2551,7 @@ void RollView::showKsMenu (juce::Point<int> screenPos, int noteId)
                      [safe = juce::Component::SafePointer<RollView> (this), noteId] (int r)
                      {
                          if (safe == nullptr || r == 0) return;
+                         if (r == 50) { safe->editKeySwitchesAsNotes(); return; }
                          if (r == 1) safe->setArtOnNote (noteId, A_Sustain);
                          else if (r >= 1000) safe->setArtOnNote (noteId, r - 1000);
                      });

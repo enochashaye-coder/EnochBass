@@ -268,7 +268,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
     for (int track = 0; track < 3; ++track)
     {
         std::vector<const Note*> all, line;
-        for (auto& n : notes) if (n.track == track) { all.push_back (&n); if (n.voice == 0) line.push_back (&n); }
+        for (auto& n : notes) if (n.track == track && ! n.keyPlayed) { all.push_back (&n); if (n.voice == 0) line.push_back (&n); }
         if (all.empty()) continue;
         std::stable_sort (line.begin(), line.end(), [] (const Note* a, const Note* b) { return a->start < b->start; });
 
@@ -277,16 +277,38 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         // v3.9: a key-switch note you drew in the roll (on one of the instrument's key-switch rows) is sent at that key, held as drawn
         const Library* LK = (s.routed && track < 3 && s.routes[track].lib) ? s.routes[track].lib.get() : L;
         const int keyShift = (LK && LK->inst == inst && ! LK->standard) ? LK->transpose + ((s.routed && track < 3) ? s.routes[track].transpose : 0) : 0;
+        // v3.12: an instrument whose key IS the sound for some articulations (EZbass E0 ghost tap): that note is sent as the key alone
+        const Library* LR = (s.routed && track < 3 && s.routes[track].lib && s.routes[track].lib->inst == inst) ? s.routes[track].lib.get() : L;
+        const bool perfLib = ksLive && track != 2 && LR && LR->inst == inst && ! LR->standard && ! LR->noKeySwitches;
         for (auto* n : all)
         {
+            if (perfLib && n->voice == 0)
+            {
+                const LibArt* re = libFind (*LR, libResolve (*LR, n->art));
+                if (re && re->when == KW_Replace && ! re->press.empty() && n->ksManual) continue;   // its key (the sound) is a note you edit
+                if (re && re->when == KW_Replace && ! re->press.empty())
+                {
+                    const double bpmsR = std::max (20.0, s.bpm) / 60000.0;
+                    for (auto& pr : re->press)
+                    {
+                        MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127);
+                        on.b = std::clamp ((int) std::lround (pr.vel * std::clamp (n->vel, 1, 127) / 64.0), 20, 127);   // the note's own dynamics
+                        on.track = track; on.ord = 2; on.ks = true; on.noteId = n->id; on.art = n->art;
+                        MidiEv off = on; off.type = EV_OFF; off.b = 0; off.ord = 0;
+                        off.t = n->start + std::max (0.01, re->pressMs > 0 ? std::min (re->pressMs * bpmsR, std::max (0.02, n->length)) : std::max (0.02, n->length));
+                        out.push_back (on); out.push_back (off);
+                    }
+                    continue;
+                }
+            }
             if (n->voice == kKsVoice && ksLive && track != 2)
             {
-                MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch + keyShift, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 1; on.ks = true;
+                MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch + keyShift, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 1; on.ks = true; on.srcId = n->id; on.drawn = true;   // a key-switch you drew (the roll shows it as the note itself)
                 MidiEv off = on; off.t = n->start + std::max (0.02, n->length); off.type = EV_OFF; off.b = 0; off.ord = 0;
                 out.push_back (on); out.push_back (off);
                 continue;
             }
-            MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 2; on.art = n->art; on.srcId = n->id;
+            MidiEv on; on.t = n->start; on.type = EV_ON; on.a = std::clamp (n->pitch, 0, 127); on.b = std::clamp (n->vel, 1, 127); on.track = track; on.ord = 2; on.art = n->art; on.srcId = n->id; on.manualKs = n->ksManual;
             MidiEv off = on; off.t = n->start + std::max (0.02, n->length); off.type = EV_OFF; off.b = 0; off.ord = 0;
             out.push_back (on); out.push_back (off);
         }
@@ -302,24 +324,49 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
             // tempo) and is held until that note ends, the way a player holds a key-switch (EZbass: hold G0 while the note plays).
             if (! LT->noKeySwitches && ! LT->arts.empty())
             {
-                const double lead = std::clamp (20.0 * std::max (20.0, s.bpm) / 60000.0, 0.01, 0.08);
+                // v3.12: every articulation is a technique with its own timing (Library.h: when / pressMs / preRollMs)
+                const double bpms = std::max (20.0, s.bpm) / 60000.0;
+                const double lead = std::clamp (LT->preRollMs * bpms, 0.002, 0.25);
                 std::vector<MidiEv> ksOut;
                 int last = -1;
+                const Note* prevN = nullptr;
                 for (auto* n : line)
                 {
-                    const int art = libResolve (*LT, n->art);
+                    int art = libResolve (*LT, n->art);
+                    const LibArt* e0 = libFind (*LT, art);
+                    if (e0 && e0->when == KW_Replace) continue;                 // sent as the key alone (above); not a note to join
+                    if (n->ksManual) { prevN = n; continue; }                   // its key-switches are notes you edit in the roll
+                    // a joined technique (legato, hammer-on, pull-off, slide) needs a sounding note to join: without one it is played plain
+                    // (the same reach as the driver's overlap: the previous note ends at most a quarter beat before this one)
+                    if (driver::isLegatoArt (n->art) && (prevN == nullptr || n->start - (prevN->start + prevN->length) > 0.25 || prevN->pitch == n->pitch))
+                        art = libResolve (*LT, A_Sustain);
+                    prevN = n;
                     const LibArt* e = libFind (*LT, art);
                     if (! e) continue;
-                    const double t = std::max (0.0, n->start - lead);
-                    if (e->oneShot || art != last)
+                    const double nEnd = n->start + std::max (0.02, n->length);
+                    double t = 0, tOff = 0;
+                    if (e->when == KW_During)
+                    {
+                        // pressed while the note sounds (EZbass F0 / G0: the held note slides away), never in its first 30 ms or last 80 ms
+                        const double minIn = 30.0 * bpms, maxIn = std::max (minIn, std::max (0.02, n->length) - 80.0 * bpms);
+                        t = n->start + std::clamp (std::max (0.02, n->length) * e->atFrac, minIn, maxIn);
+                        tOff = std::min (nEnd - 0.002, t + (e->pressMs > 0 ? e->pressMs : 40.0) * bpms);
+                        if (tOff <= t) tOff = t + 0.005;
+                    }
+                    else
+                    {
+                        t = std::max (0.0, n->start - lead);
+                        tOff = (! e->hold && e->pressMs > 0) ? t + e->pressMs * bpms : std::max (t + 0.02, nEnd - 0.002);
+                    }
+                    if (e->oneShot || art != last || e->when == KW_During)
                     {
                         for (auto& pr : e->press)
                         {
                             MidiEv on; on.t = t; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127); on.b = std::clamp (pr.vel, 1, 127); on.track = track; on.ord = 1; on.ks = true; on.noteId = n->id;
-                            MidiEv off = on; off.t = std::max (t + 0.02, n->start + std::max (0.02, n->length) - 0.002); off.type = EV_OFF; off.b = 0; off.ord = 0;
+                            MidiEv off = on; off.t = tOff; off.type = EV_OFF; off.b = 0; off.ord = 0;
                             ksOut.push_back (on); ksOut.push_back (off);
                         }
-                        if (! e->oneShot) last = art;
+                        if (! e->oneShot && e->when == KW_Before) last = art;
                     }
                 }
                 // the same key used again before its last use ended. A held key (EZbass G#0 legato) simply stays down through both notes,

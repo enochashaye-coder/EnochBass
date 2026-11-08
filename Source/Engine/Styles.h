@@ -33,7 +33,7 @@ inline const char* artName (int a)
 {
     static const char* n[] = {
         "Sustain", "Legato", "Staccato", "Marcato / Accent", "Ghost / Dead Note", "Palm Mute", "Hammer-On", "Pull-Off",
-        "Slide", "Bend", "Vibrato", "Harmonic", "Growl", "Flutter-Tongue", "Slide Out", "Doit", "Scoop",
+        "Slide", "Bend", "Vibrato", "Harmonic", "Growl", "Flutter-Tongue", "Slide Out Down", "Slide Out Up", "Scoop",
         "Subtone", "Shake", "Trill", "Tremolo", "Pizzicato", "Glissando", "Col Legno", "Arpeggio / Roll", "Dead Mute",
         "Strum / Chord", "Slap", "Pop" };
     if (a >= (int) A_Count) return "Library key";     // v3.8: a profile's own key (named in the profile)

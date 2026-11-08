@@ -10,6 +10,7 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <map>
 
 namespace enochsolo
 {
@@ -242,6 +243,120 @@ inline int pitchForRole (int role, const ChordSpan& c, const ChordSpan& next, in
         }
     }
 }
+//------------------------------------------------------------------------------ v2.12 motif engine
+// A motif is one bar of rhythm (the genre's cell) plus a melodic shape: every hit has a FUNCTION on the chord (root, fifth, third,
+// seventh, octave, approach into the next chord, a passing step up / down, a neighbour). The functions are chosen once per motif, so
+// the hook comes back bar after bar, and are mapped onto each bar's own chord, so it follows the harmony.
+enum TF { TF_Rest = -1, TF_Root = 0, TF_Fifth, TF_Octave, TF_Third, TF_Seventh, TF_Approach, TF_PassUp, TF_PassDown, TF_Neighbor, TF_Ghost, TF_Any, TF_NextRoot };
+
+struct Vocab
+{
+    double melodic = 0.4;           // how often a weak hit becomes a melodic function instead of the cell's root / fifth / octave
+    double w[7] = { 1, 1, 1, 1, 1, 1, 1 };   // fifth, octave, third, seventh, pass up, pass down, neighbour
+    bool pump = false;              // the style is MEANT to pump one note (rock eighths, disco octaves, merengue)
+    double fillMelodic = 0.5;       // how melodic its fills are (runs, enclosures) vs. rhythmic (octave pops, dead-note pickups)
+    double guide = 0.0;             // jazz / gospel: guide tones (3rd, 7th) on beat 3
+};
+
+inline Vocab vocabFor (int genre, const std::string& style)
+{
+    Vocab v;
+    auto set = [&] (double mel, std::initializer_list<double> ws, double fillMel, double guide = 0.0, bool pump = false)
+    { v.melodic = mel; int i = 0; for (double x : ws) v.w[i++] = x; v.fillMelodic = fillMel; v.guide = guide; v.pump = pump; };
+    const int b = baseGenre (genre);
+    switch (b)
+    {
+        case G_Funk:        set (0.45, { 1.0, 2.2, 0.6, 1.0, 0.9, 1.0, 0.6 }, 0.35); break;     // octave pops, b7, passing
+        case G_Gospel:      set (0.62, { 1.0, 0.6, 1.4, 1.1, 1.6, 1.4, 0.6 }, 0.8, 0.5); break; // walking, thirds, runs
+        case G_Swing:       set (0.7,  { 1.0, 0.4, 1.4, 1.3, 1.5, 1.5, 0.8 }, 0.8, 0.8); break;
+        case G_Afrobeat: case G_Highlife: case G_Juju: case G_Soukous: case G_Township: case G_EthioJazz: case G_AfroJazz:
+                            set (0.55, { 1.3, 1.0, 1.0, 0.6, 1.2, 1.2, 0.8 }, 0.6); break;    // melodic, syncopated
+        case G_AfroFusion:  set (0.45, { 1.4, 0.9, 0.9, 0.6, 1.0, 1.0, 0.6 }, 0.5); break;
+        case G_Amapiano:    set (0.35, { 1.4, 1.6, 0.6, 0.5, 0.8, 1.0, 0.4 }, 0.4); break;    // log drum: root / fifth / octave, space
+        case G_Reggae:      set (0.4,  { 1.5, 1.2, 0.9, 0.5, 1.0, 1.1, 0.7 }, 0.65); break;   // root-fifth-octave, melodic fills
+        case G_Pop:         set (0.35, { 1.3, 1.0, 0.8, 0.4, 1.0, 1.0, 0.5 }, 0.5); break;
+        case G_Rock:        set (0.15, { 1.5, 1.2, 0.4, 0.3, 0.8, 0.8, 0.3 }, 0.4, 0.0, true); break;
+        case G_Ballad:      set (0.45, { 1.2, 0.6, 1.2, 0.8, 1.3, 1.3, 0.6 }, 0.7, 0.3); break;
+        case G_HipHop:      set (0.25, { 1.2, 1.4, 0.5, 0.6, 0.6, 0.9, 0.4 }, 0.3); break;
+        case G_AfroHouse:   set (0.3,  { 1.4, 1.4, 0.6, 0.5, 0.7, 0.8, 0.4 }, 0.4); break;
+        case G_Salsa: case G_AfroCuban: case G_Caribbean: case G_AfroBrazilian: case G_Bossa: case G_Samba: case G_Flamenco:
+                            set (0.3,  { 1.8, 0.8, 0.7, 0.4, 0.8, 0.9, 0.4 }, 0.55); break;   // root-fifth tumbao, anticipations
+        default:            set (0.4,  { 1.2, 1.0, 0.9, 0.6, 1.0, 1.0, 0.6 }, 0.5); break;
+    }
+    if (genre == G_Kizomba || genre == G_Zouk) { v.melodic = 0.38; v.w[0] = 1.8; v.w[1] = 0.6; v.w[4] = 1.1; v.w[5] = 1.1; v.fillMelodic = 0.7; }
+    if (genre == G_JazzFunk || genre == G_SmoothJazz) { v.melodic = 0.6; v.w[2] = 1.3; v.w[3] = 1.3; v.guide = 0.4; v.fillMelodic = 0.75; }
+    std::string n = style; for (auto& ch : n) ch = (char) std::tolower ((unsigned char) ch);
+    if (n.find ("neo") != std::string::npos || n.find ("r&b") != std::string::npos || n.find ("soul") != std::string::npos)
+    { v.melodic = std::max (v.melodic, 0.6); v.w[2] = 1.5; v.w[3] = 1.4; v.w[6] = 1.0; v.fillMelodic = 0.75; v.guide = std::max (v.guide, 0.35); }
+    if (n.find ("disco") != std::string::npos || n.find ("merengue") != std::string::npos || n.find ("eighths") != std::string::npos) v.pump = true;
+    return v;
+}
+
+/** the motif's functions for one rhythm cell (decided once, so the motif keeps its shape when it comes back) */
+inline std::vector<int> makeFuncs (const std::string& cell, const std::vector<double>& weight, const Vocab& v, const Style& st, Rng& rng)
+{
+    const int steps = (int) cell.size();
+    std::vector<int> f ((size_t) steps, TF_Rest);
+    const double mel = std::clamp (v.melodic * (0.65 + 0.7 * (double) st.step), 0.0, 0.92);
+    int prevF = TF_Rest;
+    for (int i = 0; i < steps; ++i)
+    {
+        const char ch = cell[(size_t) i];
+        if (ch == '.') continue;
+        const double w = i < (int) weight.size() ? weight[(size_t) i] : 0.3;
+        int fn;
+        switch (ch)
+        {
+            case 'R': fn = TF_Root; break;   case 'f': fn = TF_Fifth; break;   case 'o': fn = TF_Octave; break;
+            case 't': fn = TF_Third; break;  case 'b': fn = TF_Seventh; break; case 'a': fn = TF_Approach; break;
+            case 'g': fn = TF_Ghost; break;  default: fn = TF_Any; break;
+        }
+        // weak hits become melodic: a function from the genre's vocabulary (beats and the bar's first hit stay the cell's)
+        static const int vocabFn[7] = { TF_Fifth, TF_Octave, TF_Third, TF_Seventh, TF_PassUp, TF_PassDown, TF_Neighbor };
+        if (i > 0 && w < 0.8 && fn != TF_Ghost && fn != TF_Approach && rng.chance (mel))
+            fn = vocabFn[std::clamp ((int) rng.weighted (std::vector<double> { v.w[0], v.w[1], v.w[2], v.w[3], v.w[4], v.w[5], v.w[6] }), 0, 6)];
+        // never the same root twice in a row on a weak hit (unless the style pumps on purpose)
+        if (! v.pump && fn == TF_Root && prevF == TF_Root && i > 0 && w < 0.55)
+            { static const int alt[4] = { TF_Octave, TF_Fifth, TF_PassUp, TF_PassDown };
+              fn = alt[std::clamp ((int) rng.weighted (std::vector<double> { v.w[1] + 0.5, v.w[0], 0.6 * v.w[4], 0.6 * v.w[5] }), 0, 3)]; }
+        // guide tones (jazz, gospel, soul): a 3rd or 7th on beat 3
+        if (v.guide > 0 && steps == 16 && i == 8 && fn == TF_Root && rng.chance (v.guide)) fn = rng.chance (0.6) ? TF_Third : TF_Seventh;
+        if (v.guide > 0 && i > 0 && i != steps / 2 && (fn == TF_Fifth || fn == TF_Octave || fn == TF_Root) && rng.chance (v.guide * (w < 0.8 ? 0.55 : 0.45))) fn = rng.chance (0.7) ? TF_Third : TF_Seventh;   // guide tones, beats 2 and 4 too
+        if (fn == TF_Any) fn = rng.chance (0.5) ? TF_Fifth : (rng.chance (0.5) ? TF_Third : TF_Octave);
+        f[(size_t) i] = fn; if (fn != TF_Ghost) prevF = fn;
+    }
+    return f;
+}
+
+inline int roleOfFunc (int f)
+{
+    switch (f)
+    {
+        case TF_Root: return BR_Root; case TF_Fifth: return BR_Fifth; case TF_Octave: return BR_Octave; case TF_Third: return BR_Third;
+        case TF_Seventh: return BR_Seventh; case TF_Approach: case TF_NextRoot: return BR_Approach; case TF_Ghost: return BR_Ghost;
+        default: return BR_Other;
+    }
+}
+
+/** the pitch of a motif function on a chord; passing steps move by scale step from the previous note toward where the line is going */
+inline int pitchForFunc (int f, const ChordSpan& c, const ChordSpan& next, int prev, int lo, int hi, Rng& rng, float step, double w, int toward)
+{
+    switch (f)
+    {
+        case TF_PassUp: case TF_PassDown: case TF_Neighbor:
+        {
+            int dir = f == TF_PassUp ? 1 : (f == TF_PassDown ? -1 : (toward >= prev ? 1 : -1));
+            if (f != TF_Neighbor && toward >= 0 && std::abs (toward - prev) >= 2) dir = toward > prev ? 1 : -1;   // pass toward the target
+            // on a strong beat a passing note must still be a chord tone
+            const uint16_t mask = w >= 0.5 ? c.toneMask : c.scaleMask;
+            int q = nearIn (mask, prev, dir, lo, hi);
+            if (q == prev || q < lo || q > hi) q = nearIn (mask, prev, -dir, lo, hi);
+            return std::clamp (q, lo, hi);
+        }
+        case TF_NextRoot: return std::clamp (rootPitchOf (next.rootPc, lo), lo, hi);
+        default: return pitchForRole (roleOfFunc (f), c, next, prev, lo, hi, rng, step);
+    }
+}
 } // namespace bassdetail
 
 namespace detail
@@ -293,6 +408,12 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
     std::string mainCell = claveOn ? pickSide (true) : pickCell(), varCell = claveOn ? pickSide (true) : pickCell();
     std::string mainCell2 = claveOn ? pickSide (false) : std::string(), varCell2 = claveOn ? pickSide (false) : std::string();
     int prevPitch = rootPitchOf (chords.front().rootPc, lo);
+    // v2.12: the genre's musical vocabulary, and each rhythm cell's motif (its melodic shape, decided once so the hook returns)
+    const Vocab voc = vocabFor (S.genre, st.name);
+    std::vector<double> wts ((size_t) steps); for (int i = 0; i < steps; ++i) wts[(size_t) i] = m.weight[(size_t) i];
+    std::map<std::string, std::vector<int>> motifOf;
+    auto funcsOf = [&] (const std::string& cell) -> const std::vector<int>& { auto it = motifOf.find (cell); if (it != motifOf.end()) return it->second; return motifOf[cell] = makeFuncs (cell, wts, voc, st, rng); };
+    const bool callResponse = (baseGenre (S.genre) == G_Funk || baseGenre (S.genre) == G_Afrobeat || baseGenre (S.genre) == G_Amapiano || baseGenre (S.genre) == G_Highlife || baseGenre (S.genre) == G_Gospel);
 
     // ---- v2.7 Amapiano log-drum phrasing: two-bar call and response, a fill at the end of every 4-bar phrase, new pairs now and then
     const bool amapiano = isAmapianoFamily (S.genre) && m.simpleFour && steps == 16;
@@ -312,7 +433,12 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
         if (phraseStart && bar > 0 && ! rng.chance (std::clamp (0.35 + 0.6 * (double) st.motif * (0.5 + S.repeat), 0.0, 0.97))) { if (claveOn) { mainCell = pickSide (true); varCell = pickSide (true); mainCell2 = pickSide (false); varCell2 = pickSide (false); } else { mainCell = pickCell(); varCell = pickCell(); } }
         const bool threeSide = ((bar % 2 == 0) == (S.clave != 2));        // clave 1 = 3-2 (bar 1 is the 3 side), clave 2 = 2-3
         std::string cell = (claveOn && ! threeSide) ? mainCell2 : mainCell;
-        if (! phraseStart && rng.chance (std::clamp (0.55 - (double) S.repeat * 0.5 - st.motif * 0.25, 0.04, 0.6))) cell = (claveOn && ! threeSide) ? varCell2 : varCell;
+        // v2.12 the phrase plan: bar 1 states the motif, bar 2 answers it (its ending turns toward the next chord or answers in another
+        // register), bar 3 develops it (the variant, one note moved an octave), the last bar releases it (a fragment and a fill)
+        const int jp = bar % phrase;
+        enum Intent { IN_Statement, IN_Answer, IN_Development, IN_Release };
+        const Intent intent = (phrase >= 2 && jp == phrase - 1) ? IN_Release : (jp % 4 == 1 ? IN_Answer : (jp % 4 == 2 ? IN_Development : IN_Statement));
+        if (intent == IN_Development && rng.chance (std::clamp (0.35 - (double) S.repeat * 0.25, 0.08, 0.4))) cell = (claveOn && ! threeSide) ? varCell2 : varCell;   // usually the motif itself, varied
         if (amapiano)
         {
             if (phraseStart && bar > 0 && rng.chance (std::clamp (0.6 - (double) S.repeat * 0.5, 0.1, 0.7))) amaPair = rng.i (0, (int) amaCall.size() - 1);
@@ -338,6 +464,11 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
             }
         }
 
+        // v2.12: the motif's own choices (which weak hits it keeps, its pickups, ghosts, the pitches of its steps) come from a seed of the
+        // cell and the bar's place in the phrase plan, so a statement and its repeat really are the same figure; the development and
+        // the release vary it, and every second phrase it evolves a little
+        const int variant = (intent == IN_Development ? 1 : 0) + (intent == IN_Release ? 2 : 0) + 8 * ((bar / std::max (1, phrase)) / 2);
+        Rng rr ((uint64_t) S.seed * 2654435761ULL ^ (uint64_t) std::hash<std::string>() (cell) ^ ((uint64_t) variant * 0x9E3779B97F4A7C15ULL));
         // busy slider: per-bar override or global
         const double busy = (bar < (int) S.barBusy.size() && S.barBusy[(size_t) bar] >= 0.f) ? S.barBusy[(size_t) bar] : S.busy;
         const double keep = std::clamp ((double) st.density * (0.3 + busy * 1.1) * gi.densMul * (0.7 + 0.5 * S.intensity) - (S.space - 0.5) * 0.4, 0.1, 1.0);
@@ -346,18 +477,36 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
         {
             if (c2[(size_t) i] == '.' ) continue;
             const double w = m.weight[(size_t) i];
-            if (! fromRef && w < 0.8 && ! rng.chance (std::min (1.0, keep + w * 0.35))) c2[(size_t) i] = '.';
+            if (! fromRef && w < 0.8 && ! rr.chance (std::min (1.0, keep + w * 0.35))) c2[(size_t) i] = '.';
         }
         // busy: extra hits on the empty eighths
         if (busy > 0.55 && ! fromRef)
             for (int i = 2; i < steps; i += 2)
-                if (c2[(size_t) i] == '.' && rng.chance ((busy - 0.55) * 0.6 * (double) st.density)) c2[(size_t) i] = 'x';
+                if (c2[(size_t) i] == '.' && rr.chance ((busy - 0.55) * 0.6 * (double) st.density)) c2[(size_t) i] = 'x';
         // anticipations: a hit on the beat is pushed one 16th early
         for (int i = 4; i < steps; i += 4)
-            if (! fromRef && c2[(size_t) i] != '.' && c2[(size_t) (i - 1)] == '.' && rng.chance (st.sync * 0.28)) { c2[(size_t) (i - 1)] = c2[(size_t) i]; c2[(size_t) i] = '.'; }
+            if (! fromRef && c2[(size_t) i] != '.' && c2[(size_t) (i - 1)] == '.' && rr.chance (st.sync * 0.28)) { c2[(size_t) (i - 1)] = c2[(size_t) i]; c2[(size_t) i] = '.'; }
+        // v2.12 Bar Notes Density: low = space and the anchors held long; high = pickups into the beats, never every subdivision
+        if (! fromRef && busy < 0.3)
+            for (int i = 1; i < steps; ++i)
+                if (c2[(size_t) i] != '.' && m.weight[(size_t) i] < 0.5 && c2[(size_t) i] != 'a' && rr.chance ((0.3 - busy) / 0.3 * 0.85)) c2[(size_t) i] = '.';
+        if (! fromRef && busy > 0.65 && steps == 16)
+            for (int i : { 3, 7, 11 })
+                if (c2[(size_t) i] == '.' && c2[(size_t) (i + 1)] != '.' && rr.chance ((busy - 0.65) * 1.6 * (0.5 + (double) st.density) + 0.05)) c2[(size_t) i] = 'p';
+        // gospel / jazz / soul: walking movement, passing 8ths between hits that are far apart (they step toward the next hit)
+        if (! fromRef && voc.guide > 0 && steps == 16 && busy >= 0.25)
+            for (int i = 2; i < steps; i += 2)
+            {
+                if (c2[(size_t) i] != '.') continue;
+                int before = -1, after = -1;
+                for (int k = i - 1; k >= 0; --k) if (c2[(size_t) k] != '.' && c2[(size_t) k] != 'g') { before = k; break; }
+                for (int k = i + 1; k < steps; ++k) if (c2[(size_t) k] != '.' && c2[(size_t) k] != 'g') { after = k; break; }
+                if (before >= 0 && i - before >= 2 && (after < 0 || after - i >= 2) && rr.chance ((0.3 + 0.5 * busy) * std::min (1.0, voc.guide * 1.6)))
+                    c2[(size_t) i] = 'p';
+            }
         // ghost-note fills on empty 16ths when busy
         for (int i = 1; i < steps; ++i)
-            if (! fromRef && c2[(size_t) i] == '.' && (i % 2 == 1) && rng.chance (std::max (0.0, (busy - 0.3)) * 0.8 * (0.3 + (double) st.ghost * 3.0) * (0.5 + S.intensity)))
+            if (! fromRef && c2[(size_t) i] == '.' && (i % 2 == 1) && rr.chance (std::max (0.0, (busy - 0.3)) * 0.8 * (0.3 + (double) st.ghost * 3.0) * (0.5 + S.intensity)))
                 c2[(size_t) i] = 'g';
         // style reference: the bass line is about as busy as the recording
         if (rv.valid && rv.steps == steps)
@@ -382,6 +531,24 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
                 else if (c2[(size_t) i] != '.' && c2[(size_t) i] != 'g' && gv.occ[(size_t) i] < 0.1f && m.weight[(size_t) i] < 0.8 && rng.chance (a * 0.35)) c2[(size_t) i] = '.';
             }
         }
+        // never every subdivision: at most 5 + 7 x density hits a bar, and each half bar keeps at least one empty 8th
+        if (! fromRef && steps == 16)
+        {
+            const int cap = (int) std::lround (5 + 7 * busy);
+            auto count = [&] { int c = 0; for (char ch : c2) if (ch != '.') ++c; return c; };
+            while (count() > cap)
+            {
+                int worst = -1; double wv = 9;
+                for (int i = 1; i < steps; ++i) if (c2[(size_t) i] != '.' && c2[(size_t) i] != 'a' && m.weight[(size_t) i] < wv) { wv = m.weight[(size_t) i]; worst = i; }
+                if (worst < 0) break;
+                c2[(size_t) worst] = '.';
+            }
+            for (int half = 0; half < 2; ++half)
+            {
+                bool room = false; for (int i = half * 8; i < half * 8 + 8; i += 2) if (c2[(size_t) i] == '.' && c2[(size_t) i + 1] == '.') room = true;
+                if (! room) c2[(size_t) (half * 8 + 6)] = '.', c2[(size_t) (half * 8 + 7)] = c2[(size_t) (half * 8 + 7)] == 'p' ? '.' : c2[(size_t) (half * 8 + 7)];
+            }
+        }
         // a chord change inside the bar always gets its own root
         for (auto& ch : chords)
         {
@@ -392,9 +559,12 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
         // the first step of a bar is played unless the pattern deliberately starts with a rest; a new chord on the bar line always gets its root
         if (c2[0] == '.' && cell[0] != '.') c2[0] = 'R';
         for (auto& ch : chords) if (std::abs (ch.start - b0) < 1e-6) c2[0] = (c2[0] == '.' || c2[0] == 'g') ? 'R' : c2[0];
+        // the release bar without a fill: the motif's first half, then space (unless the density is high)
+        if (intent == IN_Release && ! fromRef && steps == 16 && busy < 0.6 && rr.chance (0.5))
+            for (int i = 10; i < steps; ++i) if (c2[(size_t) i] != 'a' && c2[(size_t) i] != 'R') c2[(size_t) i] = '.';
         // fill at the end of a phrase
         bool fill = false;
-        if (phraseEnd && steps >= 16 && bar + 1 <= S.bars && rng.chance (std::clamp ((double) st.density * 0.45 * (0.4 + busy), 0.0, 0.8) * (rv.valid ? 1.0 - S.refAmount * 0.9 : 1.0)))
+        if (phraseEnd && steps >= 16 && bar + 1 <= S.bars && rng.chance (std::clamp ((double) st.density * 0.55 * (0.4 + busy) + 0.12, 0.0, 0.85) * (rv.valid ? 1.0 - S.refAmount * 0.9 : 1.0)))
         {
             fill = true;
             for (int i = 12; i < steps; ++i) c2[(size_t) i] = '.';
@@ -440,7 +610,8 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
                 else
                 {
                     const bool chordTone = rng.chance (0.4 + st.leap * 0.4);
-                    if (chordTone) { role = (rng.chance (0.5) ? BR_Fifth : BR_Third); pitch = pitchForRole (role, c, nxt, p, lo, hi, rng, 1.f); }
+                    if (k == 2 && voc.guide > 0 && rng.chance (voc.guide)) { role = rng.chance (0.6) ? BR_Third : BR_Seventh; pitch = pitchForRole (role, c, nxt, p, lo, hi, rng, 1.f); }   // v2.12 guide tone
+                    else if (chordTone) { role = (rng.chance (0.5) ? BR_Fifth : BR_Third); pitch = pitchForRole (role, c, nxt, p, lo, hi, rng, 1.f); }
                     else
                     {
                         const int dir = rng.chance (0.5) ? 1 : -1;
@@ -476,6 +647,10 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
             // tiny rhythm safety: never an empty bar
             if (hits.empty()) hits.push_back ({ 0, 'R' });
             int p = prevPitch;
+            const auto& motif = funcsOf (cell);
+            // development: one weak note of the motif moves up an octave; answer: the last note turns toward the next chord
+            int devHit = -1; if (intent == IN_Development) for (size_t h = 0; h < hits.size(); ++h) if (hits[h].step >= 4 && m.weight[(size_t) hits[h].step] < 0.55 && hits[h].ch != 'g') { devHit = hits[h].step; break; }
+            int lastHit = -1; for (size_t h = 0; h < hits.size(); ++h) if (hits[h].ch != 'g' && hits[h].step >= 10) lastHit = hits[h].step;
             for (size_t h = 0; h < hits.size(); ++h)
             {
                 const int i = hits[h].step;
@@ -483,46 +658,66 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
                 const ChordSpan& c = at (t + 0.001);
                 const double nextT = (h + 1 < hits.size()) ? b0 + hits[h + 1].step * stepLen : b0 + m.barBeats;
                 const ChordSpan& nxt = (h + 1 < hits.size()) ? at (nextT + 0.001) : nextBarChord;
-                int role = BR_Root;
-                switch (hits[h].ch)
-                {
-                    case 'R': role = BR_Root; break;   case 'f': role = BR_Fifth; break;   case 'o': role = (rng.chance (0.5 + st.octave * 0.5) ? BR_Octave : BR_Root); break;
-                    case 't': role = BR_Third; break;  case 'b': role = BR_Seventh; break; case 'a': role = BR_Approach; break; case 'n': role = BR_Approach; break;
-                    case 'g': role = BR_Ghost; break;  default: role = BR_Other; break;
-                }
-                // style: extra octave jumps on plain roots
-                if (role == BR_Root && i != 0 && m.weight[(size_t) i] < 0.55 && rng.chance (st.octave * 0.35)) role = BR_Octave;
-                // an approach note on a step that isn't the end of the bar is only an approach when the chord changes next
-                if (role == BR_Approach && i < steps - 4 && nxt.rootPc == c.rootPc) role = rng.chance (0.5) ? BR_Fifth : BR_Other;
-                int pitch = pitchForRole (role, c, nxt, p, lo, hi, rng, st.step);
-                if (hits[h].ch == 'n') pitch = std::clamp (rootPitchOf (nextBarChord.rootPc, lo), lo, hi);
-                if (role == BR_Ghost) pitch = p >= lo && p <= hi && std::abs (p - rootPitchOf (c.rootPc, lo)) <= 12 ? p : pitch;
+                const char ch = hits[h].ch;
+                // the motif's function where the hit is the cell's own, else from the letter
+                int fn = (i < (int) motif.size() && cell.size() == (size_t) steps && cell[(size_t) i] == ch) ? motif[(size_t) i] : TF_Rest;
+                if (fn == TF_Rest)
+                    switch (ch)
+                    {
+                        case 'R': fn = TF_Root; break; case 'f': fn = TF_Fifth; break; case 'o': fn = TF_Octave; break; case 't': fn = TF_Third; break;
+                        case 'b': fn = TF_Seventh; break; case 'a': fn = TF_Approach; break; case 'n': fn = TF_NextRoot; break; case 'g': fn = TF_Ghost; break;
+                        case 'p': fn = TF_PassUp; break; default: fn = TF_Any; break;
+                    }
+                if (fn == TF_Any) fn = rr.chance (0.5) ? TF_Fifth : TF_Octave;
+                // a new chord in the bar is always met by its root
+                for (auto& chd : chords) if (std::abs (chd.start - t) < 1e-6 && fn != TF_Ghost) fn = TF_Root;
+                // an approach only approaches a new chord; otherwise it walks toward the root
+                if (fn == TF_Approach && i < steps - 4 && nxt.rootPc == c.rootPc) fn = TF_PassDown;
+                if (intent == IN_Answer && i == lastHit && fn != TF_NextRoot)
+                    fn = nextBarChord.rootPc != c.rootPc ? TF_Approach : (callResponse ? TF_Octave : TF_PassUp);
+                // where the line is heading: the next chord's root nearest to here
+                int toward = rootPitchOf (nxt.rootPc, lo); while (toward + 12 <= hi && std::abs (toward + 12 - p) < std::abs (toward - p)) toward += 12;
+                int pitch = pitchForFunc (fn, c, nxt, p, lo, hi, rr, st.step, m.weight[(size_t) i], toward);
+                if (i == devHit && pitch + 12 <= hi) pitch += 12;
+                if (fn == TF_Ghost) pitch = p >= lo && p <= hi && std::abs (p - rootPitchOf (c.rootPc, lo)) <= 12 ? p : pitch;
+                const int role = roleOfFunc (fn);
                 // swing: off-beat eighths are pushed late
                 if (swingAmt > 0.01 && (i % 4 == 2)) t += swingAmt * (m.barBeats / m.num) / 6.0;
                 const double gap = nextT - (b0 + i * stepLen);
                 double len;
                 if (role == BR_Ghost) len = std::min (0.14, gap * 0.9);
-                else len = gap * (0.45 + 0.53 * (double) st.legato);
+                else len = gap * (busy < 0.3 ? 0.92 : (0.45 + 0.53 * (double) st.legato));      // sparse: held long
                 len = std::max (0.08, std::min (len, gap * 0.99));
                 int art = (role == BR_Ghost) ? A_Ghost : A_Sustain;
                 bar_notes.push_back (mk (t, len, pitch, role, velFor (m.weight[(size_t) i], role), art));
                 if (role != BR_Ghost) p = pitch;
             }
-            // fill on the last beat: a scale run down into the next root
+            // v2.12 fill devices on the last beat, chosen by the genre: melodic (run down, run up, chromatic walk-up, enclosure)
+            // or rhythmic (octave pop, dead-note pickup); every one lands on the next chord's root
             if (fill)
             {
                 const ChordSpan& c = at (b0 + m.barBeats - 0.01);
-                const int T = rootPitchOf (nextBarChord.rootPc, lo);
-                int cur = std::min (hi, T + (rng.chance (0.5) ? 7 : 5));
-                const bool ghosty = rng.chance (st.ghost * 2.0);
-                for (int i = 12; i < steps; ++i)
+                int T = rootPitchOf (nextBarChord.rootPc, lo); while (T + 12 <= hi && std::abs (T + 12 - p) < std::abs (T - p)) T += 12;
+                T = std::clamp (T, lo + 2, hi - 2);
+                const int dev = (int) rng.weighted ({ voc.fillMelodic * 1.0, voc.fillMelodic * 0.9, voc.fillMelodic * 0.7, voc.fillMelodic * 0.6, (1.0 - voc.fillMelodic) * 1.2, (1.0 - voc.fillMelodic) * (0.4 + st.ghost * 4.0) });
+                struct FN { int step; int pitch; bool ghost; };
+                std::vector<FN> fn;
+                auto scaleFrom = [&] (int from, int dir, int n) { std::vector<int> r; int q = from; for (int k = 0; k < n; ++k) { const int nq = nearIn (c.scaleMask, q, dir, lo, hi); q = nq == q ? std::clamp (q + dir * 2, lo, hi) : nq; r.push_back (q); } return r; };
+                const int cur = rootPitchOf (c.rootPc, lo);
+                switch (dev)
                 {
-                    const double t = b0 + i * stepLen;
-                    int pitch;
-                    if (i == steps - 1) pitch = rng.chance (0.6) ? T - 1 : T + 1;
-                    else { pitch = nearIn (c.scaleMask, cur, -1, lo, hi); if (pitch == cur) pitch = std::max (lo, cur - 2); cur = pitch; }
-                    const bool gh = ghosty && (i % 2 == 1) && i != steps - 1;
-                    bar_notes.push_back (mk (t, stepLen * 0.8, pitch, gh ? BR_Ghost : BR_Other, velFor (0.2, gh ? BR_Ghost : BR_Other) + 6, gh ? A_Ghost : A_Staccato));
+                    case 0: { auto r = scaleFrom (std::min (hi, T + 7), -1, 3); fn = { { 12, r[0], false }, { 13, r[1], false }, { 14, r[2], false }, { 15, T + 1, false } }; break; }     // run down
+                    case 1: { auto r = scaleFrom (std::max (lo, T - 6), 1, 3); fn = { { 12, std::max (lo, T - 7), false }, { 13, r[0], false }, { 14, r[1], false }, { 15, T - 1, false } }; break; } // run up
+                    case 2: fn = { { 12, cur + fifthIv (c.toneMask, c.rootPc) <= hi ? cur + fifthIv (c.toneMask, c.rootPc) : cur, false }, { 13, T - 3, false }, { 14, T - 2, false }, { 15, T - 1, false } }; break;   // chromatic walk-up
+                    case 3: fn = { { 12, cur, false }, { 14, nearIn (nextBarChord.scaleMask, T, 1, lo, hi), false }, { 15, T - 1, false } }; break;        // enclosure
+                    case 4: fn = { { 12, cur, false }, { 13, cur, true }, { 14, std::min (hi, cur + 12), false }, { 15, T + (rng.chance (0.5) ? 1 : -1), false } }; break;   // octave pop
+                    default: fn = { { 12, cur, false }, { 13, cur, true }, { 14, cur, true }, { 15, T - 1, false } }; break;   // dead-note pickup
+                }
+                for (auto& f : fn)
+                {
+                    const double t = b0 + f.step * stepLen;
+                    const int pitch = std::clamp (f.pitch, lo, hi);
+                    bar_notes.push_back (mk (t, f.ghost ? 0.12 : stepLen * 0.85, pitch, f.ghost ? BR_Ghost : (f.step == 15 ? BR_Approach : BR_Other), velFor (0.2, f.ghost ? BR_Ghost : BR_Other) + 6, f.ghost ? A_Ghost : A_Sustain));
                 }
             }
         }

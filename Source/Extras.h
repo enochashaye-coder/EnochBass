@@ -40,7 +40,7 @@ inline juce::String noteToText (const Note& n)
     juce::String s;
     s << juce::String (n.start, 5) << ',' << juce::String (n.length, 5) << ',' << n.pitch << ',' << n.vel << ',' << n.art << ','
       << n.track << ',' << n.voice << ',' << juce::String (n.weight, 3) << ',' << n.bend << ',' << (n.vib ? 1 : 0) << ',' << (n.mute ? 1 : 0)
-      << ',' << enochsolo::barlock::roleOf (n);
+      << ',' << enochsolo::barlock::roleOf (n) << ',' << ((n.ksManual ? 1 : 0) | (n.keyPlayed ? 2 : 0));
     return s;
 }
 
@@ -55,6 +55,7 @@ inline bool noteFromText (const juce::String& line, Note& n)
     n.track = juce::jlimit (0, 2, f[5].getIntValue()); n.voice = f[6].getIntValue(); n.weight = f[7].getDoubleValue();
     n.bend = f[8].getIntValue(); n.vib = f[9].getIntValue() != 0; n.mute = f[10].getIntValue() != 0;
     if (f.size() > 11) enochsolo::barlock::setRole (n, f[11].getIntValue());
+    { const int kf = f.size() > 12 ? f[12].getIntValue() : 0; n.ksManual = (kf & 1) != 0; n.keyPlayed = (kf & 2) != 0; }   // v3.12
     return std::isfinite (n.start) && std::isfinite (n.length);
 }
 

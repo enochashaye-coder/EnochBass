@@ -24,7 +24,8 @@ namespace midicheck
 struct Report
 {
     int ksUnknown = 0, ksLate = 0, ksClash = 0, onKey = 0, outOfRange = 0, stuck = 0, orphanOff = 0, retrigger = 0, afterEnd = 0, ccThinned = 0, resets = 0;
-    int repaired() const { return ksUnknown + ksLate + ksClash + onKey + outOfRange + stuck + orphanOff + retrigger + afterEnd; }
+    int legatoOverlap = 0, accidentalLegato = 0, doubled = 0;      // v3.12: the techniques' own rules
+    int repaired() const { return ksUnknown + ksLate + ksClash + onKey + outOfRange + stuck + orphanOff + retrigger + afterEnd + legatoOverlap + accidentalLegato + doubled; }
     std::string text() const
     {
         if (repaired() == 0) return "MIDI check: OK";
@@ -40,6 +41,9 @@ struct Report
         add (orphanOff, "stray note-off removed");
         add (retrigger, "re-struck note released first");
         add (afterEnd, "event after the clip end");
+        add (legatoOverlap, "legato overlap lengthened so the instrument joins the notes");
+        add (accidentalLegato, "plain note shortened so it is not played legato");
+        add (doubled, "pitched note removed where the key itself is the sound");
         return t + ")";
     }
 };
@@ -109,18 +113,47 @@ inline Report repair (Pattern& p)
                 for (int i : idx) { auto& e = ev[(size_t) i]; if (! e.ks && e.type == EV_OFF && moveOfId.count (e.srcId)) e.a = moveOfId[e.srcId]; }
         }
 
+        // 2b) v3.12 techniques: a note whose key IS the sound (EZbass E0 ghost) is never also played as a pitched note; a joined note
+        //     (legato, hammer-on, pull-off, slide) is overlapped by the note before by the profile's amount; on an instrument that plays
+        //     any overlap as legato, a plain note never overlaps the next one
+        if (L && ! L->standard)
+        {
+            std::set<int> replaced;
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && e.ks && e.type == EV_ON && e.noteId >= 0) { const LibArt* la = libFind (*L, libResolve (*L, e.art)); if (la && la->when == KW_Replace) replaced.insert (e.noteId); } }
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.srcId >= 0 && replaced.count (e.srcId) && (e.type == EV_ON || e.type == EV_OFF)) { drop[(size_t) i] = 1; if (e.type == EV_ON) ++rep.doubled; } }
+            // the played line in time order, with each note's off
+            std::map<int, int> offOfId;
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.type == EV_OFF && e.srcId >= 0 && ! offOfId.count (e.srcId)) offOfId[e.srcId] = i; }
+            std::vector<int> lineOn;
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.type == EV_ON && e.srcId >= 0 && offOfId.count (e.srcId)) lineOn.push_back (i); }
+            const double ov = L->overlapMs * beatsPerMs, gap = 8.0 * beatsPerMs;
+            for (size_t k = 1; k < lineOn.size(); ++k)
+            {
+                const auto& cur = ev[(size_t) lineOn[k]]; const auto& prv = ev[(size_t) lineOn[k - 1]];
+                auto& prvOff = ev[(size_t) offOfId[prv.srcId]];
+                if (cur.t - prv.t < 0.01 || prv.a == cur.a) continue;                  // played together / same key: other rules
+                if (driver::isLegatoArt (cur.art) && L->overlapMs > 0 && prvOff.t >= cur.t - 0.25)
+                { if (prvOff.t < cur.t + 0.8 * ov) { prvOff.t = cur.t + ov; ++rep.legatoOverlap; } }
+                else if (L->overlapLegato && ! driver::isLegatoArt (cur.art) && prvOff.t > cur.t - 1e-9)
+                { prvOff.t = std::max (prv.t + 0.01, cur.t - gap); ++rep.accidentalLegato; }
+            }
+        }
+
         // 3) every key-switch is down before its note (the note it was written for, by id)
         if (anyKs)
         {
             std::map<int, double> noteOn;
-            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.type == EV_ON && e.srcId >= 0 && ! noteOn.count (e.srcId)) noteOn[e.srcId] = e.t; }
-            const double lead = std::clamp (20.0 * beatsPerMs, 0.01, 0.08);
+            std::map<int, int> noteArt;
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.type == EV_ON && e.srcId >= 0 && ! noteOn.count (e.srcId)) { noteOn[e.srcId] = e.t; noteArt[e.srcId] = e.art; } }
+            const double lead = std::clamp ((L ? L->preRollMs : 20.0) * beatsPerMs, 0.002, 0.25);
             for (int i : idx)
             {
                 auto& e = ev[(size_t) i];
                 if (drop[(size_t) i] || ! e.ks || e.type != EV_ON || e.noteId < 0) continue;
                 auto it = noteOn.find (e.noteId);
                 if (it == noteOn.end() || e.t <= it->second + 1e-9) continue;
+                // v3.12: a key pressed WHILE its note sounds (EZbass F0 / G0 slide-outs) belongs after the note's start; it only has to be inside it
+                if (L && noteArt.count (e.noteId)) { const LibArt* la = libFind (*L, libResolve (*L, noteArt[e.noteId])); if (la && la->when == KW_During) continue; }
                 const double was = e.t;
                 e.t = std::max (0.0, it->second - lead); ++rep.ksLate;
                 // its note-off moves with it when it would now come before the press

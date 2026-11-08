@@ -99,6 +99,13 @@ public:
         addChildComponent (edOverlap);
         edRep.addItem ("No repetition key", 1); for (int n = 0; n < 128; ++n) edRep.addItem ("Repetition key " + noteName (n), n + 2);
         edRep.setTooltip ("Fast repeats of one note alternate with this key (no machine-gun retrigger)"); addChildComponent (edRep);
+        edPre.setRange (0, 100, 1); edPre.setTextValueSuffix (" ms"); edPre.setSliderStyle (juce::Slider::LinearHorizontal); edPre.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+        edPre.setTooltip ("How long before its note a key-switch goes down (never on the note's own tick). 20 ms suits most libraries."); addChildComponent (edPre);
+        edOvLeg.setTooltip ("Tick when the instrument plays ANY two overlapping notes as legato (EZbass, Ilya Efimov with auto legato on). Enoch then lets only the notes it "
+                            "means to join overlap; every other note ends a moment before the next one."); addChildComponent (edOvLeg);
+        edDetach.addItem ("No 'no legato' key", 1); for (int n = 0; n < 128; ++n) edDetach.addItem ("No legato key " + noteName (n), n + 2);
+        edDetach.setTooltip ("A key held while notes must sound together without legato (EZbass A-1 polyphony)"); addChildComponent (edDetach);
+        lPre.setFont (EnochLookAndFeel::fnt (10.5f, "SemiBold", 0.06f)); lPre.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); lPre.setText ("PRE-ROLL", juce::dontSendNotification); addChildComponent (lPre);
         for (auto* l : { &lTr, &lOv, &lMode }) { l->setFont (EnochLookAndFeel::fnt (10.5f, "SemiBold", 0.06f)); l->setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); addChildComponent (*l); }
         lTr.setText ("TRANSPOSE", juce::dontSendNotification); lOv.setText ("LEGATO OVERLAP", juce::dontSendNotification); lMode.setText ("MODE KEYS", juce::dontSendNotification);
         // v3.8: mode keys (sent once when playback starts), custom keys, paste a key list, test every key, start a new profile
@@ -260,6 +267,10 @@ public:
             addKeyBtn.setBounds (row2.removeFromRight (118).reduced (2, 1));
             lMode.setBounds (row2.removeFromLeft (80)); edMode.setBounds (row2.reduced (2, 1));
             er.removeFromTop (4);
+            auto row3 = er.removeFromTop (26);                                         // v3.12 performance settings
+            lPre.setBounds (row3.removeFromLeft (80)); edPre.setBounds (row3.removeFromLeft (220).reduced (2, 2));
+            edOvLeg.setBounds (row3.removeFromLeft (250).reduced (6, 1)); edDetach.setBounds (row3.removeFromLeft (220).reduced (2, 1));
+            er.removeFromTop (4);
             artView.setBounds (er);
             pasteBox.setBounds (er.withTrimmedBottom (30));
             auto pb = er.removeFromBottom (26);
@@ -275,6 +286,7 @@ private:
         int art = 0; bool shown = true, custom = false;
         juce::Label name; juce::TextEditor cname;           // Enoch's articulation name, or the custom key's own (editable) name
         juce::ComboBox key; juce::Slider vel; juce::ToggleButton hold; juce::TextButton learn { "Learn" }, test { "Test" }, remove { "x" };
+        juce::ComboBox when;                                 // v3.12: before the note / while the note sounds / the key is the sound
         juce::String label() const { return custom ? (cname.getText().trim().isNotEmpty() ? cname.getText().trim() : juce::String ("Custom key")) : name.getText(); }
     };
 
@@ -346,7 +358,10 @@ private:
         r.key.addItem ("-", 1); for (int n = 0; n < 128; ++n) r.key.addItem (noteName (n) + "  (" + juce::String (n) + ")", n + 2);
         r.vel.setRange (1, 127, 1); r.vel.setValue (100); r.vel.setSliderStyle (juce::Slider::LinearBar); r.vel.setTextBoxStyle (juce::Slider::TextBoxRight, false, 34, 18);
         r.vel.setTooltip ("Key-switch velocity (Ilya Efimov: on/off keys 101-127 = on, 1-100 = off; 'A / B (velo)' keys: low = A, high = B)");
-        r.hold.setButtonText ("hold"); r.hold.setTooltip ("Held while the note starts (slide, harmonic, mute keys)");
+        r.hold.setButtonText ("hold"); r.hold.setTooltip ("Held from before the note until it ends (legato, slide, harmonic, slap keys). Several notes in a row with the same held key keep it down through the run.");
+        r.when.addItem ("before note", 1); r.when.addItem ("during note", 2); r.when.addItem ("is the sound", 3); r.when.setSelectedId (1, juce::dontSendNotification);
+        r.when.setTooltip ("When the key goes down. Before note: a pre-roll before the note (most keys). During note: pressed while the note is held, e.g. EZbass F0 / G0 "
+                           "slide the held note down / up. Is the sound: the key plays the sound itself and no pitched note is sent, e.g. EZbass E0 ghost tap.");
         r.learn.setTooltip ("Press, then play the key-switch on your MIDI keyboard");
         r.test.setTooltip ("Send this key-switch and a test note on the part's channel");
         r.remove.setTooltip ("Remove this custom key");
@@ -357,7 +372,7 @@ private:
         r.remove.onClick = [this, rp] { juce::Component::SafePointer<RoutingPanel> self (this); juce::MessageManager::callAsync ([self, rp] { if (self != nullptr) self->removeRow (rp); }); };
         r.cname.setFont (EnochLookAndFeel::fnt (11.5f));
         for (juce::Component* c : { (juce::Component*) &r.name, (juce::Component*) &r.cname, (juce::Component*) &r.key, (juce::Component*) &r.vel, (juce::Component*) &r.hold,
-                                    (juce::Component*) &r.learn, (juce::Component*) &r.test, (juce::Component*) &r.remove })
+                                    (juce::Component*) &r.when, (juce::Component*) &r.learn, (juce::Component*) &r.test, (juce::Component*) &r.remove })
             artHolder.addChildComponent (c);
     }
     ArtRow* addCustomRow (const juce::String& name, int note, int vel, bool hold, int artNo = -1)
@@ -390,22 +405,25 @@ private:
         artHolder.setSize (w, juce::jmax (rowH, perCol * rowH + 4));
         for (auto* a : arts)
             for (juce::Component* c : { (juce::Component*) &a->name, (juce::Component*) &a->cname, (juce::Component*) &a->key, (juce::Component*) &a->vel, (juce::Component*) &a->hold,
-                                        (juce::Component*) &a->learn, (juce::Component*) &a->test, (juce::Component*) &a->remove }) c->setVisible (false);
+                                        (juce::Component*) &a->when, (juce::Component*) &a->learn, (juce::Component*) &a->test, (juce::Component*) &a->remove }) c->setVisible (false);
         for (int i = 0; i < vis.size(); ++i)
         {
             auto* a = vis[i];
             const int col = i < perCol ? 0 : 1, rowI = i < perCol ? i : i - perCol;
             auto line = juce::Rectangle<int> (col * colW, rowI * rowH, colW, rowH).reduced (4, 1);
-            if (a->custom) { a->cname.setBounds (line.removeFromLeft (150).reduced (1, 1)); a->remove.setBounds (line.removeFromRight (24).reduced (1, 1)); }
-            else a->name.setBounds (line.removeFromLeft (150));
-            a->key.setBounds (line.removeFromLeft (118).reduced (1, 0));
-            a->vel.setBounds (line.removeFromLeft (60).reduced (1, 1));
-            a->hold.setBounds (line.removeFromLeft (68));
-            a->learn.setBounds (line.removeFromLeft (54).reduced (1, 0));
-            a->test.setBounds (line.removeFromLeft (46).reduced (1, 0));
+            const double sc = juce::jlimit (0.7, 1.0, (colW - 8) / 552.0);
+            auto take = [&] (int w) { return line.removeFromLeft ((int) (w * sc)); };
+            if (a->custom) { a->cname.setBounds (take (116).reduced (1, 1)); a->remove.setBounds (line.removeFromRight (22).reduced (1, 1)); }
+            else a->name.setBounds (take (116));
+            a->key.setBounds (take (108).reduced (1, 0));
+            a->vel.setBounds (take (54).reduced (1, 1));
+            a->hold.setBounds (take (70));
+            a->when.setBounds (take (100).reduced (1, 0));
+            a->learn.setBounds (take (54).reduced (1, 0));
+            a->test.setBounds (take (46).reduced (1, 0));
             if (editing && ! pasting)
                 for (juce::Component* c : { (juce::Component*) (a->custom ? (juce::Component*) &a->cname : (juce::Component*) &a->name), (juce::Component*) &a->key, (juce::Component*) &a->vel,
-                                            (juce::Component*) &a->hold, (juce::Component*) &a->learn, (juce::Component*) &a->test })
+                                            (juce::Component*) &a->hold, (juce::Component*) &a->when, (juce::Component*) &a->learn, (juce::Component*) &a->test })
                     c->setVisible (true);
             if (editing && ! pasting && a->custom) a->remove.setVisible (true);
         }
@@ -418,7 +436,7 @@ private:
         for (auto* h : { &hPart, &hDest, &hCh, &hProf, &hProg, &hTr, &hPort, &hint, &status }) h->setVisible (! on);
         saveRig.setVisible (! on); loadRig.setVisible (! on); quickBox.setVisible (! on);
         for (juce::Component* c : { (juce::Component*) &edTitle, (juce::Component*) &edName, (juce::Component*) &edTr, (juce::Component*) &edOverlap, (juce::Component*) &edRep,
-                                    (juce::Component*) &lTr, (juce::Component*) &lOv, (juce::Component*) &lMode, (juce::Component*) &edMode, (juce::Component*) &addKeyBtn, (juce::Component*) &pasteBtn,
+                                    (juce::Component*) &lTr, (juce::Component*) &lOv, (juce::Component*) &lMode, (juce::Component*) &edMode, (juce::Component*) &edPre, (juce::Component*) &edOvLeg, (juce::Component*) &edDetach, (juce::Component*) &lPre, (juce::Component*) &addKeyBtn, (juce::Component*) &pasteBtn,
                                     (juce::Component*) &testAllBtn, (juce::Component*) &newBtn, (juce::Component*) &edSave, (juce::Component*) &edBack, (juce::Component*) &edStatus,
                                     (juce::Component*) &artView }) c->setVisible (on);
         for (juce::Component* c : { (juce::Component*) &pasteBox, (juce::Component*) &pasteOk, (juce::Component*) &pasteCancel }) c->setVisible (false);
@@ -455,10 +473,15 @@ private:
             a->key.setSelectedId (la && ! la->press.empty() ? la->press[0].note + 2 : 1, juce::dontSendNotification);
             a->vel.setValue (la && ! la->press.empty() ? la->press[0].vel : 100, juce::dontSendNotification);
             a->hold.setToggleState (la && la->hold, juce::dontSendNotification);
+            a->when.setSelectedId (la ? la->when + 1 : 1, juce::dontSendNotification);
         }
         for (auto& x : base.arts)
             if (enochsolo::isCustomArt (x.art))
-                addCustomRow (juce::String (x.name.empty() ? std::string ("Custom key") : x.name), x.press.empty() ? -1 : x.press[0].note, x.press.empty() ? 100 : x.press[0].vel, x.hold, x.art);
+                if (auto* cr = addCustomRow (juce::String (x.name.empty() ? std::string ("Custom key") : x.name), x.press.empty() ? -1 : x.press[0].note, x.press.empty() ? 100 : x.press[0].vel, x.hold, x.art))
+                    cr->when.setSelectedId (x.when + 1, juce::dontSendNotification);
+        edPre.setValue (base.preRollMs, juce::dontSendNotification);
+        edOvLeg.setToggleState (base.overlapLegato, juce::dontSendNotification);
+        edDetach.setSelectedId (base.detachKey < 0 ? 1 : base.detachKey + 2, juce::dontSendNotification);
         layoutArts();
     }
     void openEditor (int part)
@@ -613,14 +636,38 @@ private:
     }
     void testArt (ArtRow& a)
     {
+        // v3.12: each key is tested the way its technique works, so what you hear is what Enoch's MIDI will do
         const int ch = proc.getRoute (proc.previewSlot(), editPart).channel;
         const int tn = testNote();
-        std::vector<juce::MidiMessage> on, off;
-        if (a.key.getSelectedId() > 1) on.push_back (juce::MidiMessage::noteOn (ch, a.key.getSelectedId() - 2, (juce::uint8) a.vel.getValue()));
-        on.push_back (juce::MidiMessage::noteOn (ch, tn, (juce::uint8) 96));
-        if (a.key.getSelectedId() > 1) off.push_back (juce::MidiMessage::noteOff (ch, a.key.getSelectedId() - 2));
-        off.push_back (juce::MidiMessage::noteOff (ch, tn));
-        sendLater (on, 0); sendLater (off, 500);
+        const int key = a.key.getSelectedId() > 1 ? a.key.getSelectedId() - 2 : -1;
+        const auto vel = (juce::uint8) a.vel.getValue();
+        const int when = a.when.getSelectedId() - 1;
+        auto on = [&] (int n, juce::uint8 v) { return juce::MidiMessage::noteOn (ch, n, v); };
+        auto off = [&] (int n) { return juce::MidiMessage::noteOff (ch, n); };
+        const bool joined = ! a.custom && (a.art == enochsolo::A_Legato || a.art == enochsolo::A_HammerOn || a.art == enochsolo::A_PullOff
+                                           || a.art == enochsolo::A_Slide || a.art == enochsolo::A_Gliss);
+        if (key >= 0 && when == enochsolo::KW_Replace) { sendLater ({ on (key, vel) }, 0); sendLater ({ off (key) }, 150); return; }       // the key is the sound
+        if (key >= 0 && when == enochsolo::KW_During)                                                                                        // pressed while the note is held
+        {
+            sendLater ({ on (tn, 96) }, 0); sendLater ({ on (key, vel) }, 250); sendLater ({ off (key) }, 290); sendLater ({ off (tn) }, 800);
+            return;
+        }
+        if (joined)                                                                                                                          // a note, then a joined note
+        {
+            const int up = a.art == enochsolo::A_PullOff ? -2 : (a.art == enochsolo::A_Slide || a.art == enochsolo::A_Gliss ? 5 : 2);
+            sendLater ({ on (tn, 96) }, 0);
+            if (key >= 0) sendLater ({ on (key, vel) }, 230);
+            sendLater ({ on (tn + up, 96) }, 250); sendLater ({ off (tn) }, 275);
+            std::vector<juce::MidiMessage> end { off (tn + up) }; if (key >= 0) end.push_back (off (key));
+            sendLater (end, 800);
+            return;
+        }
+        std::vector<juce::MidiMessage> o, f;
+        if (key >= 0) o.push_back (on (key, vel));
+        sendLater (o, 0); sendLater ({ on (tn, 96) }, 20);
+        if (key >= 0) f.push_back (off (key));
+        f.push_back (off (tn));
+        sendLater (f, 520);
     }
     // ---- v3.8 Test all: every key of the profile in turn, a test note after each
     std::vector<ArtRow*> testQueue; int testPos = -1; juce::uint32 testToken = 0;
@@ -659,6 +706,7 @@ private:
         l.verify = 2; l.standard = false;
         l.transpose = edTr.getSelectedId() - 25;
         l.overlapMs = edOverlap.getValue();
+        l.preRollMs = edPre.getValue(); l.overlapLegato = edOvLeg.getToggleState(); l.detachKey = edDetach.getSelectedId() > 1 ? edDetach.getSelectedId() - 2 : -1;
         l.repKey = edRep.getSelectedId() > 1 ? edRep.getSelectedId() - 2 : -1;
         juce::String bad;
         l.init = parseModeKeys (edMode.getText(), bad);
@@ -670,6 +718,12 @@ private:
             if (! (a->shown || a->custom) || a->key.getSelectedId() <= 1) continue;
             enochsolo::LibArt la; la.art = a->art; la.hold = a->hold.getToggleState(); la.oneShot = la.hold;
             if (a->custom) la.name = a->label().toStdString();
+            // v3.12: when the key goes down; timing details kept from the original profile, else sensible defaults
+            la.when = juce::jlimit (0, 2, a->when.getSelectedId() - 1);
+            if (la.when != enochsolo::KW_Before) la.oneShot = true;
+            if (const auto* orig = enochsolo::libFind (base, a->art)) { la.atFrac = orig->atFrac; la.pressMs = orig->pressMs; }
+            if (la.pressMs <= 0 && la.when == enochsolo::KW_During) la.pressMs = 40;
+            if (la.pressMs <= 0 && la.when == enochsolo::KW_Replace) la.pressMs = 60;
             la.press.push_back ({ a->key.getSelectedId() - 2, (int) a->vel.getValue() });
             // keep the extra presses of the original (e.g. Ilya Efimov's X-note off key) after the first one
             if (! a->custom) if (const auto* orig = enochsolo::libFind (base, a->art)) for (size_t k = 1; k < orig->press.size(); ++k) la.press.push_back (orig->press[k]);
@@ -810,6 +864,7 @@ private:
     bool pasting = false;
     juce::ComboBox edTr, edRep;
     juce::Slider edOverlap;
+    juce::Slider edPre; juce::ToggleButton edOvLeg { "Overlapping notes play legato" }; juce::ComboBox edDetach; juce::Label lPre;   // v3.12
     juce::OwnedArray<ArtRow> arts;
     juce::TextButton edSave { "Save profile" }, edBack { "Back" };
 };
