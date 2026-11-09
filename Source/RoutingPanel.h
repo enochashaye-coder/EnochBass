@@ -133,6 +133,30 @@ public:
         impBtn.onClick = [this] { importProfile(); };
         expBtn.onClick = [this] { exportProfile(); };
         for (auto* b : { &addKeyBtn, &pasteBtn, &testAllBtn, &newBtn, &impBtn, &expBtn }) addChildComponent (*b);
+        // v3.15 how the instrument is set up: bend range, pedals, breath, reach, playing style, velocity layers, other controllers; Duplicate
+        lPlay.setFont (EnochLookAndFeel::fnt (10.5f, "SemiBold", 0.06f)); lPlay.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); lPlay.setText ("PLAYER", juce::dontSendNotification);
+        lZones.setFont (EnochLookAndFeel::fnt (10.5f, "SemiBold", 0.06f)); lZones.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); lZones.setText ("VEL LAYERS", juce::dontSendNotification);
+        lCCs.setFont (EnochLookAndFeel::fnt (10.5f, "SemiBold", 0.06f)); lCCs.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); lCCs.setText ("OTHER CCs", juce::dontSendNotification);
+        edBend.addItem ("Bend: plugin's range", 1); for (int k = 1; k <= 24; ++k) edBend.addItem ("Bend range " + juce::String (k) + " st", k + 1);
+        edBend.setTooltip ("The pitch-bend range the instrument itself is set to (semitones). Enoch scales every bend to it, so a one-semitone bend sounds as one semitone.");
+        edSost.setTooltip ("The instrument reads the sostenuto pedal (CC66): long bass notes are held by it while the sustain pedal changes with the chords above.");
+        edBreath.addItem ("No breath CC", 1); for (int c = 0; c < 128; ++c) edBreath.addItem ("Breath CC " + juce::String (c), c + 2);
+        edBreath.setTooltip ("Also send the expression curve on this controller (breath controllers use CC2). For instruments that listen to breath.");
+        edBShape.setTooltip ("Shape the expression like a breath: each phrase swells in from a rest and tapers away into the next (SWAM winds).");
+        edReach.addItem ("Reach: default", 1); for (int k = 5; k <= 30; ++k) edReach.addItem ("Reach " + juce::String (k) + " st", k + 1);
+        edReach.setTooltip ("Pianos: the widest one-hand reach (16 = a 10th); the MIDI check notes chords no hand can play. Basses / guitars: the widest jump between "
+                            "two notes (default 19); the MIDI check notes jumps a fretting hand could not make.");
+        edStyle.addItem ("Playing style: any", 1); edStyle.addItem ("Playing style: finger", 2); edStyle.addItem ("Playing style: pick", 3); edStyle.addItem ("Playing style: slap", 4);
+        edStyle.setTooltip ("Basses: the Playing Style the instrument is set to (EZbass: Finger, Pick or Slap). Finger and pick cannot slap or pop: those notes become accents.");
+        edZones.setTextToShowWhenEmpty ("e.g. 40, 80, 110  (first velocity of each layer)", EnochLookAndFeel::dim());
+        edZones.setTooltip ("The velocity where each dynamic layer of the instrument starts. Played velocities keep clear of an edge, so a note does not flip between two samples.");
+        edCCs.setTextToShowWhenEmpty ("e.g. growl 20, flutter 21, bow 22, position 23", EnochLookAndFeel::dim());
+        edCCs.setTooltip ("Controllers from the instrument's own MIDI mapping list: growl and flutter (winds), bow (pressure) and position (bowed strings).");
+        dupBtn.setTooltip ("Make a copy of this profile under a new name (the original stays as it is). Change what you like, then Save profile.");
+        dupBtn.onClick = [this] { duplicateProfile(); };
+        for (juce::Component* c : { (juce::Component*) &lPlay, (juce::Component*) &lZones, (juce::Component*) &lCCs, (juce::Component*) &edBend, (juce::Component*) &edSost,
+                                    (juce::Component*) &edBreath, (juce::Component*) &edBShape, (juce::Component*) &edReach, (juce::Component*) &edStyle, (juce::Component*) &edZones,
+                                    (juce::Component*) &edCCs, (juce::Component*) &dupBtn }) addChildComponent (*c);
         artView.setViewedComponent (&artHolder, false); artView.setScrollBarsShown (true, false); addChildComponent (artView);
         for (auto a : editArts())
         {
@@ -174,6 +198,19 @@ public:
     juce::String editorStatus() const { return edStatus.getText(); }
     bool testSave (const juce::String& name, const juce::String& modeKeys) { edName.setText (name, false); edMode.setText (modeKeys, false); saveEditor(); return ! editing; }
     juce::String routeStatus() const { return status.getText(); }
+    /** v3.15 test hooks: open the editor on part 0, set the player row, read the profile back as text */
+    void testOpen (int part) { openEditor (part); }
+    void testPlayer (int bend, bool sost, int breath, bool shape, int reach, int style, const juce::String& zones, const juce::String& ccs)
+    {
+        edBend.setSelectedId (bend > 0 ? bend + 1 : 1, juce::dontSendNotification); edSost.setToggleState (sost, juce::dontSendNotification);
+        edBreath.setSelectedId (breath >= 0 ? breath + 2 : 1, juce::dontSendNotification); edBShape.setToggleState (shape, juce::dontSendNotification);
+        edReach.setSelectedId (reach >= 5 ? reach + 1 : 1, juce::dontSendNotification); edStyle.setSelectedId (style + 1, juce::dontSendNotification);
+        edZones.setText (zones, false); edCCs.setText (ccs, false);
+    }
+    juce::String testEditorText() { enochsolo::Library l; juce::String err; if (! editorToLibrary (l, err)) return "ERR " + err; return juce::String (enochsolo::libraryToText (l)); }
+    void testDuplicate() { duplicateProfile(); }
+    juce::String testEditorName() const { return edName.getText(); }
+    bool editorOpen() const { return editing; }
 
     void refresh()
     {
@@ -286,6 +323,20 @@ public:
             expBtn.setBounds (row3.removeFromRight (84).reduced (2, 1));
             impBtn.setBounds (row3.removeFromRight (84).reduced (2, 1));
             edOvLeg.setBounds (row3.removeFromLeft (250).reduced (6, 1)); edDetach.setBounds (row3.removeFromLeft (220).reduced (2, 1));
+            er.removeFromTop (4);
+            auto row4 = er.removeFromTop (26);                                         // v3.15 player set-up
+            lPlay.setBounds (row4.removeFromLeft (80));
+            edBend.setBounds (row4.removeFromLeft (170).reduced (2, 1));
+            edSost.setBounds (row4.removeFromLeft (150).reduced (6, 1));
+            edBreath.setBounds (row4.removeFromLeft (130).reduced (2, 1));
+            edBShape.setBounds (row4.removeFromLeft (140).reduced (6, 1));
+            edReach.setBounds (row4.removeFromLeft (130).reduced (2, 1));
+            edStyle.setBounds (row4.removeFromLeft (170).reduced (2, 1));
+            er.removeFromTop (4);
+            auto row5 = er.removeFromTop (26);
+            dupBtn.setBounds (row5.removeFromRight (100).reduced (2, 1));
+            lZones.setBounds (row5.removeFromLeft (80)); edZones.setBounds (row5.removeFromLeft (260).reduced (2, 1));
+            lCCs.setBounds (row5.removeFromLeft (80).withTrimmedLeft (8)); edCCs.setBounds (row5.reduced (2, 1));
             er.removeFromTop (4);
             artView.setBounds (er);
             pasteBox.setBounds (er.withTrimmedBottom (30));
@@ -474,7 +525,10 @@ private:
         for (juce::Component* c : { (juce::Component*) &edTitle, (juce::Component*) &edName, (juce::Component*) &edTr, (juce::Component*) &edOverlap, (juce::Component*) &edRep,
                                     (juce::Component*) &lTr, (juce::Component*) &lOv, (juce::Component*) &lMode, (juce::Component*) &edMode, (juce::Component*) &edPre, (juce::Component*) &edOvLeg, (juce::Component*) &edDetach, (juce::Component*) &lPre, (juce::Component*) &addKeyBtn, (juce::Component*) &pasteBtn,
                                     (juce::Component*) &testAllBtn, (juce::Component*) &newBtn, (juce::Component*) &impBtn, (juce::Component*) &expBtn, (juce::Component*) &edSave, (juce::Component*) &edBack, (juce::Component*) &edStatus,
-                                    (juce::Component*) &artView }) c->setVisible (on);
+                                    (juce::Component*) &artView, (juce::Component*) &lPlay, (juce::Component*) &lZones, (juce::Component*) &lCCs, (juce::Component*) &edBend,
+                                    (juce::Component*) &edSost, (juce::Component*) &edBreath, (juce::Component*) &edBShape, (juce::Component*) &edReach, (juce::Component*) &edZones,
+                                    (juce::Component*) &edCCs, (juce::Component*) &dupBtn }) c->setVisible (on);
+        edStyle.setVisible (on && enochsolo::instIsBass (base.inst));
         for (juce::Component* c : { (juce::Component*) &pasteBox, (juce::Component*) &pasteOk, (juce::Component*) &pasteCancel }) c->setVisible (false);
         armed = nullptr;
         layoutArts();
@@ -518,6 +572,23 @@ private:
         edPre.setValue (base.preRollMs, juce::dontSendNotification);
         edOvLeg.setToggleState (base.overlapLegato, juce::dontSendNotification);
         edDetach.setSelectedId (base.detachKey < 0 ? 1 : base.detachKey + 2, juce::dontSendNotification);
+        // v3.15 player set-up
+        edBend.setSelectedId (base.pbRange > 0 ? juce::jlimit (1, 24, base.pbRange) + 1 : 1, juce::dontSendNotification);
+        edSost.setToggleState (base.sostenutoCC >= 0, juce::dontSendNotification);
+        edBreath.setSelectedId (base.breathCC >= 0 ? base.breathCC + 2 : 1, juce::dontSendNotification);
+        edBShape.setToggleState (base.breathShape, juce::dontSendNotification);
+        edReach.setSelectedId (base.reach >= 5 ? juce::jlimit (5, 30, base.reach) + 1 : 1, juce::dontSendNotification);
+        edStyle.setSelectedId (juce::jlimit (0, 3, base.playStyle) + 1, juce::dontSendNotification);
+        edStyle.setVisible (editing && enochsolo::instIsBass (base.inst));
+        { juce::String z; for (size_t i = 0; i < base.velZones.size(); ++i) z << (i ? ", " : "") << base.velZones[i]; edZones.setText (z, false); }
+        {
+            juce::StringArray c;
+            if (base.growlCC >= 0) c.add ("growl " + juce::String (base.growlCC));
+            if (base.flutterCC >= 0) c.add ("flutter " + juce::String (base.flutterCC));
+            if (base.bowCC >= 0) c.add ("bow " + juce::String (base.bowCC));
+            if (base.bowPosCC >= 0) c.add ("position " + juce::String (base.bowPosCC));
+            edCCs.setText (c.joinIntoString (", "), false);
+        }
         layoutArts();
     }
     void openEditor (int part)
@@ -745,6 +816,32 @@ private:
         l.overlapMs = edOverlap.getValue();
         l.preRollMs = edPre.getValue(); l.overlapLegato = edOvLeg.getToggleState(); l.detachKey = edDetach.getSelectedId() > 1 ? edDetach.getSelectedId() - 2 : -1;
         l.repKey = edRep.getSelectedId() > 1 ? edRep.getSelectedId() - 2 : -1;
+        // v3.15 player set-up
+        l.pbRange = edBend.getSelectedId() > 1 ? edBend.getSelectedId() - 1 : 0;
+        l.sostenutoCC = edSost.getToggleState() ? 66 : -1;
+        l.breathCC = edBreath.getSelectedId() > 1 ? edBreath.getSelectedId() - 2 : -1;
+        l.breathShape = edBShape.getToggleState();
+        l.reach = edReach.getSelectedId() > 1 ? edReach.getSelectedId() - 1 : 0;
+        l.playStyle = enochsolo::instIsBass (l.inst) ? juce::jlimit (0, 3, edStyle.getSelectedId() - 1) : 0;
+        l.velZones.clear();
+        for (auto& t : juce::StringArray::fromTokens (edZones.getText(), ", ;", ""))
+        {
+            if (t.trim().isEmpty()) continue;
+            if (! t.trim().containsOnly ("0123456789")) { err = "Velocity layers: could not read '" + t + "'. Use numbers like 40, 80, 110."; return false; }
+            l.velZones.push_back (juce::jlimit (2, 127, t.getIntValue()));
+        }
+        std::sort (l.velZones.begin(), l.velZones.end());
+        l.growlCC = l.flutterCC = l.bowCC = l.bowPosCC = -1;
+        for (auto& part : juce::StringArray::fromTokens (edCCs.getText(), ",;", ""))
+        {
+            auto w = juce::StringArray::fromTokens (part.trim(), " =:", ""); w.removeEmptyStrings();
+            if (w.isEmpty()) continue;
+            const auto name = w[0].toLowerCase(); const int num = w.size() > 1 && w[1].containsOnly ("0123456789") ? juce::jlimit (0, 127, w[1].getIntValue()) : -1;
+            int* dst = name.startsWith ("growl") ? &l.growlCC : name.startsWith ("flutter") ? &l.flutterCC : name.startsWith ("bow") || name.startsWith ("pressure") ? &l.bowCC
+                     : name.startsWith ("pos") ? &l.bowPosCC : nullptr;
+            if (dst == nullptr || num < 0) { err = "Other CCs: could not read '" + part.trim() + "'. Use growl 20, flutter 21, bow 22, position 23."; return false; }
+            *dst = num;
+        }
         juce::String bad;
         l.init = parseModeKeys (edMode.getText(), bad);
         if (bad.isNotEmpty()) { err = "Mode keys: could not read '" + bad + "'. Use names like G0@120 or numbers like 31@120."; return false; }
@@ -769,6 +866,21 @@ private:
         l.arts = kept;
         l.noKeySwitches = l.arts.empty() && l.init.empty();
         return true;
+    }
+    /** v3.15: a copy of the profile in the editor under a new name; the original stays as it is until you save over it by name */
+    void duplicateProfile()
+    {
+        enochsolo::Library l; juce::String err;
+        if (! editorToLibrary (l, err)) { edStatus.setText (err, juce::dontSendNotification); return; }
+        auto nm = juce::String (l.name).upToLastOccurrenceOf (" (mine)", false, false);
+        if (nm.isEmpty()) nm = juce::String (l.name);
+        juce::String cand = nm + " copy"; int k = 2;
+        auto taken = [this] (const juce::String& n) { for (auto& x : proc.getLibraries (juce::jmin (proc.previewSlot(), (int) enochsolo::I_Count - 1))) if (juce::String (x->name) == n) return true; return false; };
+        while (taken (cand)) cand = nm + " copy " + juce::String (k++);
+        l.name = cand.toStdString(); l.verify = 2;
+        loadIntoEditor (l, base.inst, editPart);
+        edName.grabKeyboardFocus();
+        edStatus.setText ("Duplicated as '" + cand + "'. Rename it if you like, change what you need, then Save profile. The original is unchanged.", juce::dontSendNotification);
     }
     void saveEditor()
     {
@@ -955,6 +1067,8 @@ private:
     juce::ComboBox edTr, edRep;
     juce::Slider edOverlap;
     juce::Slider edPre; juce::ToggleButton edOvLeg { "Overlapping notes play legato" }; juce::ComboBox edDetach; juce::Label lPre;   // v3.12
+    juce::Label lPlay, lZones, lCCs; juce::ComboBox edBend, edBreath, edReach, edStyle;                                             // v3.15
+    juce::ToggleButton edSost { "Sostenuto (CC66)" }, edBShape { "Breath shape" }; juce::TextEditor edZones, edCCs; juce::TextButton dupBtn { "Duplicate" };
     juce::OwnedArray<ArtRow> arts;
     juce::TextButton edSave { "Save profile" }, edBack { "Back" };
 };

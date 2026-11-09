@@ -27,10 +27,24 @@ struct Report
     int legatoOverlap = 0, accidentalLegato = 0, doubled = 0;      // v3.12: the techniques' own rules
     int ksVel = 0, ksMissing = 0;                                     // v3.14: key velocity as the profile says, held key under every joined note
     int wideJoin = 0;                                                 // v3.14: notice only: a legato wider than an octave (kept as you wrote it)
+    int stretch = 0, fastJump = 0, slideShort = 0, ghostBeat = 0;    // v3.15: notices only (kept as you wrote them): a piano chord wider than a hand,
+                                                                      // a bass / guitar jump too far for the time it has, a slide too short to hear,
+                                                                      // a ghost note on beat 1 (or the middle of the bar), where the groove needs a real note
+    std::string notices() const
+    {
+        std::string t;
+        auto add = [&] (int n, const std::string& what) { if (n > 0) t += "  Note: " + std::to_string (n) + " " + what + "."; };
+        add (wideJoin, "legato jump(s) wider than an octave; most instruments cannot slur that far");
+        add (stretch, "piano chord(s) wider than one hand can reach (neither hand can play them as written)");
+        add (fastJump, "jump(s) too far for the fretting hand in the time between the notes");
+        add (slideShort, "slide(s) too short to be heard (under 80 ms)");
+        add (ghostBeat, "ghost note(s) on a main beat (beat 1 or the middle of the bar), where the groove usually wants a real note");
+        return t;
+    }
     int repaired() const { return ksUnknown + ksLate + ksClash + onKey + outOfRange + stuck + orphanOff + retrigger + afterEnd + legatoOverlap + accidentalLegato + doubled + ksVel + ksMissing; }
     std::string text() const
     {
-        const std::string note = wideJoin > 0 ? "  Note: " + std::to_string (wideJoin) + " legato jump(s) wider than an octave; most instruments cannot slur that far." : std::string();
+        const std::string note = notices();
         if (repaired() == 0) return "MIDI check: OK" + note;
         std::string t = "MIDI check: repaired " + std::to_string (repaired()) + " (";
         bool first = true;
@@ -414,6 +428,80 @@ inline Report repairOnce (Pattern& p)
     return rep;
 }
 
+/** v3.15: playability notices on the final file. Nothing is changed: these are things a player could not (or would not) do,
+    shown under DRAG MIDI so you can decide. Uses the part's profile: hand_span (pianos), max_jump (basses / guitars), both stored as reach. */
+inline void playability (const Pattern& p, Report& rep)
+{
+    const double beatsPerMs = std::max (20.0, p.s.bpm) / 60000.0;
+    const double bar = std::max (0.25, p.barBeats);
+    for (int track = 0; track < 3; ++track)
+    {
+        const Library* L = nullptr;
+        if (p.s.routed) { const auto& rc = p.s.routes[track]; L = rc.lib ? rc.lib.get() : (track == 0 ? p.s.lib.get() : nullptr); }
+        else if (track == 0) L = p.s.lib.get();
+        const int inst = track == 2 ? -1 : (L ? L->inst : p.s.instrument);
+        struct N { double t, len; int pitch, art; };
+        std::vector<N> ns; std::set<int> ghostIds;
+        std::map<int, size_t> openOf;    // srcId -> index in ns
+        for (auto& e : p.events)
+        {
+            if (e.track != track) continue;
+            if (e.type == EV_ON && e.art == A_Ghost)
+            {
+                const int id = e.ks ? e.noteId : e.srcId;
+                if (id >= 0 && ! ghostIds.count (id))
+                {
+                    ghostIds.insert (id);
+                    const double pos = std::fmod (e.t + 1e-6, bar);
+                    const bool even = std::fmod (bar, 2.0) < 1e-6 && bar >= 4.0;
+                    if (pos < 0.02 + 1e-6 || (even && std::abs (pos - bar / 2) < 0.02)) ++rep.ghostBeat;
+                }
+            }
+            if (e.ks || e.srcId < 0) continue;
+            if (e.type == EV_ON) { openOf[e.srcId] = ns.size(); ns.push_back ({ e.t, 0.0, e.a, e.art }); }
+            else if (e.type == EV_OFF) { auto it = openOf.find (e.srcId); if (it != openOf.end()) { ns[it->second].len = e.t - ns[it->second].t; openOf.erase (it); } }
+        }
+        std::stable_sort (ns.begin(), ns.end(), [] (const N& a, const N& b) { return a.t < b.t; });
+        // slides: the slide must last long enough to be heard
+        for (auto& n : ns) if ((n.art == A_Slide || n.art == A_Gliss) && n.len > 0 && n.len / beatsPerMs < 80.0) ++rep.slideShort;
+        if (inst == I_Piano)
+        {
+            const int span = (L && L->reach > 0) ? L->reach : 0;
+            if (span <= 0) continue;
+            for (size_t i = 0; i < ns.size();)
+            {
+                size_t j = i; std::vector<int> ch;
+                while (j < ns.size() && ns[j].t - ns[i].t < 0.02) ch.push_back (ns[j++].pitch);
+                std::sort (ch.begin(), ch.end());
+                if (ch.size() >= 2 && ch.back() - ch.front() > span)
+                {
+                    // two hands: split at the widest gap; each hand must reach its own notes
+                    size_t cut = 1; int gap = -1;
+                    for (size_t k = 1; k < ch.size(); ++k) if (ch[k] - ch[k - 1] > gap) { gap = ch[k] - ch[k - 1]; cut = k; }
+                    if (ch[cut - 1] - ch.front() > span || ch.back() - ch[cut] > span) ++rep.stretch;
+                }
+                i = j;
+            }
+        }
+        else if (instIsBass (inst) || inst == I_Guitar)
+        {
+            const int maxJump = (L && L->reach > 0) ? L->reach : 19;
+            const N* prev = nullptr;
+            for (auto& n : ns)
+            {
+                const bool sequential = prev && n.t - prev->t > 1e-6 && (prev->t + prev->len - n.t) / beatsPerMs < 60.0;   // not a strum / chord
+                if (sequential)
+                {
+                    const double gapMs = (n.t - prev->t) / beatsPerMs;
+                    // a shift wider than the reach needs a moment (250 ms); more than an octave in under ~90 ms is past what a fretting hand can do
+                    if ((std::abs (n.pitch - prev->pitch) > maxJump && gapMs < 250.0) || (std::abs (n.pitch - prev->pitch) > 12 && gapMs < 90.0)) ++rep.fastJump;
+                }
+                prev = &n;
+            }
+        }
+    }
+}
+
 /** check and repair a pattern's events in place (call on a copy of the pattern that is about to be written).
     v3.14: one repair can make room for another (a stuck note given its off can now overlap the next note), so the check runs
     again until a pass finds nothing (at most three passes); the report adds up what every pass fixed */
@@ -429,6 +517,7 @@ inline Report repair (Pattern& p)
         rep.legatoOverlap += r.legatoOverlap; rep.accidentalLegato += r.accidentalLegato; rep.doubled += r.doubled; rep.ksVel += r.ksVel; rep.ksMissing += r.ksMissing;
     }
     { Pattern q = p; rep.wideJoin = repairOnce (q).wideJoin; }      // notices describe the final file
+    playability (p, rep);
     return rep;
 }
 } // namespace midicheck

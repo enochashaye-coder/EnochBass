@@ -70,7 +70,19 @@ struct Library
                                   // therefore never overlap the next note; only notes meant to be joined do
     int breathKey = -1, breathVel = 45;   // v3.14.1: a key whose sound is a breath (VHorns A1), pressed before a phrase that follows a rest
     int detachKey = -1;           // held while notes must sound together without legato (EZbass A-1 "polyphony")
+    // ---- v3.15 / v2.15 library-aware performance (all optional; defaults change nothing)
+    int pbRange = 0;              // the pitch-bend range the instrument is set to, in semitones (0 = the plugin's own Bend Range)
+    int sostenutoCC = -1;         // pianos: sostenuto pedal (66): holds the bass note while the sustain pedal changes with the chords
+    int breathCC = -1;            // breath-driven instruments: the expression curve is also sent on this controller (breath controllers: CC2)
+    bool breathShape = false;     // expression shaped like a breath: each phrase swells in from a rest and tapers into the next one
+    std::vector<int> velZones;    // the first velocity of each dynamic layer (above the lowest): played velocities keep clear of an edge
+    int playStyle = 0;            // basses: the Playing Style the instrument is set to (0 any, 1 finger, 2 pick, 3 slap): which techniques it plays
+    int reach = 0;                // pianos: widest one-hand reach; basses / guitars: widest jump between notes (semitones; 0 = default)
+    int growlCC = -1, flutterCC = -1;   // winds: controllers for growl and flutter tongue (from the instrument's MIDI mapping list)
+    int bowCC = -1, bowPosCC = -1;      // bowed strings: bow pressure and bow position controllers
 };
+inline bool instIsBass (int i) { (void) i; return i == I_Bass; }
+inline const char* playStyleName (int s) { static const char* n[] = { "any", "finger", "pick", "slap" }; return n[std::clamp (s, 0, 3)]; }
 
 inline const LibArt* libFind (const Library& l, int art)
 {
@@ -81,6 +93,8 @@ inline const LibArt* libFind (const Library& l, int art)
 /** the articulation of this library that stands in for `art` (what the library can actually do) */
 inline int libResolve (const Library& l, int art)
 {
+    // v2.15: a bass set to finger or pick playing cannot slap or pop: those become accents (or plain notes)
+    if ((l.playStyle == 1 || l.playStyle == 2) && (art == A_Slap || art == A_Pop)) return libFind (l, A_Marcato) ? (int) A_Marcato : (int) A_Sustain;
     if (libFind (l, art)) return art;
     if (art >= (int) A_Count) return A_Sustain;           // a custom key this profile does not have
     // v2.10: pop -> the profile's own "Pop" key, else its slap key; slide out (fall) -> its slide-down / gliss key; dead mute -> its mute
@@ -262,7 +276,9 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
     {
         Library m; m.name = "SWAM Saxophones (Audio Modeling)"; m.maker = "Audio Modeling"; m.inst = I_Sax; m.verify = 1; m.noKeySwitches = true;
         m.ccExpr = 11; m.ccVib = 1;
-        m.note = "Controller-driven: no key-switch notes are written. Expression CC11 (SWAM default), vibrato CC1 (map vibrato depth to the mod wheel).";
+        m.breathShape = true;
+        m.note = "Controller-driven: no key-switch notes are written. Expression CC11 (SWAM default) shaped like a breath (each phrase swells in and tapers off), "
+                 "vibrato CC1 (map vibrato depth to the mod wheel). For growl / flutter, enter the controllers from SWAM's MIDI Mapping list in Edit profile.";
         m.source = "SWAM knowledge base: default expression controller CC11";
         add (m);
         Library h; h.name = "VHorns Saxophones (AcousticSamples, UVI Falcon / Workstation)"; h.maker = "AcousticSamples"; h.inst = I_Sax; h.verify = 1;
@@ -289,7 +305,8 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
         Library m; m.name = "SWAM Trumpet (Audio Modeling)"; m.maker = "Audio Modeling"; m.inst = I_Trumpet; m.verify = 1;
         m.arts = { la (A_Sustain, { { 27, 30 } }), la (A_Legato, { { 27, 110 } }) };    // D#1 (note 27) Legato Priority: low = off, high = on
         m.ccExpr = 11; m.ccVib = 1;
-        m.note = "Legato Priority key (note 27) on / off, expression CC11, vibrato on the mod wheel. Fall (25) and Doit (26) are gestures: play them by hand.";
+        m.breathShape = true;
+        m.note = "Legato Priority key (note 27) on / off, expression CC11 shaped like a breath, vibrato on the mod wheel. Fall (25) and Doit (26) are gestures: play them by hand.";
         m.source = "SWAM Solo Brass manual v3.5.0 (key-switch table)";
         add (m);
     }
@@ -297,7 +314,8 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
     {
         Library m; m.name = "SWAM Violin (Audio Modeling)"; m.maker = "Audio Modeling"; m.inst = I_Violin; m.verify = 1; m.noKeySwitches = true;
         m.ccExpr = 11; m.ccVib = 1;
-        m.note = "Controller-driven: no key-switch notes are written. Expression CC11, vibrato CC1 (SWAM defaults).";
+        m.note = "Controller-driven: no key-switch notes are written. Expression CC11, vibrato CC1 (SWAM defaults). For bow pressure / position, "
+                 "enter the controllers from SWAM's MIDI Mapping list in Edit profile.";
         m.source = "SWAM Solo Strings manual: default controllers";
         add (m);
         Library sp; sp.name = "Spitfire Solo Violin"; sp.maker = "Spitfire Audio"; sp.inst = I_Violin; sp.verify = 1; sp.noKeySwitches = true;
@@ -309,7 +327,9 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
     else if (inst == I_Piano)
     {
         Library m; m.name = "Piano without key-switches (Pianoteq, Keyscape, EZkeys, Noire...)"; m.maker = ""; m.inst = I_Piano; m.verify = 1; m.noKeySwitches = true;
-        m.note = "Plain piano: no key-switch notes are written, only notes and the sustain pedal (CC64).";
+        m.sostenutoCC = 66; m.reach = 16;
+        m.note = "Plain piano: no key-switch notes are written, only notes, the sustain pedal (CC64) and the sostenuto pedal (CC66) under long bass notes. "
+                 "The MIDI check notes chords wider than a hand (a 10th).";
         m.source = "standard piano behaviour";
         add (m);
     }
@@ -432,6 +452,9 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
       custom = FX glissando: 32@100 latch press=40 fx=35-74 (v3.14: a mode key; the next note's key switches it off; fx = the keys with effects)
       preroll_ms = 20   overlap_is_legato = 1   detach_key = 21   (v3.12 performance settings)
       breath_key = 45@45   vibrato_cc = -1   (v3.14.1: a breath sound before phrases; -1 = no vibrato controller)
+      pitchbend_range = 12   sostenuto_cc = 66   breath_cc = 2   breath_shape = 1   vel_zones = 40, 80, 110   (v3.15 performance)
+      play_style = finger|pick|slap   hand_span = 16 (pianos)   max_jump = 19 (basses, guitars)
+      growl_cc = 20   flutter_cc = 21   bow_pressure_cc = 22   bow_position_cc = 23   (use the numbers in your instrument's MIDI mapping list)
     Articulation names are the ones shown in Enoch Bass (Sustain, Legato, Staccato, Marcato, Ghost, PalmMute, HammerOn, PullOff, Slide, Bend, Vibrato,
     Harmonic, Growl, Flutter, Fall, Doit, Scoop, Subtone, Shake, Trill, Tremolo, Pizzicato, Gliss, ColLegno, Arpeggio, Mute, Strum). */
 inline int articulationFromName (std::string s)
@@ -495,6 +518,26 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
         else if (key == "vel_max") l.velMax = std::clamp (std::atoi (val.c_str()), 1, 127);
         else if (key == "vel_curve") l.velGamma = std::clamp (std::atof (val.c_str()), 0.2, 5.0);
         else if (key == "half_pedal") l.halfPedal = std::atoi (val.c_str()) != 0;
+        else if (key == "pitchbend_range" || key == "bend_range") l.pbRange = std::clamp (std::atoi (val.c_str()), 0, 48);
+        else if (key == "sostenuto_cc") l.sostenutoCC = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "breath_cc") l.breathCC = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "breath_shape") l.breathShape = std::atoi (val.c_str()) != 0;
+        else if (key == "growl_cc") l.growlCC = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "flutter_cc") l.flutterCC = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "bow_pressure_cc") l.bowCC = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "bow_position_cc") l.bowPosCC = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "hand_span" || key == "max_jump" || key == "reach") l.reach = std::clamp (std::atoi (val.c_str()), 0, 48);
+        else if (key == "play_style")
+        {
+            std::string v; for (char c : val) v += (char) std::tolower ((unsigned char) c);
+            l.playStyle = 0; for (int k = 1; k < 4; ++k) if (v.find (playStyleName (k)) != std::string::npos) l.playStyle = k;
+        }
+        else if (key == "vel_zones")
+        {
+            l.velZones.clear(); std::istringstream ps (val); std::string tok;
+            while (std::getline (ps, tok, ',')) { tok = trim (tok); if (! tok.empty() && std::isdigit ((unsigned char) tok[0])) l.velZones.push_back (std::clamp (std::atoi (tok.c_str()), 2, 127)); }
+            std::sort (l.velZones.begin(), l.velZones.end());
+        }
         else if (key == "max_fret") l.maxFret = std::clamp (std::atoi (val.c_str()), 5, 36);
         else if (key == "init" || key == "tuning" || key == "string_keys")
         {
@@ -576,6 +619,17 @@ inline std::string libraryToText (const Library& l)
     if (l.velGamma != 1.0) o << "vel_curve = " << l.velGamma << "\n";
     if (l.halfPedal) o << "half_pedal = 1\n";
     if (l.maxFret != 22) o << "max_fret = " << l.maxFret << "\n";
+    if (l.pbRange > 0) o << "pitchbend_range = " << l.pbRange << "\n";
+    if (l.sostenutoCC >= 0) o << "sostenuto_cc = " << l.sostenutoCC << "\n";
+    if (l.breathCC >= 0) o << "breath_cc = " << l.breathCC << "\n";
+    if (l.breathShape) o << "breath_shape = 1\n";
+    if (l.growlCC >= 0) o << "growl_cc = " << l.growlCC << "\n";
+    if (l.flutterCC >= 0) o << "flutter_cc = " << l.flutterCC << "\n";
+    if (l.bowCC >= 0) o << "bow_pressure_cc = " << l.bowCC << "\n";
+    if (l.bowPosCC >= 0) o << "bow_position_cc = " << l.bowPosCC << "\n";
+    if (l.reach > 0) o << (l.inst == I_Piano ? "hand_span = " : "max_jump = ") << l.reach << "\n";
+    if (l.playStyle > 0) o << "play_style = " << playStyleName (l.playStyle) << "\n";
+    if (! l.velZones.empty()) { o << "vel_zones = "; for (size_t i = 0; i < l.velZones.size(); ++i) o << (i ? ", " : "") << l.velZones[i]; o << "\n"; }
     auto list = [&] (const char* k, const std::vector<int>& v) { if (v.empty()) return; o << k << " = "; for (size_t i = 0; i < v.size(); ++i) o << (i ? ", " : "") << v[i]; o << "\n"; };
     list ("tuning", l.tuning); list ("string_keys", l.stringKeys);
     if (! l.init.empty()) { o << "init = "; for (size_t i = 0; i < l.init.size(); ++i) o << (i ? ", " : "") << l.init[i].note << "@" << l.init[i].vel; o << "\n"; }

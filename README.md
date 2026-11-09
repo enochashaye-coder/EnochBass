@@ -1,4 +1,30 @@
 # Enoch Bass v2.14.1  (Windows VST3 instrument)
+## v2.15: library-aware playing
+- **EZbass Playing Style** (Edit profile > PLAYER): set it to what EZbass is set to. On Finger or Pick, slaps and pops become accents, because the instrument can't slap in that style.
+- **Instrument profiles know more about the instrument** (ROUTING > Edit profile, new PLAYER row and the row below it):
+  - **Bend range**: the pitch-bend range the instrument itself is set to. Enoch scales every bend to it, so a one-semitone scoop stays one semitone.
+  - **Sostenuto (CC66)**: a bass note held under a chord change is caught by the sostenuto pedal, so it rings on while the sustain pedal changes with the chords above (on for EZkeys, Pianoteq and the plain piano profile).
+  - **Breath CC** and **Breath shape**: the expression curve is also sent on a breath controller (CC2), and phrases breathe: each one after a rest swells in and tapers away (on for SWAM saxophones and trumpet).
+  - **Reach**: pianos, the widest one-hand reach (16 = a 10th); basses and guitars, the widest jump between notes.
+  - **Velocity layers**: type where the instrument's dynamic layers start (e.g. 40, 80, 110); played velocities keep clear of an edge so a note doesn't flip between two samples from take to take.
+  - **Other CCs**: growl and flutter (winds), bow pressure and bow position (bowed strings), with the numbers from your instrument's MIDI mapping list. SWAM lets you choose these, so Enoch doesn't guess them.
+  - **Duplicate**: makes a copy of the profile under a new name, to change without touching the original.
+  - All of these are in profile files too (Export / Import); see the list in Engine/Libraries.h.
+- **MIDI check: new notes on playability** (shown under DRAG MIDI; nothing is changed, so you decide):
+  - a piano chord wider than either hand can reach;
+  - a bass or guitar jump too far for the time between the notes;
+  - a slide too short to be heard (under 80 ms);
+  - a ghost note on beat 1 (or the middle of the bar), where the groove usually wants a real note.
+- **The rules Enoch follows for each instrument** (what the MIDI check and the driver enforce):
+  1. Every key-switch is one the profile really has, and it goes down before its note (the pre-roll), never on the note's own tick.
+  2. Held keys never overlap; latch keys (FX glissando) are switched off by the next key.
+  3. No played note sits on a key-switch key or outside the instrument's range (moved by octaves).
+  4. Legato: only the notes meant to be joined overlap, by the profile's overlap; on instruments that join any overlap, every other note ends just before the next.
+  5. A key that is the sound itself (EZbass ghost tap) is never doubled by a pitched note.
+  6. Effect keys (fall, doit, slide down / up) are pressed while their note sounds.
+  7. Every note-on has its note-off; the sustain pedal, sostenuto and pitch bend are back at rest at the end.
+  8. Bends are scaled to the instrument's bend range; velocities follow its curve and keep clear of its layer edges.
+
 ## v2.14.2: transitions between bars, song sections
 - **Transitions** (SOUND & FEEL, TRANSITIONS tab). The bass now plans how it moves into each new bar: approach notes, chromatic and scale walk-ups, slides, octave and fifth pickups, ghost and dead-note pickups, anticipations, space, fills, turnarounds and resolutions. Every transition note is in the key of both chords and lands on the next downbeat.
   - AMOUNT (50% = the strong moments: chord changes into a new phrase or section, V–I resolutions; 100% = wherever one fits; 0% = off), STYLE (Auto follows each bar's density), PLACEMENT, TYPE, ARTICULATION (Auto / Plain / allow hammer-ons and pull-offs), HUMANIZE, and ALL ON AUTO.

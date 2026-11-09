@@ -240,7 +240,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
     Rng rng (s.hSeed * 104729ULL + s.seed + 5);
     const int inst = s.instrument;
     const bool sustained = (inst == I_Sax || inst == I_Trumpet || inst == I_Violin);
-    const int range = std::max (1, s.bendRange);
+    int range = std::max (1, s.bendRange);            // v3.15: per part, the profile's pitch-bend range when it gives one
     const double ksLead = 0.03;
     const Library* L = s.lib.get();
     const int ccE = (L && L->inst == inst) ? L->ccExpr : 11, ccV = (L && L->inst == inst) ? L->ccVib : 1;
@@ -250,6 +250,19 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
     {
         if (! s.emitCC || cc < 0) return;          // v3.14.1: -1 = this instrument takes no such controller
         MidiEv e; e.t = std::max (0.0, t); e.type = EV_CC; e.a = cc; e.b = std::clamp (val, 0, 127); e.track = track; e.ord = 1; out.push_back (e);
+    };
+    // v3.15: the profile of each part (the routed one, else the plugin's), for its own controllers
+    auto partLib = [&] (int track) -> const Library*
+    {
+        const Library* x = (s.routed && track < 3 && s.routes[track].lib) ? s.routes[track].lib.get() : (track == 0 ? L : nullptr);
+        if (x && x->inst != inst && ! (track == 2 && x->inst == I_Piano)) x = nullptr;
+        return x;
+    };
+    const Library* LT = nullptr;
+    auto addExpr = [&] (double t, int track, int cc, int val)      // the expression curve, also on the breath controller when the profile has one
+    {
+        addCC (t, track, cc, val);
+        if (LT && LT->breathCC >= 0 && LT->breathCC != cc) addCC (t, track, LT->breathCC, val);
     };
     auto addBend = [&] (double t, int track, int v)
     {
@@ -271,6 +284,8 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         for (auto& n : notes) if (n.track == track && ! n.keyPlayed) { all.push_back (&n); if (n.voice == 0) line.push_back (&n); }
         if (all.empty()) continue;
         std::stable_sort (line.begin(), line.end(), [] (const Note* a, const Note* b) { return a->start < b->start; });
+        LT = partLib (track);
+        range = std::max (1, (LT && LT->pbRange > 0) ? LT->pbRange : s.bendRange);
 
         // ---------------- notes
         const bool ksLive = s.emitKS && (! s.ksGate || s.ksActive);
@@ -489,7 +504,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         }
 
         // ---------------- initial controller state
-        if (sustained) { addCC (0, track, ccE, 100); addCC (0, track, ccV, 12); }
+        if (sustained) { addExpr (0, track, ccE, 100); addCC (0, track, ccV, 12); }
         if (inst == I_Piano) addCC (0, track, 64, 0);
         addBend (0, track, 8192);
 
@@ -505,13 +520,40 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
             if (sustained)
             {
                 const int e = std::clamp (52 + n.vel / 2, 40, 127);
-                if (std::abs (e - lastE) >= 3) { addCC (n.start - 0.002, track, ccE, e); lastE = e; }
+                // v3.15 breath-shaped expression (SWAM): a phrase after a rest swells in from a softer breath; the last note of a phrase tapers away
+                const bool phraseStart = LT && LT->breathShape && (i == 0 || n.start - (line[i - 1]->start + line[i - 1]->length) >= 0.5);
+                const bool phraseEnd = LT && LT->breathShape && nextStart - end >= 0.5;
+                if (phraseStart)
+                {
+                    addExpr (n.start - 0.004, track, ccE, std::max (20, e - 26));
+                    addExpr (n.start + std::min (0.25, n.length * 0.3), track, ccE, e);
+                    lastE = e;
+                }
+                else if (std::abs (e - lastE) >= 3) { addExpr (n.start - 0.002, track, ccE, e); lastE = e; }
                 if (n.length >= 1.0)
                 {
-                    addCC (n.start + n.length * 0.55, track, ccE, e + 8);
-                    addCC (n.start + n.length * 0.95, track, ccE, e - 14);
+                    addExpr (n.start + n.length * 0.55, track, ccE, e + 8);
+                    addExpr (n.start + n.length * 0.95, track, ccE, e - 14);
                     lastE = e - 14;
                 }
+                if (phraseEnd)
+                {
+                    addExpr (n.start + n.length * 0.6, track, ccE, std::min (127, e + (n.length >= 1.0 ? 8 : 2)));
+                    addExpr (end, track, ccE, std::max (16, e - 34));
+                    lastE = std::max (16, e - 34);
+                }
+                // v3.15 growl / flutter tongue on their own controllers (when the profile names them)
+                if (LT && LT->growlCC >= 0 && n.art == A_Growl) { addCC (n.start - 0.003, track, LT->growlCC, 96); addCC (end, track, LT->growlCC, 0); }
+                if (LT && LT->flutterCC >= 0 && n.art == A_Flutter) { addCC (n.start - 0.003, track, LT->flutterCC, 100); addCC (end, track, LT->flutterCC, 0); }
+                // v3.15 bowed strings: bow pressure follows the note's weight (accents dig in), bow position moves toward the bridge for tremolo
+                if (LT && LT->bowCC >= 0 && inst == I_Violin)
+                {
+                    const int pr = std::clamp (34 + n.vel / 2 + (n.art == A_Marcato ? 22 : 0) - (n.art == A_Legato ? 8 : 0), 10, 127);
+                    addCC (n.start - 0.003, track, LT->bowCC, pr);
+                    if (n.length >= 1.0) addCC (n.start + n.length * 0.7, track, LT->bowCC, std::max (10, pr - 12));
+                }
+                if (LT && LT->bowPosCC >= 0 && inst == I_Violin)
+                    addCC (n.start - 0.003, track, LT->bowPosCC, (n.art == A_Tremolo || n.art == A_ColLegno) ? 100 : 64);
                 if (n.vib || n.art == A_Vibrato)
                 {
                     const int depth = std::clamp ((int) std::lround (30 + st.vib * 90 + hashUnit (s.hSeed * 3ULL + 7ULL, (uint64_t) std::max (1, n.id)) * 16.0 - 8.0), 20, 120);
@@ -534,7 +576,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
             {
                 bool touched = false;
                 const double len = n.length;
-                const double maxSemis = (double) range;
+                const double maxSemis = (double) std::min (range, std::max (1, s.bendRange));   // v3.15: the gesture keeps its musical size; the profile's range only scales it
                 switch (n.art)
                 {
                     case A_Scoop:
@@ -591,6 +633,25 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
                     addCC (c.start + 0.03, track, 64, 127);
                 }
                 addCC (p.lengthBeats, track, 64, 0);
+                // v3.15 sostenuto: a bass note held for two beats or more is caught by the sostenuto pedal (just after it starts), so it rings
+                // on while the sustain pedal changes with the chords above it; the pedal lets go as the note ends
+                if (LT && LT->sostenutoCC >= 0)
+                {
+                    double busyUntil = -1;
+                    for (auto* n : all)
+                    {
+                        if (n->length < 1.0 || n->start < busyUntil) continue;
+                        bool spansChange = false;      // only worth it when the sustain pedal changes while this note should ring on
+                        for (auto& c : p.chords) if (c.start > n->start + 0.05 && c.start < n->start + n->length - 0.05) { spansChange = true; break; }
+                        if (! spansChange) continue;
+                        bool lowest = true;
+                        for (auto* o : all) if (o != n && std::abs (o->start - n->start) < 0.02 && o->pitch < n->pitch) { lowest = false; break; }
+                        if (! lowest || n->pitch >= 60) continue;
+                        addCC (n->start + 0.02, track, LT->sostenutoCC, 127);
+                        addCC (n->start + n->length - 0.01, track, LT->sostenutoCC, 0);
+                        busyUntil = n->start + n->length;
+                    }
+                }
             }
         }
     }

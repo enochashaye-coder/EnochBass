@@ -266,6 +266,13 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
             {
                 const double u = std::pow (std::clamp (e.b / 127.0, 0.0, 1.0), L->velGamma);
                 e.b = std::clamp ((int) std::lround (L->velMin + (L->velMax - L->velMin) * u), 1, 127);
+                // v3.15 velocity layers: a velocity right at a layer's edge would flip between two samples from take to take;
+                // it is moved clear of the edge (3 under it, or 2 over it), staying in the layer it was in
+                for (int z : L->velZones)
+                {
+                    if (e.b >= z - 2 && e.b < z) e.b = std::max (1, z - 3);
+                    else if (e.b >= z && e.b <= z + 1) e.b = std::min (127, z + 2);
+                }
             }
         }
         // ---- 6) set-up at the start: bank, program, mode keys
