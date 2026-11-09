@@ -368,6 +368,30 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
                         }
                         if (! e->oneShot && e->when == KW_Before) last = art;
                     }
+                    if (e->latch)
+                    {
+                        // v3.14: a mode key (Efimov FX glissando) stays on until another key: the next note always sends its own key, and when
+                        // no note follows within a beat the plain-note key goes down right after this one ends, so nothing later plays the FX
+                        last = -2;
+                        const Note* nx = nullptr;
+                        for (auto* m : line) if (m->start > n->start + 1e-6) { nx = m; break; }
+                        const LibArt* plain = libFind (*LT, libResolve (*LT, A_Sustain));
+                        if (plain && plain != e && ! plain->press.empty() && (nx == nullptr || nx->start - nEnd > 1.0 || nx->ksManual))
+                        {
+                            // inside the clip: when the effect rings to the very end, the key goes down just before the clip ends
+                            const double press = 30.0 * bpms;
+                            double tc = nEnd + 0.01;
+                            if (p.lengthBeats > 0 && tc + press > p.lengthBeats - 0.005) tc = p.lengthBeats - press - 0.01;
+                            if (tc > n->start + 0.05)
+                            for (auto& pr : plain->press)
+                            {
+                                MidiEv on; on.t = tc; on.type = EV_ON; on.a = std::clamp (pr.note, 0, 127); on.b = std::clamp (pr.vel, 1, 127); on.track = track; on.ord = 1; on.ks = true; on.noteId = -1;   // belongs to no note: it switches the mode off
+                                MidiEv off = on; off.t = tc + press; off.type = EV_OFF; off.b = 0; off.ord = 0;
+                                ksOut.push_back (on); ksOut.push_back (off);
+                            }
+                            last = libResolve (*LT, A_Sustain);
+                        }
+                    }
                 }
                 // the same key used again before its last use ended. A held key (EZbass G#0 legato) simply stays down through both notes,
                 // the way a player keeps holding it through a run (v3.11); a short press lets go just before the new one goes down.

@@ -515,6 +515,7 @@ std::shared_ptr<EnochSoloProcessor::Snapshot> EnochSoloProcessor::makeSnapshot (
 
 void EnochSoloProcessor::publishMaster()
 {
+    master.phraseCuts = phraseCuts;
     Pattern copy = master;
     auto snap = makeSnapshot (std::move (copy));
     snap->number = ++snapCounter;
@@ -832,6 +833,30 @@ int EnochSoloProcessor::numLockedPhrases() const
     for (auto& ph : findPhrases (master)) if (phraseLocked (phraseLocks, ph)) ++c;
     return c;
 }
+
+void EnochSoloProcessor::togglePhraseCut (double beat)
+{
+    beat = std::max (0.0, beat);
+    for (auto it = phraseCuts.begin(); it != phraseCuts.end(); ++it)
+        if (std::abs (*it - beat) < 1e-3) { phraseCuts.erase (it); publishMaster(); return; }     // the same line again: join
+    if (beat <= 1e-6 || beat >= master.lengthBeats - 1e-6) return;
+    pushUndo();
+    std::vector<Note> add, raw = master.raw;
+    for (auto& n : raw)
+        if (n.track == 0 && n.voice == 0 && n.start < beat - 0.02 && n.start + n.length > beat + 0.02)
+        {
+            Note b = n; b.start = beat; b.length = n.start + n.length - beat; b.id = master.nextId++;
+            if (b.art == A_Bend || b.art == A_Fall || b.art == A_Doit || b.art == A_Scoop || b.art == A_Trill || b.art == A_Shake) b.art = A_Sustain;
+            n.length = beat - n.start;
+            add.push_back (b);
+        }
+    for (auto& b : add) raw.push_back (b);
+    phraseCuts.push_back (beat);
+    std::sort (phraseCuts.begin(), phraseCuts.end());
+    commitRaw (std::move (raw));
+}
+
+void EnochSoloProcessor::clearPhraseCuts() { phraseCuts.clear(); publishMaster(); }
 
 void EnochSoloProcessor::rerollPhrase (const Phrase& ph)
 {
@@ -1291,6 +1316,107 @@ bool EnochSoloProcessor::saveMidiTo (const juce::File& f)
     const auto bytes = MidiWriter::build (pat);
     f.deleteFile();
     return f.replaceWithData (bytes.data(), bytes.size());
+}
+
+juce::File EnochSoloProcessor::reportsFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Enoch Reports");
+}
+
+juce::File EnochSoloProcessor::writeProblemReport (const juce::String& whatHappened, juce::String& message)
+{
+    auto snap = getSnapshot();
+    const auto stamp = juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S");
+    const juce::String plug (JucePlugin_Name);
+    auto dir = reportsFolder();
+    if (! dir.createDirectory()) { message = "Could not create " + dir.getFullPathName(); return {}; }
+    auto zipFile = dir.getChildFile (plug + " report " + stamp + ".zip");
+    juce::ZipFile::Builder zb;
+    auto addText = [&] (const juce::String& name, const juce::String& text)
+    {
+        juce::MemoryOutputStream ms; ms.writeString (text); ms.flush();   // writeString adds a terminating 0: drop it
+        juce::MemoryBlock mb (ms.getData(), ms.getDataSize() > 0 ? ms.getDataSize() - 1 : 0);
+        zb.addEntry (new juce::MemoryInputStream (mb, true), 9, name, juce::Time::getCurrentTime());
+    };
+    auto addBytes = [&] (const juce::String& name, const void* data, size_t size)
+    { zb.addEntry (new juce::MemoryInputStream (data, size, true), 9, name, juce::Time::getCurrentTime()); };
+
+    juce::String info;
+    info << plug << " " << JucePlugin_VersionString << "  (report " << stamp << ")\n"
+         << "What happened (your words):\n" << (whatHappened.trim().isEmpty() ? juce::String ("(nothing written)") : whatHappened.trim()) << "\n\n"
+         << "Host: " << juce::PluginHostType().getHostDescription() << "   OS: " << juce::SystemStats::getOperatingSystemName()
+         << "   sample rate " << getSampleRate() << ", block " << getBlockSize() << "\n";
+    if (snap)
+    {
+        const auto& p = snap->pattern;
+        auto pat = p;
+        const auto rep = midicheck::repair (pat);
+        info << "Take: " << (int) p.bars << " bars at " << p.s.bpm << " BPM, " << p.s.tsNum << "/" << p.s.tsDen
+             << ", style '" << juce::String (p.styleName) << "', genre '" << juce::String (p.genreName) << "', progression '" << juce::String (p.progName) << "'\n"
+             << "Seed " << (juce::int64) p.s.seed << "   instrument " << p.s.instrument << "   routed " << (p.s.routed ? "yes" : "no") << "\n"
+             << "Notes " << (int) p.notes.size() << ", events " << (int) p.events.size() << "\n"
+             << "MIDI check of this take: " << juce::String (rep.text()) << "\n"
+             << "Last file written: " << (lastMidiCheck.isEmpty() ? juce::String ("(none yet)") : lastMidiCheck) << "\n";
+        // the take as Enoch exports it (checked) and as it was before the check, so a repair that went wrong can be seen too
+        const auto checked = MidiWriter::build (pat);
+        const auto raw = MidiWriter::build (p);
+        addBytes ("take (as exported).mid", checked.data(), checked.size());
+        addBytes ("take (before the MIDI check).mid", raw.data(), raw.size());
+        // the main line note by note: start, length, pitch, velocity, articulation and why
+        juce::String nl ("start\tlength\tpitch\tvel\ttrack\tvoice\tart\tart name\twhy\tkeys by hand\n");
+        auto rawNotes = p.raw;
+        std::sort (rawNotes.begin(), rawNotes.end(), [] (const enochsolo::Note& a, const enochsolo::Note& b) { return a.start < b.start; });
+        for (auto& n : rawNotes)
+            nl << juce::String (n.start, 3) << "\t" << juce::String (n.length, 3) << "\t" << n.pitch << "\t" << n.vel << "\t" << n.track << "\t" << n.voice << "\t"
+               << n.art << "\t" << enochsolo::artName (n.art) << "\t" << enochsolo::artbrain::whyText (n.why) << "\t" << (n.ksManual ? "yes" : "") << "\n";
+        addText ("notes.tsv", nl);
+    }
+    else info << "No take yet.\n";
+
+    // routing and the key-switch profiles in use (as files Enoch can read back)
+    const int slot = previewSlot();
+    info << "\nRouting (instrument slot " << slot << "):\n";
+    for (int part = 0; part < kParts; ++part)
+    {
+        const auto rt = getRoute (slot, part);
+        info << "  " << partNames()[part] << ": dest " << rt.dest << ", ch " << rt.channel << ", profile '" << rt.profile << "', program " << rt.program
+             << ", transpose " << rt.transpose << (rt.port.isNotEmpty() ? ", port " + rt.port : juce::String()) << "\n";
+        // the profile the take was really written with (the same choice the MIDI check makes), else the one named in the routing
+        std::shared_ptr<const enochsolo::Library> lib;
+        if (snap) { const auto& ps = snap->pattern.s; lib = ps.routed ? (ps.routes[part].lib ? ps.routes[part].lib : (part == 0 ? ps.lib : nullptr)) : (part == 0 ? ps.lib : nullptr); }
+        if (! lib && rt.profile.isNotEmpty()) lib = libraryByName (juce::jmin (slot, (int) enochsolo::I_Count - 1), rt.profile);
+        if (lib) addText ("profile - " + juce::File::createLegalFileName (partNames()[part] + " - " + juce::String (lib->name)) + ".enochlib", juce::String (enochsolo::libraryToText (*lib)));
+    }
+    info << "\nParameters:\n";
+    for (auto* q : getParameters())
+        if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (q))
+            info << "  " << r->getParameterID() << " = " << r->getCurrentValueAsText() << "\n";
+    addText ("report.txt", info);
+
+    // the whole plugin state (settings, notes you edited, locks, routing): loads back into Enoch to reproduce the take exactly
+    {
+        juce::MemoryBlock st; getStateInformation (st);
+        addBytes ("plugin state.bin", st.getData(), st.getSize());
+        if (auto x = juce::AudioProcessor::getXmlFromBinary (st.getData(), (int) st.getSize())) addText ("plugin state.xml", x->toString());
+    }
+
+    // the last part of Enoch's own log (what each instance did when it was created, opened, closed, removed)
+    {
+        juce::File lf (juce::String (enochlog::filePath()));
+        if (lf.existsAsFile())
+        {
+            juce::StringArray lines; lf.readLines (lines);
+            lines.removeRange (0, juce::jmax (0, lines.size() - 400));
+            addText ("enoch-log (last lines).txt", lines.joinIntoString ("\n"));
+        }
+    }
+    zipFile.deleteFile();
+    {
+        juce::FileOutputStream os (zipFile);
+        if (! os.openedOk() || ! zb.writeToStream (os, nullptr)) { message = "Could not write " + zipFile.getFullPathName(); return {}; }
+    }
+    message = "Report saved: " + zipFile.getFullPathName();
+    return zipFile;
 }
 
 juce::File EnochSoloProcessor::writeMidiToTemp()
@@ -2475,7 +2601,7 @@ bool EnochSoloProcessor::detectChords (const juce::File& f, juce::String& messag
     loadingState = false;
     barChords.assign ((size_t) bars, BarChord());
     for (int b = 0; b < bars; ++b) barChords[(size_t) b] = r.chords[(size_t) (b % r.bars)];
-    phraseLocks.clear();
+    phraseLocks.clear(); phraseCuts.clear();
     chordStatus = juce::String();
     needRegen = false; needFinalize = false;
     pushUndo();
@@ -2561,7 +2687,7 @@ bool EnochSoloProcessor::installTranscription (juce::String& message)
     loadingState = false;
     barChords.assign ((size_t) bars, BarChord());
     if (dr.ok) for (int b = 0; b < bars; ++b) barChords[(size_t) b] = dr.chords[(size_t) std::min (b, dr.bars - 1)];
-    phraseLocks.clear();
+    phraseLocks.clear(); phraseCuts.clear();
     chordStatus = juce::String();
 
     Settings s = currentSettings();

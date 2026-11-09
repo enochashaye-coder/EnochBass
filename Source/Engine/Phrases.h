@@ -40,7 +40,6 @@ inline std::vector<Phrase> findPhrases (const Pattern& p)
     for (size_t i = 1; i < m.size(); ++i)
         if (m[i]->start - endOf (i - 1) >= restGap) { segs.push_back ({ a, i }); a = i; }
     segs.push_back ({ a, m.size() });
-
     // cut long runs
     std::vector<std::pair<size_t, size_t>> fin;
     std::vector<std::pair<size_t, size_t>> stack (segs.rbegin(), segs.rend());
@@ -65,6 +64,21 @@ inline std::vector<Phrase> findPhrases (const Pattern& p)
         stack.push_back ({ sg.first, (size_t) best });
     }
     std::sort (fin.begin(), fin.end());
+    // v3.14: your own splits (split tool on the phrase strip), on top of the automatic phrases: a new phrase starts at the first note on or after each cut
+    if (! p.phraseCuts.empty())
+    {
+        std::vector<std::pair<size_t, size_t>> cut;
+        for (auto sg : fin)
+        {
+            size_t s0 = sg.first;
+            for (size_t k = sg.first + 1; k < sg.second; ++k)
+                for (double c : p.phraseCuts)
+                    if (m[k - 1]->start < c - 1e-6 && m[k]->start >= c - 1e-6) { cut.push_back ({ s0, k }); s0 = k; break; }
+            cut.push_back ({ s0, sg.second });
+        }
+        fin = std::move (cut);
+    }
+
 
     for (auto& sg : fin)
     {
@@ -82,6 +96,8 @@ inline std::vector<Phrase> findPhrases (const Pattern& p)
         {
             const double gap = out[i + 1].t0 - out[i].t1;
             out[i].r1 = gap > 0.2 ? (out[i].t1 + out[i + 1].t0) * 0.5 : out[i + 1].t0;
+            for (double c : p.phraseCuts)                                   // a split you made is the exact border
+                if (c > out[i].t0 + 1e-6 && c <= out[i + 1].t0 + 1e-6) out[i].r1 = std::max (out[i].r0, c);
         }
     }
     return out;

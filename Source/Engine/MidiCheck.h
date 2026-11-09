@@ -25,10 +25,13 @@ struct Report
 {
     int ksUnknown = 0, ksLate = 0, ksClash = 0, onKey = 0, outOfRange = 0, stuck = 0, orphanOff = 0, retrigger = 0, afterEnd = 0, ccThinned = 0, resets = 0;
     int legatoOverlap = 0, accidentalLegato = 0, doubled = 0;      // v3.12: the techniques' own rules
-    int repaired() const { return ksUnknown + ksLate + ksClash + onKey + outOfRange + stuck + orphanOff + retrigger + afterEnd + legatoOverlap + accidentalLegato + doubled; }
+    int ksVel = 0, ksMissing = 0;                                     // v3.14: key velocity as the profile says, held key under every joined note
+    int wideJoin = 0;                                                 // v3.14: notice only: a legato wider than an octave (kept as you wrote it)
+    int repaired() const { return ksUnknown + ksLate + ksClash + onKey + outOfRange + stuck + orphanOff + retrigger + afterEnd + legatoOverlap + accidentalLegato + doubled + ksVel + ksMissing; }
     std::string text() const
     {
-        if (repaired() == 0) return "MIDI check: OK";
+        const std::string note = wideJoin > 0 ? "  Note: " + std::to_string (wideJoin) + " legato jump(s) wider than an octave; most instruments cannot slur that far." : std::string();
+        if (repaired() == 0) return "MIDI check: OK" + note;
         std::string t = "MIDI check: repaired " + std::to_string (repaired()) + " (";
         bool first = true;
         auto add = [&] (int n, const char* what) { if (n <= 0) return; t += (first ? "" : ", ") + std::to_string (n) + " " + what; first = false; };
@@ -44,12 +47,13 @@ struct Report
         add (legatoOverlap, "legato overlap lengthened so the instrument joins the notes");
         add (accidentalLegato, "plain note shortened so it is not played legato");
         add (doubled, "pitched note removed where the key itself is the sound");
-        return t + ")";
+        add (ksVel, "key-switch velocity set to the profile's");
+        add (ksMissing, "missing legato key added under a joined note");
+        return t + ")" + note;
     }
 };
 
-/** check and repair a pattern's events in place (call on a copy of the pattern that is about to be written) */
-inline Report repair (Pattern& p)
+inline Report repairOnce (Pattern& p)
 {
     Report rep;
     auto& ev = p.events;
@@ -137,6 +141,85 @@ inline Report repair (Pattern& p)
                 else if (L->overlapLegato && ! driver::isLegatoArt (cur.art) && prvOff.t > cur.t - 1e-9)
                 { prvOff.t = std::max (prv.t + 0.01, cur.t - gap); ++rep.accidentalLegato; }
             }
+        }
+
+        // 2c) v3.14 deeper checks on the profile's own keys
+        //     - a key-switch goes down with the velocity the profile gives it (some libraries pick the sound by velocity);
+        //       keys whose velocity carries the note's dynamics (keys that ARE the sound), drawn keys and hand-edited notes are left alone
+        //     - a joined note on a profile with a held legato key has that key down when it starts (added if it is missing)
+        //     - a legato jump wider than an octave is reported (kept: you may have written it on purpose)
+        if (L && ! L->standard && ! L->noKeySwitches)
+        {
+            std::set<int> manualNote;
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.type == EV_ON && e.manualKs && e.srcId >= 0) manualNote.insert (e.srcId); }
+            for (int i : idx)
+            {
+                auto& e = ev[(size_t) i];
+                if (drop[(size_t) i] || ! e.ks || e.type != EV_ON || e.drawn || e.noteId < 0 || manualNote.count (e.noteId)) continue;
+                if (e.a == L->repKey || std::find (L->stringKeys.begin(), L->stringKeys.end(), e.a) != L->stringKeys.end()) continue;   // string / repeat keys: their own velocities
+                bool initKey = false; for (auto& k : L->init) if (k.note == e.a) initKey = true;
+                if (initKey) continue;
+                // the profile's velocity for this key: only when every articulation on this key asks for the same one
+                // (a key event does not always carry its articulation: a held key serves a run of notes)
+                int want = -1; bool agree = true, replaceKey = false;
+                for (auto& la : L->arts)
+                    for (auto& pr : la.press)
+                        if (pr.note == e.a)
+                        {
+                            if (la.when == KW_Replace) replaceKey = true;
+                            if (want < 0) want = pr.vel; else if (want != pr.vel) agree = false;
+                        }
+                if (replaceKey || ! agree || want < 1 || want > 127) continue;
+                if (e.b != want) { e.b = want; ++rep.ksVel; }
+            }
+            // presses per key: [on, off] in time
+            std::map<int, std::vector<std::pair<double, double>>> downs;
+            {
+                std::map<int, double> open;
+                for (int i : idx)
+                {
+                    const auto& e = ev[(size_t) i];
+                    if (drop[(size_t) i] || ! e.ks) continue;
+                    if (e.type == EV_ON) open[e.a] = e.t;
+                    else if (e.type == EV_OFF && open.count (e.a)) { downs[e.a].push_back ({ open[e.a], e.t }); open.erase (e.a); }
+                }
+                for (auto& [k, t0] : open) downs[k].push_back ({ t0, E });
+            }
+            std::map<int, double> offT;
+            for (int i : idx) { const auto& e = ev[(size_t) i]; if (! drop[(size_t) i] && ! e.ks && e.type == EV_OFF && e.srcId >= 0 && ! offT.count (e.srcId)) offT[e.srcId] = e.t; }
+            const double lead = std::clamp (L->preRollMs * beatsPerMs, 0.002, 0.25);
+            int prevPitch = -1; double prevOn = -1.0; int prevId = -1;
+            std::vector<MidiEv> add;
+            for (int i : idx)
+            {
+                const auto& e = ev[(size_t) i];
+                if (drop[(size_t) i] || e.ks || e.type != EV_ON || e.srcId < 0) continue;
+                if (e.t - prevOn < 0.01 && prevId >= 0) continue;                       // chord tone: the line is the first note
+                if (driver::isLegatoArt (e.art) && prevPitch >= 0 && std::abs (e.a - prevPitch) > 12) ++rep.wideJoin;
+                // joined as the writer joins: a different pitch, the note before still sounding within a quarter beat of this one
+                const bool joined = driver::isLegatoArt (e.art) && prevId >= 0 && prevPitch != e.a && offT.count (prevId) && offT[prevId] >= e.t - 0.25;
+                const LibArt* la = joined ? libFind (*L, libResolve (*L, e.art)) : nullptr;
+                if (la && la->hold && la->when == KW_Before && ! la->press.empty() && ! manualNote.count (e.srcId) && offT.count (e.srcId))
+                {
+                    const int key = la->press[0].note;
+                    bool down = false;
+                    if (downs.count (key)) for (auto& d : downs[key]) if (d.first <= e.t + 1e-6 && d.second >= e.t - 1e-6) { down = true; break; }
+                    // written for this note but late: step 3 moves it in front, nothing to add
+                    for (int j : idx) { const auto& o = ev[(size_t) j]; if (! drop[(size_t) j] && o.ks && o.type == EV_ON && o.a == key && o.noteId == e.srcId) { down = true; break; } }
+                    if (! down && key >= 0 && key < 128)
+                    {
+                        MidiEv on = e; on.ks = true; on.a = key; on.b = la->press[0].vel > 0 ? la->press[0].vel : 100; on.t = std::max (0.0, e.t - lead); on.ord = 1;
+                        on.noteId = e.srcId; on.srcId = -1; on.drawn = false; on.manualKs = false;
+                        MidiEv off = on; off.type = EV_OFF; off.b = 0; off.ord = 0; off.t = std::max (on.t + 0.005, offT[e.srcId]);
+                        add.push_back (on); add.push_back (off);
+                        downs[key].push_back ({ on.t, off.t });
+                        ++rep.ksMissing;
+                    }
+                }
+                prevPitch = e.a; prevOn = e.t; prevId = e.srcId;
+            }
+            for (auto& a : add) { idx.push_back ((int) ev.size()); ev.push_back (a); drop.push_back (0); }
+            if (! add.empty()) byTime();
         }
 
         // 3) every key-switch is down before its note (the note it was written for, by id)
@@ -328,6 +411,24 @@ inline Report repair (Pattern& p)
         out.swap (fin);
     }
     ev = std::move (out);
+    return rep;
+}
+
+/** check and repair a pattern's events in place (call on a copy of the pattern that is about to be written).
+    v3.14: one repair can make room for another (a stuck note given its off can now overlap the next note), so the check runs
+    again until a pass finds nothing (at most three passes); the report adds up what every pass fixed */
+inline Report repair (Pattern& p)
+{
+    Report rep = repairOnce (p);
+    for (int pass = 0; pass < 2 && rep.repaired() > 0; ++pass)
+    {
+        const Report r = repairOnce (p);
+        if (r.repaired() == 0) break;
+        rep.ksUnknown += r.ksUnknown; rep.ksLate += r.ksLate; rep.ksClash += r.ksClash; rep.onKey += r.onKey; rep.outOfRange += r.outOfRange;
+        rep.stuck += r.stuck; rep.orphanOff += r.orphanOff; rep.retrigger += r.retrigger; rep.afterEnd += r.afterEnd; rep.ccThinned += r.ccThinned;
+        rep.legatoOverlap += r.legatoOverlap; rep.accidentalLegato += r.accidentalLegato; rep.doubled += r.doubled; rep.ksVel += r.ksVel; rep.ksMissing += r.ksMissing;
+    }
+    { Pattern q = p; rep.wideJoin = repairOnce (q).wideJoin; }      // notices describe the final file
     return rep;
 }
 } // namespace midicheck

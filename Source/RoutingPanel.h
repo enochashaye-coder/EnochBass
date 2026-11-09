@@ -121,7 +121,11 @@ public:
         pasteBtn.onClick = [this] { showPaste (true); };
         testAllBtn.onClick = [this] { startTestAll(); };
         newBtn.onClick = [this] { newProfile(); };
-        for (auto* b : { &addKeyBtn, &pasteBtn, &testAllBtn, &newBtn }) addChildComponent (*b);
+        impBtn.setTooltip ("Load a key-switch profile file (.enochlib) into the editor, e.g. one you exported before or one sent to you");
+        expBtn.setTooltip ("Save this profile as a file (.enochlib) to keep a copy or share it");
+        impBtn.onClick = [this] { importProfile(); };
+        expBtn.onClick = [this] { exportProfile(); };
+        for (auto* b : { &addKeyBtn, &pasteBtn, &testAllBtn, &newBtn, &impBtn, &expBtn }) addChildComponent (*b);
         artView.setViewedComponent (&artHolder, false); artView.setScrollBarsShown (true, false); addChildComponent (artView);
         for (auto a : editArts())
         {
@@ -269,6 +273,8 @@ public:
             er.removeFromTop (4);
             auto row3 = er.removeFromTop (26);                                         // v3.12 performance settings
             lPre.setBounds (row3.removeFromLeft (80)); edPre.setBounds (row3.removeFromLeft (220).reduced (2, 2));
+            expBtn.setBounds (row3.removeFromRight (84).reduced (2, 1));
+            impBtn.setBounds (row3.removeFromRight (84).reduced (2, 1));
             edOvLeg.setBounds (row3.removeFromLeft (250).reduced (6, 1)); edDetach.setBounds (row3.removeFromLeft (220).reduced (2, 1));
             er.removeFromTop (4);
             artView.setBounds (er);
@@ -437,7 +443,7 @@ private:
         saveRig.setVisible (! on); loadRig.setVisible (! on); quickBox.setVisible (! on);
         for (juce::Component* c : { (juce::Component*) &edTitle, (juce::Component*) &edName, (juce::Component*) &edTr, (juce::Component*) &edOverlap, (juce::Component*) &edRep,
                                     (juce::Component*) &lTr, (juce::Component*) &lOv, (juce::Component*) &lMode, (juce::Component*) &edMode, (juce::Component*) &edPre, (juce::Component*) &edOvLeg, (juce::Component*) &edDetach, (juce::Component*) &lPre, (juce::Component*) &addKeyBtn, (juce::Component*) &pasteBtn,
-                                    (juce::Component*) &testAllBtn, (juce::Component*) &newBtn, (juce::Component*) &edSave, (juce::Component*) &edBack, (juce::Component*) &edStatus,
+                                    (juce::Component*) &testAllBtn, (juce::Component*) &newBtn, (juce::Component*) &impBtn, (juce::Component*) &expBtn, (juce::Component*) &edSave, (juce::Component*) &edBack, (juce::Component*) &edStatus,
                                     (juce::Component*) &artView }) c->setVisible (on);
         for (juce::Component* c : { (juce::Component*) &pasteBox, (juce::Component*) &pasteOk, (juce::Component*) &pasteCancel }) c->setVisible (false);
         armed = nullptr;
@@ -698,9 +704,10 @@ private:
         testAllBtn.setButtonText ("Test all");
         testAllBtn.onClick = [this] { startTestAll(); };
     }
-    void saveEditor()
+    /** v3.14: the profile exactly as the editor shows it (also used by Export) */
+    bool editorToLibrary (enochsolo::Library& l, juce::String& err)
     {
-        enochsolo::Library l = base;
+        l = base;
         l.name = edName.getText().trim().toStdString();
         if (l.name.empty()) l.name = "My profile";
         l.verify = 2; l.standard = false;
@@ -710,7 +717,7 @@ private:
         l.repKey = edRep.getSelectedId() > 1 ? edRep.getSelectedId() - 2 : -1;
         juce::String bad;
         l.init = parseModeKeys (edMode.getText(), bad);
-        if (bad.isNotEmpty()) { edStatus.setText ("Mode keys: could not read '" + bad + "'. Use names like G0@120 or numbers like 31@120.", juce::dontSendNotification); return; }
+        if (bad.isNotEmpty()) { err = "Mode keys: could not read '" + bad + "'. Use names like G0@120 or numbers like 31@120."; return false; }
         std::vector<enochsolo::LibArt> kept;
         for (auto& x : l.arts) { bool edited = false; for (auto* a : arts) if ((a->shown || a->custom) && a->art == x.art) edited = true; if (! edited && ! enochsolo::isCustomArt (x.art)) kept.push_back (x); }
         for (auto* a : arts)
@@ -731,6 +738,12 @@ private:
         }
         l.arts = kept;
         l.noKeySwitches = l.arts.empty() && l.init.empty();
+        return true;
+    }
+    void saveEditor()
+    {
+        enochsolo::Library l; juce::String err;
+        if (! editorToLibrary (l, err)) { edStatus.setText (err, juce::dontSendNotification); return; }
         // the played range keeps clear of every key (a played note on a key-switch would only switch, not sound)
         const auto problems = enochsolo::libCheck (l);
         juce::String msg;
@@ -746,8 +759,54 @@ private:
         else edStatus.setText (msg, juce::dontSendNotification);
     }
 
-    // ---- rig files
+    // ---- v3.14 profile files: share a key map, or bring one back after a reinstall
     std::unique_ptr<juce::FileChooser> chooser;
+    void exportProfile()
+    {
+        enochsolo::Library l; juce::String err;
+        if (! editorToLibrary (l, err)) { edStatus.setText (err, juce::dontSendNotification); return; }
+        const auto safe = juce::File::createLegalFileName (juce::String (l.name.empty() ? std::string ("My profile") : l.name));
+        chooser = std::make_unique<juce::FileChooser> ("Export key-switch profile", enochsolo::lastFolder ("lib", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)).getChildFile (safe + ".enochlib"), "*.enochlib");
+        juce::Component::SafePointer<RoutingPanel> self (this);
+        const std::string text = enochsolo::libraryToText (l);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting, [self, text] (const juce::FileChooser& fc)
+        {
+            if (self == nullptr || fc.getResult() == juce::File()) return;
+            auto f = fc.getResult().withFileExtension ("enochlib");
+            enochsolo::rememberFolder ("lib", f);
+            const bool ok = f.replaceWithText (juce::String (text));
+            self->edStatus.setText (ok ? "Exported: " + f.getFullPathName() : "Could not write " + f.getFullPathName(), juce::dontSendNotification);
+        });
+    }
+    void importProfile()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import key-switch profile", enochsolo::lastFolder ("lib", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)), "*.enochlib;*.txt");
+        juce::Component::SafePointer<RoutingPanel> self (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [self] (const juce::FileChooser& fc)
+        {
+            if (self == nullptr || fc.getResult() == juce::File()) return;
+            enochsolo::rememberFolder ("lib", fc.getResult());
+            self->importProfileText (fc.getResult().loadFileAsString(), fc.getResult().getFileName());
+        });
+    }
+public:
+    /** reads an .enochlib text into the editor (not saved until Save); returns the status line */
+    juce::String importProfileText (const juce::String& text, const juce::String& from)
+    {
+        enochsolo::Library l; std::string err;
+        if (! enochsolo::parseLibraryText (text.toStdString(), l, err))
+            edStatus.setText ("Could not read " + from + ": " + juce::String (err), juce::dontSendNotification);
+        else
+        {
+            const int inst = juce::jmin (proc.previewSlot(), (int) enochsolo::I_Count - 1);
+            l.verify = 2; l.standard = false;
+            loadIntoEditor (l, inst, editPart);
+            edStatus.setText ("Imported " + juce::String ((int) l.arts.size()) + " keys from " + from + ". Check them, then Save.", juce::dontSendNotification);
+        }
+        return edStatus.getText();
+    }
+private:
+    // ---- rig files
     void saveRigFile()
     {
         chooser = std::make_unique<juce::FileChooser> ("Save routing rig", enochsolo::lastFolder ("rig", juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)).getChildFile ("My rig.enochrig"), "*.enochrig");
@@ -859,7 +918,7 @@ private:
     enochsolo::Library base;
     juce::Label edTitle, edStatus, lTr, lOv, lMode;
     juce::TextEditor edName, edMode, pasteBox;
-    juce::TextButton addKeyBtn { "+ Custom key" }, pasteBtn { "Paste list..." }, testAllBtn { "Test all" }, newBtn { "New profile" }, pasteOk { "Import these keys" }, pasteCancel { "Cancel" };
+    juce::TextButton addKeyBtn { "+ Custom key" }, pasteBtn { "Paste list..." }, testAllBtn { "Test all" }, newBtn { "New profile" }, pasteOk { "Import these keys" }, pasteCancel { "Cancel" }, impBtn { "Import..." }, expBtn { "Export..." };
     juce::Viewport artView; juce::Component artHolder;
     bool pasting = false;
     juce::ComboBox edTr, edRep;

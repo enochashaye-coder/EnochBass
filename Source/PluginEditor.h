@@ -13,6 +13,7 @@
 #include "EnochLook.h"
 #include "SourceBar.h"
 #include "FeelPanel.h"
+#include "ReportBox.h"
 #include "RoutingPanel.h"
 #include "LogDrumPanel.h"
 
@@ -122,6 +123,7 @@ public:
     juce::String barSelText() const;
     void clearBarSelection();
     void rerollSelectedBars();
+    void copyBarPlay (int srcBar, int bar0, int bar1);   // v3.14: bars bar0..bar1 play exactly like srcBar (one undo step)
     void clearAllNotes();            // v3.1: blank piano roll (one undo step)
     void selectBars (int a, int b) { barA = a; barB = b; notifyBars(); repaint(); }
     void clearSelectedBarNotes();    // v3.1: empty the selected bars (one undo step)
@@ -206,6 +208,11 @@ private:
     void showNoteMenu (juce::Point<int> screenPos, bool onNote, double beat, int pitch);
     void showLaneMenu (juce::Point<int> screenPos, double beat);
     void showPhraseMenu (int index);
+    double phraseCutBeat (double beat) const;     // v3.14: the grid line a phrase split goes on
+    double phraseMenuBeat = -1.0;
+public:
+    void splitPhraseAt (double beat) { proc.togglePhraseCut (phraseCutBeat (beat)); refresh (true); repaint(); if (onPhrasesChanged) onPhrasesChanged(); }
+private:
     int phraseAtX (const Geo&, float x) const;
     void doOp (int id);
     void addEditItems (juce::PopupMenu& m, bool withSelectionItems);
@@ -488,6 +495,10 @@ private:
     bool routeOpen = false;
     FeelPanel feelPanel { proc };                                 // v2.7 batch 2: SOUND & FEEL drawer
     juce::TextButton feelBtn { "SOUND & FEEL" };
+    juce::TextButton reportBtn { "Report a problem" };      // v3.14: one zip with everything needed to fix a bug
+public:
+    void openReport();
+private:
     // v3.7: OUTPUT and TAP RHYTHM drawers, TRY ANOTHER options, remembered window size, clip light on the OUTPUT button
     OutputPanel outPanel { proc };
     TapPanel tapPanel { proc };

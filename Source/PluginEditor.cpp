@@ -387,6 +387,9 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     saveBtn.onClick = [this] { saveMidi(); };
     saveBtn.setTooltip ("Save the MIDI file anywhere (you can also drag it)");
     addAndMakeVisible (saveBtn);
+    reportBtn.onClick = [this] { openReport(); };
+    reportBtn.setTooltip ("Something sounds or looks wrong? Write a few words and Enoch saves one zip (this take, settings, key-switch profiles, MIDI check) to attach to your report");
+    addAndMakeVisible (reportBtn);
     advBtn.setClickingTogglesState (true);
     advBtn.onClick = [this] { advanced = advBtn.getToggleState(); if (advanced) { routeOpen = false; routeBtn.setToggleState (false, juce::dontSendNotification); logOpen = false; ldBtn.setToggleState (false, juce::dontSendNotification); feelOpen = false; feelBtn.setToggleState (false, juce::dontSendNotification); } resized(); };
     addAndMakeVisible (advBtn);
@@ -627,7 +630,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     addAndMakeVisible (gridVisSlider); addAndMakeVisible (lGridVis);
     sliderAtt.push_back (std::make_unique<juce::SliderParameterAttachment> (*A.getParameter ("gridVis"), gridVisSlider));
     toggleP (chordPad, "chordTrack", "Also write a block-chord pad track you can drag out with the bass line", true);
-    toggleP (showScaleT, "showScale", "Dim the piano-roll rows that are outside each bar's scale, and mark the scale on the piano keys (select a bar to see its scale)", true);
+    toggleP (showScaleT, "showScale", "Light the scale's rows in royal blue on the selected bars (all bars while none is selected) and on the piano keys; rows outside the scale are dimmed", true);
     toggleP (sfOnT, "sfOn", "Play the preview through your SoundFont instead of the built-in sounds", false);
     sfLoadBtn.setTooltip ("Load a General MIDI SoundFont (.sf2) so the built-in preview sounds like a real sax, guitar, violin, piano or trumpet. Only the preview changes - the MIDI you export is the same.");
     sfLoadBtn.onClick = [this] { chooseSoundFont(); };
@@ -1830,6 +1833,7 @@ void EnochSoloEditor::layoutBody()
     {
         auto fc = bottom.removeFromLeft (128);
         feelBtn.setBounds (fc.removeFromTop (28).reduced (2, 0)); fc.removeFromTop (4);
+        reportBtn.setBounds (fc.removeFromTop (28).reduced (2, 0));
         ldBtn.setBounds (fc.removeFromTop (28).reduced (2, 0));
     }
     bottom.removeFromLeft (10);
@@ -1880,4 +1884,11 @@ void EnochSoloEditor::restoreUi()
     else if (d == "tap") open (tapBtn);
     else if (d == "ld") open (ldBtn);
     else if (d == "adv") open (advBtn);
+}
+
+//==============================================================================
+void EnochSoloEditor::openReport()
+{
+    auto box = std::make_unique<ReportBox> (proc);
+    juce::CallOutBox::launchAsynchronously (std::move (box), reportBtn.getScreenBounds(), nullptr);
 }

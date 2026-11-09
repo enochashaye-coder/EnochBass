@@ -3,6 +3,7 @@
 // (channel, program / bank, mode keys, transposition, range, velocity curve, legato overlap, repetition keys, string choice).
 // The built-in preview never goes through here, so it always plays what the notes mean.
 #pragma once
+#include <map>
 #include "Libraries.h"
 #include <algorithm>
 #include <array>
@@ -75,6 +76,29 @@ inline std::vector<int> solveStrings (const std::vector<int>& pitch, const std::
 }
 
 /** Apply the routes to one pattern's events. routes[track]: 0 = solo line, 1 = accompaniment / second part, 2 = chord pad. */
+/** v3.14: the played line plus the repeats you drew on the repetition key (with their own note-offs filled into offOf) */
+template <class EvVec>
+inline std::vector<int> this2bLine (const EvVec& t, const std::vector<int>& line, std::vector<int>& offOf, int repKey)
+{
+    std::vector<int> out = line;
+    if (repKey < 0) return out;
+    for (size_t i = 0; i < t.size(); ++i)
+    {
+        const auto& e = t[i];
+        if (! e.ks || ! e.drawn || e.type != EV_ON || e.a != repKey) continue;
+        int best = -1;
+        for (size_t j = 0; j < t.size(); ++j)
+        {
+            const auto& o = t[j];
+            if (o.ks && o.type == EV_OFF && o.a == repKey && o.t >= e.t - 1e-9 && (best < 0 || o.t < t[(size_t) best].t)) best = (int) j;
+        }
+        offOf[i] = best;
+        out.push_back ((int) i);
+    }
+    std::stable_sort (out.begin(), out.end(), [&] (int a, int b) { return t[(size_t) a].t < t[(size_t) b].t; });
+    return out;
+}
+
 inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& routes, double bpm, int playerInst, bool allowKs = true)
 {
     const double beatsPerMs = std::max (20.0, bpm) / 60000.0;
@@ -110,6 +134,7 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
         std::vector<int> line;
         for (int i : onIdx) if (t[(size_t) i].ord == 2) line.push_back (i);
         std::stable_sort (line.begin(), line.end(), [&] (int a, int b) { return t[(size_t) a].t < t[(size_t) b].t; });
+        const std::vector<int>& line0 = line;
 
         if (L && track != 2)
         {
@@ -131,6 +156,9 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
             if (L->overlapLegato)
             {
                 const double gap = 8.0 * beatsPerMs;
+                // v3.14: repeated notes you drew on the repetition key (key-switches edited as notes) are still played notes here,
+                // so the note before them ends exactly as it does with automatic key-switches
+                std::vector<int> line = this2bLine (t, line0, offOf, L->repKey);
                 for (size_t k = 1; k < line.size(); ++k)
                 {
                     const auto& cur = t[(size_t) line[k]];
@@ -212,12 +240,25 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
             }
             return best >= 0 ? best : p;
         };
+        // v3.14: a note played as an effect (Efimov FX glissando) lands on a key that carries an effect (B0..D4), its note-off with it
+        std::map<int, std::pair<int, int>> fxOf;
+        if (L && allowKs)
+            for (auto& e : t)
+                if (! e.ks && e.type == EV_ON && e.srcId >= 0)
+                    if (const LibArt* la = libFind (*L, libResolve (*L, e.art)); la && la->latch && la->fxLo >= 0) fxOf[e.srcId] = { la->fxLo, la->fxHi };
         for (auto& e : t)
         {
             if (e.ks || (e.type != EV_ON && e.type != EV_OFF)) continue;
             int p = e.a + tr;
             while (p < lo && p + 12 <= 127) p += 12;
             while (p > hi && p - 12 >= 0) p -= 12;
+            if (auto f = fxOf.find (e.srcId); e.srcId >= 0 && f != fxOf.end())
+            {
+                while (p < f->second.first && p + 12 <= 127) p += 12;
+                while (p > f->second.second && p - 12 >= 0) p -= 12;
+                e.a = std::clamp (p, 0, 127);
+                continue;
+            }
             e.a = freeKey (std::clamp (p, 0, 127));
             if (e.type == EV_ON && L)
             {

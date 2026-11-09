@@ -238,6 +238,11 @@ public:
     void setPhraseLocked (const enochsolo::Phrase& ph, bool lock);
     void setAllPhrasesLocked (bool lock);
     void rerollPhrase (const enochsolo::Phrase& ph);            // new notes for just this phrase's region
+    // v3.14 / v2.14: split a phrase at a grid line (the split tool on the phrase strip), so just that part can be re-rolled or locked.
+    // A main-line note across the cut is split there too. Cutting again on the same line joins the two phrases back.
+    void togglePhraseCut (double beat);
+    void clearPhraseCuts();
+    const std::vector<double>& getPhraseCuts() const { return phraseCuts; }
     int  numLockedPhrases() const;
 
     /** my styles: named settings (instrument, artist, genre, feel sliders, humanise and the style reference) kept in the user's app-data folder */
@@ -262,6 +267,11 @@ public:
     juce::File writeMidiToTemp();                       // used for drag & drop
     juce::String lastMidiCheck;                          // v3.11: what the MIDI check found in the last file written (message thread)
     bool saveMidiTo (const juce::File& f);
+    /** v3.14 "Report a problem": a zip in Documents/Enoch Reports with this take (as exported, and before the MIDI check),
+        the whole plugin state, the key-switch profiles in use, the MIDI check result and a short description of the system.
+        Send it with a few words on what went wrong so the bug can be found and fixed. Returns the zip (or an empty file + message). */
+    juce::File writeProblemReport (const juce::String& whatHappened, juce::String& message);
+    static juce::File reportsFolder();
     juce::String suggestedFileName() const;
 
     // hearing a single note while editing (message thread) and jumping the test player to a position
@@ -333,6 +343,7 @@ private:
     std::shared_ptr<const enochsolo::RefProfile> refProfile;
     std::shared_ptr<const enochsolo::RefProfile> grooveProfile;
     enochsolo::LockRanges phraseLocks;
+    std::vector<double> phraseCuts;
     std::vector<EditState> undoStack, redoStack;
     int currentPreset = 0;
 

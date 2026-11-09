@@ -637,6 +637,14 @@ void RollView::paint (juce::Graphics& g)
                     g.drawText (locked ? "LOCKED" : "phrase " + juce::String ((int) i + 1), r.withTrimmedLeft (16.f), juce::Justification::centredLeft);
             }
         }
+        // v3.14: your splits: a bright cut line with a little notch
+        for (double c : proc.getPhraseCuts())
+        {
+            const float x = xOf (G, c);
+            if (x < G.phrase.getX() || x > G.phrase.getRight()) continue;
+            g.setColour (juce::Colours::white.withAlpha (0.9f)); g.fillRect (x - 1.f, G.phrase.getY(), 2.f, G.phrase.getHeight());
+            juce::Path tri; tri.addTriangle (x - 4.f, G.phrase.getY(), x + 4.f, G.phrase.getY(), x, G.phrase.getY() + 5.f); g.fillPath (tri);
+        }
         if (phrases.empty()) { g.setColour (LF::dim()); g.drawText ("phrases appear here once there are notes", G.phrase, juce::Justification::centred); }
     }
 
@@ -663,8 +671,12 @@ void RollView::paint (juce::Graphics& g)
             }
             if (gc && inMask (gc->scaleMask, p))
             {
+                // v3.14: the scale's keys are royal blue (the root deepest), easy to see while editing
+                const bool root = p % 12 == gc->rootPc % 12;
+                g.setColour (juce::Colour (0xff4169e1).withAlpha (root ? 0.95f : 0.65f));
+                g.fillRect (G.gutter.getX(), y, G.gutter.getWidth() * 0.45f, G.rowH - 0.5f);
                 const float r = std::min (2.6f, G.rowH * 0.3f);
-                g.setColour (T.accent.withAlpha (p % 12 == gc->rootPc % 12 ? 1.f : 0.65f));
+                g.setColour (juce::Colours::white.withAlpha (root ? 1.f : 0.8f));
                 g.fillEllipse (G.gutter.getX() + 3.f, y + (G.rowH - 0.5f) * 0.5f - r, r * 2.f, r * 2.f);
             }
         }
@@ -705,6 +717,31 @@ void RollView::paint (juce::Graphics& g)
             const float x0 = xOf (G, selLo * bb), x1 = xOf (G, (selHi + 1) * bb);
             g.setColour (T.accent.withAlpha (0.10f)); g.fillRect (x0, G.notes.getY(), x1 - x0, G.notes.getHeight());
             g.setColour (T.accent.withAlpha (0.6f)); g.drawVerticalLine ((int) x0, G.notes.getY(), G.notes.getBottom()); g.drawVerticalLine ((int) x1, G.notes.getY(), G.notes.getBottom());
+        }
+        // v3.14 / v2.14 Show scale: the scale's rows light up in royal blue on the selected bars (on every bar while none is selected,
+        // a little softer), the root brightest, so a note can be moved onto the scale at a glance
+        if (showScale)
+        {
+            const juce::Colour royal (0xff4169e1);
+            const bool any = selLo >= 0;
+            for (auto& c : P.chords)
+            {
+                double a = c.start, b = c.end;
+                if (any) { a = std::max (a, selLo * bb); b = std::min (b, (selHi + 1) * bb); }
+                const float x0 = std::max (G.notes.getX(), xOf (G, a)), x1 = std::min (G.notes.getRight(), xOf (G, b));
+                if (x1 <= x0) continue;
+                const float k = any ? 1.f : 0.6f;
+                for (int p = G.lo; p <= G.hi; ++p)
+                {
+                    if (! inMask (c.scaleMask, p)) continue;
+                    const bool root = p % 12 == c.rootPc % 12;
+                    const float y = yOf (G, p);
+                    g.setColour (royal.withAlpha ((root ? 0.72f : 0.48f) * k));
+                    g.fillRect (x0, y, x1 - x0, G.rowH - 0.5f);
+                    g.setColour (royal.brighter (0.4f).withAlpha ((root ? 0.9f : 0.55f) * k));
+                    g.fillRect (x0, y, x1 - x0, std::min (1.f, G.rowH * 0.12f));
+                }
+            }
         }
         // grid lines: bars, beats, then the chosen grid (triplet grids tinted). Grid Visibility scales all three.
         const float vis = juce::jlimit (0.f, 2.f, proc.apvts.getRawParameterValue ("gridVis")->load() / 50.f);
@@ -1100,7 +1137,8 @@ void RollView::mouseMove (const juce::MouseEvent& e)
         else if (g.phrase.contains (p))
         {
             hp = phraseAtX (g, p.x);
-            h = hp >= 0 ? "Click = lock / unlock this phrase (a locked phrase is kept when you press Try another)   |   right-click = more" : "";
+            h = tool == Tool::Split ? "Split tool: click = split the phrase here, on the grid (click a split again to join). Then right-click a part = Re-roll only this phrase"
+              : hp >= 0 ? "Click = lock / unlock this phrase (a locked phrase is kept when you press Try another)   |   right-click = more (split, re-roll)" : "";
         }
         else if (g.chord.contains (p)) { hb = barAtX (g, p.x); h = "Click to select this bar and choose its chord (Shift-click / drag = several bars)"; }
         else if (g.ruler.contains (p)) h = "Click to jump the player here  |  double-click = play / stop  |  mouse wheel = zoom";
@@ -1156,6 +1194,12 @@ int RollView::phraseAtX (const Geo& g, float x) const
     return best;
 }
 
+double RollView::phraseCutBeat (double beat) const
+{
+    const double gb = gridBeats() > 0 ? gridBeats() : 0.25;
+    return std::max (0.0, std::round (beat / gb) * gb);
+}
+
 void RollView::showPhraseMenu (int index)
 {
     if (index < 0 || index >= (int) phrases.size()) return;
@@ -1164,12 +1208,23 @@ void RollView::showPhraseMenu (int index)
     juce::PopupMenu m;
     m.addItem (1, locked ? "Unlock this phrase" : "Lock this phrase");
     m.addItem (2, "Re-roll only this phrase");
+    // v3.14: split it at the grid where you clicked, or join it with the next part if you split it there before
+    const double at = phraseMenuBeat >= 0 ? phraseCutBeat (phraseMenuBeat) : -1.0;
+    const bool canSplit = at > ph.t0 + 1e-6 && at < ph.t1 - 1e-6;
+    m.addItem (5, "Split this phrase here (at the grid)", canSplit);
+    double joinAt = -1.0;
+    for (double c : proc.getPhraseCuts()) if (std::abs (c - ph.r1) < 1e-3) joinAt = c;
+    m.addItem (6, "Join with the next phrase (undo my split)", joinAt >= 0);
+    m.addItem (7, "Remove all my phrase splits", ! proc.getPhraseCuts().empty());
     m.addSeparator();
     m.addItem (3, "Lock all phrases");
     m.addItem (4, "Unlock all phrases", proc.numLockedPhrases() > 0);
-    m.showMenuAsync (juce::PopupMenu::Options(), [this, ph, locked] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options(), [this, ph, locked, at, joinAt] (int r)
     {
-        if (r == 1) proc.setPhraseLocked (ph, ! locked);
+        if (r == 5) { proc.togglePhraseCut (at); }
+        else if (r == 6) { proc.togglePhraseCut (joinAt); }
+        else if (r == 7) { proc.clearPhraseCuts(); }
+        else if (r == 1) proc.setPhraseLocked (ph, ! locked);
         else if (r == 2) proc.rerollPhrase (ph);
         else if (r == 3) proc.setAllPhrasesLocked (true);
         else if (r == 4) proc.setAllPhrasesLocked (false);
@@ -1212,9 +1267,11 @@ void RollView::mouseDown (const juce::MouseEvent& e)
     // ---------------- phrase strip: click locks / unlocks, right-click opens the phrase menu
     if (g.phrase.contains (p))
     {
+        // v3.14: the split tool cuts the phrase at the grid line nearest the click (on a cut you made: joins the two again)
+        if (tool == Tool::Split && ! e.mods.isPopupMenu()) { splitPhraseAt (beatAt (g, p.x)); return; }
         const int i = phraseAtX (g, p.x);
         if (i < 0) return;
-        if (e.mods.isPopupMenu()) { showPhraseMenu (i); return; }
+        if (e.mods.isPopupMenu()) { phraseMenuBeat = beatAt (g, p.x); showPhraseMenu (i); return; }
         const auto ph = phrases[(size_t) i];
         proc.setPhraseLocked (ph, ! phraseLocked (proc.getPhraseLocks(), ph));
         repaint(); if (onPhrasesChanged) onPhrasesChanged();
@@ -1720,6 +1777,43 @@ void RollView::clearSelectedBarNotes()
     selected.clear(); commit (std::move (v));
 }
 
+void RollView::copyBarPlay (int srcBar, int bar0, int bar1)
+{
+    auto snap = proc.getSnapshot();
+    if (snap == nullptr || srcBar < 0) return;
+    const double bb = snap->pattern.barBeats;
+    const int bars = snap->pattern.bars;
+    bar0 = juce::jlimit (0, bars - 1, bar0); bar1 = juce::jlimit (bar0, bars - 1, bar1);
+    if (srcBar >= bars) return;
+    const double a = bar0 * bb, b = (bar1 + 1) * bb, sa = srcBar * bb, sb = sa + bb;
+    auto inSrc = [&] (const Note& n) { return n.track != 2 && n.start >= sa - 1e-6 && n.start < sb - 1e-6; };
+    std::vector<Note> src; for (auto& n : raw) if (inSrc (n)) src.push_back (n);
+    std::vector<Note> v;
+    for (auto& n : raw)
+    {
+        if (n.track != 2 && n.start >= a - 1e-6 && n.start < b - 1e-6) continue;          // the target bars' own notes go
+        Note k = n;
+        if (k.track != 2 && k.start < a - 1e-6 && k.start + k.length > a + 1e-6) k.length = std::max (0.02, a - k.start);   // nothing rings into the copy
+        v.push_back (k);
+    }
+    selected.clear();
+    for (int t = bar0; t <= bar1; ++t)
+    {
+        if (t == srcBar) { for (auto& n : src) v.push_back (n); continue; }
+        for (auto& n : src)
+        {
+            Note c = n;
+            c.start += (t - srcBar) * bb;
+            c.length = std::min (c.length, (t + 1) * bb - c.start);   // a long note stops at the end of its bar
+            c.id = proc.allocNoteId(); c.weight = metricWeight (c.start);
+            v.push_back (c); selected.insert (c.id);
+        }
+    }
+    commit (std::move (v));
+    if (onMessage) onMessage ("Bar" + juce::String (bar0 == bar1 ? " " + juce::String (bar0 + 1) : "s " + juce::String (bar0 + 1) + "-" + juce::String (bar1 + 1))
+                              + " now play" + (bar0 == bar1 ? "s" : "") + " like bar " + juce::String (srcBar + 1) + " (selected: edit them freely, Ctrl+Z undoes)");
+}
+
 void RollView::rerollSelectedBars()
 {
     const int a = barSelFirst(), b = barSelLast();
@@ -1832,6 +1926,17 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
     m.addItem (7, "Re-roll from here to the end");
     m.addItem (8, "Clear the notes of these bars");
     m.addItem (9, "Select the notes of these bars");
+    {
+        // v3.14: these bars play exactly like another bar (its notes, articulations and hand-drawn keys); edit the copy afterwards
+        juce::PopupMenu like;
+        for (int b = 0; b < P.bars; ++b)
+            if (b < b0 || b > b1)
+            {
+                int cnt = 0; for (auto& n : raw) if (n.track != 2 && n.start >= b * bb - 1e-6 && n.start < (b + 1) * bb - 1e-6) ++cnt;
+                like.addItem (3000 + b, "Bar " + juce::String (b + 1) + (cnt > 0 ? "   (" + juce::String (cnt) + " notes)" : "   (empty)"), cnt > 0);
+            }
+        m.addSubMenu (b0 == b1 ? "Play this bar like bar..." : "Play these bars like bar...", like, P.bars > 1);
+    }
     m.addSeparator();
     m.addItem (10, "Reset every bar to the song's chords");
 
@@ -1859,6 +1964,7 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
                              pr.pushUndo(); s->applyBusyToSelection (v, (uint64_t) juce::Random::getSystemRandom().nextInt64());
                          }
                          else if (r == 22) { pr.pushUndo(); s->applyBusyToSelection (-1.f, (uint64_t) juce::Random::getSystemRandom().nextInt64()); }
+                         else if (r >= 3000 && r < 3000 + bars) { s->copyBarPlay (r - 3000, b0, b1); }
                          else if (r == 6) { pr.rerollBars (b0, b1); done(); }
                          else if (r == 7) { pr.rerollBars (b0, bars - 1); done(); }
                          else if (r == 8)

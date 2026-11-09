@@ -137,6 +137,7 @@ struct Pattern
     double lengthBeats = 0, barBeats = 4.0;
     int bars = 0;
     std::vector<Note> raw;          // quantised, un-humanised
+    std::vector<double> phraseCuts; // v3.14 / v2.14: where you split phrases with the split tool (beats); the phrase strip honours them
     std::vector<Note> notes;        // final (humanised) notes
     std::vector<MidiEv> events;     // what gets exported (follows the export mode)
     std::vector<MidiEv> playEvents; // what the built-in test player plays (always the full articulated version)
@@ -1526,6 +1527,22 @@ inline Pattern Generator::generate (const Settings& sIn)
     std::stable_sort (p.raw.begin(), p.raw.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
     rhythm::apply (p, s);                                            // v2.7: double time / fast subdivisions
     artbrain::apply (p, s, st, s.artAmount);                         // v2.10: articulations, phrase by phrase
+    // v3.14 / v2.14: a library with an effect key (Ilya Efimov basses: G#0 FX glissando, a different effect on every key) plays it on
+    // about half of the exposed endings the plan slides out of; every other ending keeps its slide / fall
+    {
+        const Library* LF = (s.routed && s.routes[0].lib) ? s.routes[0].lib.get() : s.lib.get();
+        int fxArt = -1;
+        if (LF && ! LF->standard && LF->inst == s.instrument) for (auto& a : LF->arts) if (a.latch && a.fxLo >= 0) { fxArt = a.art; break; }
+        if (fxArt >= 0 && s.famLock[artbrain::F_Slide] != 1)
+        {
+            int k = 0;
+            for (auto& n : p.raw)
+                if (n.track == 0 && n.voice == 0 && ! n.mute && n.why == artbrain::W_SlideOut && (n.art == A_Fall || n.art == A_Gliss || n.art == A_Slide)
+                    && ((s.seed * 2654435761ULL + (unsigned long long) (n.start * 96.0)) >> 7) % 2 == 0)
+                { n.art = fxArt; ++k; }
+            (void) k;
+        }
+    }
     for (auto& n : p.raw) n.id = p.nextId++;
     finalize (p, s);
     return p;

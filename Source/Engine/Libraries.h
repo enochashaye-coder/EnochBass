@@ -33,6 +33,11 @@ struct LibArt
                               // down / up the held note); KW_Replace: the key is the sound itself (EZbass E0 ghost tap): no pitched note
     double atFrac = 0.6;      // KW_During: where in the note the key is pressed (never closer than 80 ms to its end)
     double pressMs = 0;       // a press that is not held: how long it stays down (0 = until the note ends, as before)
+    // v3.14 / v2.14: a mode key that stays switched on until another key is pressed (Ilya Efimov G#0 FX glissando: every following note would
+    // play its own FX). Pressed just before its note and switched off by the next note's own key (always sent), or by the plain-note key
+    // right after the note when nothing follows soon. fxLo..fxHi: the keys that carry an effect (Efimov FX glissando: B0..D4)
+    bool latch = false;
+    int fxLo = -1, fxHi = -1;
 };
 enum KsWhen { KW_Before = 0, KW_During = 1, KW_Replace = 2 };
 
@@ -355,7 +360,7 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
                        la (A_Slap,     { { 80, 100 }, xOff }) };            // G#4 Slap
             int k = 0;
             b.arts.push_back (cu (k++, "Pop", { { 33, 100 } }, true));
-            b.arts.push_back (cu (k++, "FX glissando", { { 32, 100 } }, true));
+            { LibArt fx = cu (k++, "FX glissando", { { 32, 100 } }); fx.latch = true; fx.pressMs = 40; fx.fxLo = 35; fx.fxHi = 74; b.arts.push_back (fx); }   // G#0: one FX per key B0..D4
             b.arts.push_back (cu (k++, "Repetition mute", { { 77, 100 } }, true));
             b.arts.push_back (cu (k++, "Hit 1", { { 84, 100 } }, true));
             b.arts.push_back (cu (k++, "Hit 2", { { 86, 100 } }, true));
@@ -381,7 +386,7 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
             b.stringKeys = fiveString ? std::vector<int> { 21, 23, 24, 26, 28 } : std::vector<int> { 23, 24, 26, 28 };
             b.lo = fiveString ? 35 : 40; b.maxFret = 20;
             b.ccExpr = 11; b.ccVib = 1;
-            b.note = std::string (fiveString ? "Five strings" : "Four strings") + ", key for key from the Kontakt key-switch page: auto legato by overlap, hammer / pull G4, X-notes F0, mute A#4, slap G#4, flageolet A4, slide B4, gliss A#0, repetition E4; Pop, hits and fret positions are in the Articulation menu. Sent an octave up.";
+            b.note = std::string (fiveString ? "Five strings" : "Four strings") + ", key for key from the Kontakt key-switch page: auto legato by overlap, hammer / pull G4, X-notes F0, mute A#4, slap G#4, flageolet A4, slide B4, gliss A#0, repetition E4; FX glissando G#0 (a different effect on every key B0..D4, switched off by the next key) at some section endings; Pop, hits and fret positions are in the Articulation menu. Sent an octave up.";
             b.source = "Ilya Efimov Kontakt key-switch page (Modern and Classic screenshots; same keys on every Efimov bass)";
             add (b);
         };
@@ -410,6 +415,7 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
       init = 31@120, 30@40                       (mode keys sent once at the start)
       ks = Fall: 29@100 oneshot during at=0.6 press=40   (v3.12: pressed while the note sounds, 60% into it, for 40 ms)
       ks = Ghost: 28@100 oneshot replace press=60        (v3.12: the key is the sound; no pitched note is sent)
+      custom = FX glissando: 32@100 latch press=40 fx=35-74 (v3.14: a mode key; the next note's key switches it off; fx = the keys with effects)
       preroll_ms = 20   overlap_is_legato = 1   detach_key = 21   (v3.12 performance settings)
     Articulation names are the ones shown in Enoch Bass (Sustain, Legato, Staccato, Marcato, Ghost, PalmMute, HammerOn, PullOff, Slide, Bend, Vibrato,
     Harmonic, Growl, Flutter, Fall, Doit, Scoop, Subtone, Shake, Trill, Tremolo, Pizzicato, Gliss, ColLegno, Arpeggio, Mute, Strum). */
@@ -506,6 +512,8 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
             else if (lower.find ("replace") != std::string::npos) a.when = KW_Replace;
             { const size_t pm = lower.find ("press="); if (pm != std::string::npos) a.pressMs = std::clamp (std::atof (lower.c_str() + pm + 6), 0.0, 1000.0); }
             { const size_t af = lower.find ("at="); if (af != std::string::npos) a.atFrac = std::clamp (std::atof (lower.c_str() + af + 3), 0.05, 0.95); }
+            a.latch = lower.find ("latch") != std::string::npos;
+            { const size_t fx = lower.find ("fx="); if (fx != std::string::npos) { int x = -1, y = -1; if (std::sscanf (lower.c_str() + fx + 3, "%d-%d", &x, &y) == 2 && x >= 0 && y <= 127 && x <= y) { a.fxLo = x; a.fxHi = y; } } }
             std::istringstream ps (rest); std::string tok;
             while (std::getline (ps, tok, ','))
             {
@@ -565,6 +573,8 @@ inline std::string libraryToText (const Library& l)
         if (a.when == KW_During) o << " during at=" << a.atFrac;
         if (a.when == KW_Replace) o << " replace";
         if (a.pressMs > 0) o << " press=" << a.pressMs;
+        if (a.latch) o << " latch";
+        if (a.fxLo >= 0 && a.fxHi >= a.fxLo) o << " fx=" << a.fxLo << "-" << a.fxHi;
         o << "\n";
     }
     return o.str();
