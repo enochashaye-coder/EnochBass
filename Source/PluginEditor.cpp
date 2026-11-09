@@ -1792,7 +1792,7 @@ void EnochSoloEditor::layoutBody()
         c->setVisible (false);
     roll.setBounds (r);
     routePanel.setVisible (routeOpen);
-    if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - (routePanel.isEditingProfile() ? juce::jmax (236, r.getHeight() - 40) : 236)))); routePanel.toFront (false); }   // v3.8: the profile editor gets the roll's height
+    if (routeOpen) { routePanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - ((routePanel.isEditingProfile() || routePanel.timingShown()) ? juce::jmax (236, r.getHeight() - 40) : 236)))); routePanel.toFront (false); }   // v3.8: the profile editor gets the roll's height
     feelPanel.setVisible (feelOpen);
     if (feelOpen) { feelPanel.setBounds (r.withTrimmedTop (juce::jmax (0, r.getHeight() - 236))); feelPanel.toFront (false); }
     outPanel.setVisible (outOpen);

@@ -116,7 +116,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
 
     boolean ("playerOn", "Test Player", true);
     boolean ("midiOut", "Send MIDI to Host", false);
-    flt ("midiDelayMs", "MIDI Delay (ms)", -200.f, 200.f, 0.f);      // v3.7: below 0 = early
+    flt ("midiDelayMs", "MIDI Delay (legacy)", -200.f, 200.f, 0.f);      // v3.7; v3.14.1: read once to carry old sessions over, then 0
+    flt ("timingOffsetMs", "MIDI Timing Offset (ms)", -100.f, 100.f, 0.f);  // v3.14.1: every note, early (-) or late (+): feel
+    l.add (std::make_unique<juce::AudioParameterBool> (P { "timingToDrag", 1 }, "MIDI Timing Offset in dragged MIDI", false));
     l.add (std::make_unique<juce::AudioParameterInt> (P { "midiDelaySamp", 1 }, "MIDI Delay (samples)", 0, 4000, 0));
     flt ("internalDelayMs", "Built-in Delay (ms)", 0.f, 400.f, 0.f);
     flt ("gridVis", "Grid Visibility", 0.f, 100.f, 50.f);
@@ -261,7 +263,8 @@ int EnochSoloProcessor::tsDenFor (int c, int hostD)
 
 //==============================================================================
 EnochSoloProcessor::EnochSoloProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                                       .withInput ("Side-chain (Measure)", juce::AudioChannelSet::stereo(), false)),   // v3.14.1: off unless you route audio into it
       apvts (*this, nullptr, "ENOCHBASS", createLayout())
 {
     loadLibraries();
@@ -477,7 +480,10 @@ std::shared_ptr<EnochSoloProcessor::Snapshot> EnochSoloProcessor::makeSnapshot (
     auto snap = std::make_shared<Snapshot>();
     snap->lengthBeats = p.lengthBeats;
     snap->seed = p.s.seed;
-    for (auto& e : p.events)
+    // v3.14.1: what plays live is exactly what you drag: the same MIDI check runs on the live events (the take itself is unchanged)
+    Pattern checked = p;
+    midicheck::repair (checked);
+    for (auto& e : checked.events)
     {
         const int ch = e.ch >= 0 ? e.ch + 1 : e.track + 1;     // v3.0: a routed part plays on its own channel
         juce::MidiMessage m;
@@ -1328,6 +1334,12 @@ bool EnochSoloProcessor::saveMidiTo (const juce::File& f)
     auto pat = snap->pattern;
     const auto rep = midicheck::repair (pat);
     lastMidiCheck = juce::String (rep.text());
+    // v3.14.1: only the MIDI Timing Offset, and only when you ask for it, moves the dragged MIDI (the monitor offsets never do)
+    if (getB (apvts, "timingToDrag") && std::abs (getF (apvts, "timingOffsetMs")) > 0.01f)
+    {
+        const double sh = (double) getF (apvts, "timingOffsetMs") * juce::jmax (20.0, (double) pat.s.bpm > 0 ? (double) pat.s.bpm : hostBpm.load()) / 60000.0;
+        for (auto& e : pat.events) e.t = std::max (0.0, e.t + sh);
+    }
     const auto bytes = MidiWriter::build (pat);
     f.deleteFile();
     return f.replaceWithData (bytes.data(), bytes.size());
@@ -1481,18 +1493,39 @@ void EnochSoloProcessor::prepareToPlay (double sampleRate, int)
     internalBeat = 0; expectedNext = -1; wasRunning = false;
     delayQ.clear(); panicBuf.clear(); sampleClock = 0; intQ.clear(); intClock = 0;
     genBuffer.ensureSize (8192); playBuffer.ensureSize (8192);
+    scBuf.setSize (1, 8192, false, true, false); scBuf.clear();       // v3.14.1 side-chain (Measure)
+    measActive = false; measMode.store (0); clickPos = -1;
 }
 
 bool EnochSoloProcessor::isBusesLayoutSupported (const BusesLayout& l) const
 {
-    return l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
-        || l.getMainOutputChannelSet() == juce::AudioChannelSet::mono();
+    const auto in = l.getMainInputChannelSet();
+    const bool inOk = in.isDisabled() || in == juce::AudioChannelSet::stereo() || in == juce::AudioChannelSet::mono();   // v3.14.1 side-chain
+    return inOk && (l.getMainOutputChannelSet() == juce::AudioChannelSet::stereo()
+        || l.getMainOutputChannelSet() == juce::AudioChannelSet::mono());
 }
 
 void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
+    lastBlock.store (n);
+    // v3.14.1: the side-chain (an external instrument's audio, for Measure) is read before the output is cleared: they share the buffer
+    {
+        bool got = false;
+        if (n <= scBuf.getNumSamples())
+        {
+            scBuf.clear (0, 0, n);
+            if (auto* bus = getBus (true, 0); bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() > 0)
+            {
+                auto in = getBusBuffer (buffer, true, 0);
+                const float g = 1.f / (float) juce::jmax (1, in.getNumChannels());
+                for (int ch = 0; ch < in.getNumChannels(); ++ch) scBuf.addFrom (0, 0, in, ch, 0, n, g);
+                got = scBuf.getMagnitude (0, 0, n) > 1.0e-5f;
+            }
+        }
+        if (got) scSeen.store (true);
+    }
     buffer.clear();
 
     // ---------------------------------------------------------------- pick up latest pattern (never block)
@@ -1514,6 +1547,7 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (auto b = pos->getBpm()) { bpm = *b; hostBpm = bpm; }
             if (auto ts = pos->getTimeSignature()) { hostNum = ts->numerator; hostDen = ts->denominator; }
             playing = pos->getIsPlaying();
+            hostRecording.store (pos->getIsRecording());
             if (auto p = pos->getPpqPosition()) ppq = *p;
         }
     hostPlaying = playing;
@@ -1698,45 +1732,81 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (wrapOn && b0 >= 0.0) b0 = wrapInto (b0);
         const bool discontinuity = ! wasRunning || expectedNext < 0 || std::abs (b0 - expectedNext) > std::max (0.02, blockBeats * 0.75);
         if (discontinuity && wasRunning) { player.allNotesOff(); intQ.clear(); if (sendMidiOut) flushHeld(); }
-        // v3.7: MIDI Delay below 0 sends the external notes early (the take is known ahead), for a DAW that plays a live-monitored
-        // instrument late. Above 0 they are held back as before (applyDelay below).
-        const double leadBeats = juce::jmax (0.0, -(double) getF (apvts, "midiDelayMs")) * bpm / 60000.0;
-        auto runWin = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double from, double to, double sampleBase, bool atStart)
+        // v3.14.1 live timing, per route: the MIDI Timing Offset (every live note) plus the route's Live Monitor Offset, or its Recording
+        // Offset while the host records. Negative = sent early (the take is known ahead), positive = late. Only what goes out live moves:
+        // the take, the piano roll and the MIDI you drag are never shifted by these. Channels with the same offset share one window.
+        struct LeadGroup { double beats = 0; uint32_t mask = 0; };
+        std::array<LeadGroup, 17> groups {}; int nGroups = 0;
+        {
+            const double timingMs = (double) getF (apvts, "timingOffsetMs");
+            const bool rec = hostRecording.load();
+            std::array<double, 16> chMs; chMs.fill (timingMs);
+            if (routedNow)
+                for (int part = 0; part < kParts; ++part)
+                {
+                    const auto& r = audioRoutes[(size_t) curSlot()][(size_t) part];
+                    if (r.dest == RD_External || r.dest == RD_Both || r.dest == RD_Hardware)
+                        chMs[(size_t) juce::jlimit (0, 15, r.channel - 1)] = timingMs + (rec ? r.recordMs : r.monitorMs);
+                }
+            const uint32_t muted = measMode.load() != 0 ? (1u << juce::jlimit (0, 15, measChannel - 1)) : 0u;   // Measure: only its test notes
+            for (int ch = 0; ch < 16; ++ch)
+            {
+                if ((muted >> ch) & 1u) continue;
+                const double lb = -chMs[(size_t) ch] * bpm / 60000.0;
+                int g = 0; while (g < nGroups && std::abs (groups[(size_t) g].beats - lb) > 1e-7) ++g;
+                if (g == nGroups) { groups[(size_t) g].beats = lb; ++nGroups; }
+                groups[(size_t) g].mask |= 1u << ch;
+            }
+        }
+        auto chanOk = [] (const juce::MidiMessage& m, uint32_t mask) { const int ch = m.getChannel(); return ch < 1 || ch > 16 || ((mask >> (ch - 1)) & 1u) != 0; };
+        if (! wasRunning) lateEvents.store (0);
+        if (discontinuity) liveFloor = b0;                // a late route never plays what came before the play position
+        auto runWin = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double from, double to, double sampleBase, bool atStart, uint32_t mask, bool live)
         {
             if (to <= from) return;
             auto it = std::lower_bound (evs.begin(), evs.end(), from, [] (const Playback& e, double v) { return e.beat < v; });
             for (; it != evs.end() && it->beat < to; ++it)
             {
+                if (! chanOk (it->msg, mask)) continue;
+                if (live && it->beat < liveFloor - 1e-9) continue;
                 const int pos = atStart ? 0 : (int) std::lround (sampleBase + (it->beat - from) * 60.0 * sr / bpm);
                 dest.addEvent (it->msg, juce::jlimit (0, n - 1, pos));
+                if (atStart && it->msg.isNoteOn()) lateEvents.fetch_add (1);
             }
         };
         auto emit = [&] (double from, double to, double sampleBase)
         {
-            runWin (audioSnap->testEvents, playBuffer, from, to, sampleBase, false);
+            runWin (audioSnap->testEvents, playBuffer, from, to, sampleBase, false, 0xffffffffu, false);
             if (! sendMidiOut) return;
-            double a = from + leadBeats, b = to + leadBeats;
-            if (wrapOn)
+            for (int gi = 0; gi < nGroups; ++gi)
             {
-                if (a >= wrapB) { const double d = a - wrapInto (a); a -= d; b -= d; }
-                if (b >= wrapB - 1e-12)                       // reaching the end exactly also wraps (its notes are released there)
+                const auto& grp = groups[(size_t) gi];
+                double a = from + grp.beats, b = to + grp.beats;
+                if (wrapOn)
                 {
-                    runWin (audioSnap->events, genBuffer, a, wrapB, sampleBase, false);
-                    releaseAtWrap (audioSnap->events, genBuffer, sampleBase + (wrapB - a) * 60.0 * sr / bpm);
-                    runWin (audioSnap->events, genBuffer, wrapA, wrapA + (b - wrapB), sampleBase + (wrapB - a) * 60.0 * sr / bpm, false);
-                    return;
+                    if (a >= wrapB) { const double d = a - wrapInto (a); a -= d; b -= d; }
+                    if (b >= wrapB - 1e-12)                       // reaching the end exactly also wraps (its notes are released there)
+                    {
+                        runWin (audioSnap->events, genBuffer, a, wrapB, sampleBase, false, grp.mask, true);
+                        releaseAtWrap (audioSnap->events, genBuffer, sampleBase + (wrapB - a) * 60.0 * sr / bpm);
+                        liveFloor = -1e9;
+                        runWin (audioSnap->events, genBuffer, wrapA, wrapA + (b - wrapB), sampleBase + (wrapB - a) * 60.0 * sr / bpm, false, grp.mask, true);
+                        continue;
+                    }
                 }
+                runWin (audioSnap->events, genBuffer, a, b, sampleBase, false, grp.mask, true);
             }
-            runWin (audioSnap->events, genBuffer, a, b, sampleBase, false);
         };
-        // starting (or jumping) with MIDI sent early: the notes that are already due go out at once instead of being skipped
-        if (discontinuity && sendMidiOut && leadBeats > 0.0) runWin (audioSnap->events, genBuffer, b0, b0 + leadBeats, 0.0, true);
+        // starting (or jumping) with MIDI sent early: the notes that are already due go out at once instead of being skipped (counted as late)
+        if (discontinuity && sendMidiOut)
+            for (int gi = 0; gi < nGroups; ++gi)
+                if (groups[(size_t) gi].beats > 0.0) runWin (audioSnap->events, genBuffer, b0, b0 + groups[(size_t) gi].beats, 0.0, true, groups[(size_t) gi].mask, true);
         // v3.7: a new take arrived while playing (key change, Try Another...): notes that should be sounding now start again, so a
         // held root note is not lost until its next note-on
         if (chasePending)
         {
             chasePending = false;
-            auto chaseInto = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double at)
+            auto chaseInto = [&] (const std::vector<Playback>& evs, juce::MidiBuffer& dest, double at, uint32_t mask)
             {
                 at = wrapInto (at);
                 for (auto& row : chaseHeld) row.fill (-1);
@@ -1744,14 +1814,15 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
                 for (; it != evs.end() && it->beat < at - 1e-9; ++it)
                 {
                     const auto& m = it->msg;
+                    if (! chanOk (m, mask)) continue;
                     const int c = juce::jlimit (0, 15, m.getChannel() - 1);
                     if (m.isNoteOn()) chaseHeld[(size_t) c][(size_t) m.getNoteNumber()] = (int) (it - evs.begin());
                     else if (m.isNoteOff()) chaseHeld[(size_t) c][(size_t) m.getNoteNumber()] = -1;
                 }
                 for (auto& row : chaseHeld) for (int k : row) if (k >= 0) dest.addEvent (evs[(size_t) k].msg, 0);
             };
-            chaseInto (audioSnap->testEvents, playBuffer, b0);
-            if (sendMidiOut) chaseInto (audioSnap->events, genBuffer, b0 + leadBeats);
+            chaseInto (audioSnap->testEvents, playBuffer, b0, 0xffffffffu);
+            if (sendMidiOut) for (int gi = 0; gi < nGroups; ++gi) chaseInto (audioSnap->events, genBuffer, b0 + groups[(size_t) gi].beats, groups[(size_t) gi].mask);
         }
         double endBeat = b0 + blockBeats;
         if (wrapOn && endBeat > wrapB)
@@ -1836,11 +1907,12 @@ void EnochSoloProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         if (getB (apvts, "playerOn")) for (int c = 0; c < juce::jmin (2, buffer.getNumChannels()); ++c) lv = juce::jmax (lv, buffer.getRMSLevel (c, 0, n));
         outLevel.store (lv);
     }
+    runMeasure (buffer, genBuffer, n);              // v3.14.1 Measure / by-ear test notes and click
     // ---------------------------------------------------------------- MIDI out
     if (! sendMidiOut && wasSendingOut) flushHeld();               // switched off while notes were sounding
     if (panicRequest.exchange (false)) { auto& pb = rtPanic; buildPanic (pb); panicBuf.addEvents (pb, 0, 1 << 30, 0); }
     auto& timed = rtTimed; timed.clear();
-    applyDelay (delayQ, sampleClock, genBuffer, timed, n, juce::jmax<int64_t> (0, (int64_t) std::lround (getF (apvts, "midiDelayMs") * sr / 1000.0) + getI (apvts, "midiDelaySamp")));
+    applyDelay (delayQ, sampleClock, genBuffer, timed, n, juce::jmax<int64_t> (0, (int64_t) getI (apvts, "midiDelaySamp")));   // v3.14.1: ms offsets are per route above
     midi.clear();
     if (panicBuf.getNumEvents() > 0)
     {
@@ -2098,6 +2170,23 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     // v3.0: routes (older projects have none: every part stays on the built-in player, as before)
     defaultRoutes();
     routesFromTree (vt.getChildWithName ("ROUTES"));
+    // v3.14.1: the old single MIDI DELAY carries over once: early (negative) becomes the Live Monitor Offset of every external route
+    // without one, late (positive) becomes the MIDI Timing Offset; then the old setting is cleared
+    {
+        const float legacy = getF (apvts, "midiDelayMs");
+        if (std::abs (legacy) > 0.01f)
+        {
+            if (legacy < 0.f)
+            {
+                const juce::SpinLock::ScopedLockType lk (routeLock);
+                for (auto& slot : routes) for (auto& r : slot)
+                    if ((r.dest == RD_External || r.dest == RD_Both || r.dest == RD_Hardware) && std::abs (r.monitorMs) < 1e-6) r.monitorMs = legacy;
+                ++routeVersion;
+            }
+            else setParam ("timingOffsetMs", juce::jmin (100.f, legacy));
+            setParam ("midiDelayMs", 0.f);
+        }
+    }
     // the instrument of choice by name (the list position can move when libraries are added)
     {
         const juce::String ln = vt.getProperty ("libraryName").toString();
@@ -2875,6 +2964,7 @@ juce::ValueTree EnochSoloProcessor::routesToTree() const
             juce::ValueTree c ("R");
             c.setProperty ("slot", sl, nullptr); c.setProperty ("part", p, nullptr); c.setProperty ("dest", r.dest, nullptr); c.setProperty ("ch", r.channel, nullptr);
             c.setProperty ("profile", r.profile, nullptr); c.setProperty ("program", r.program, nullptr); c.setProperty ("transpose", r.transpose, nullptr); c.setProperty ("port", r.port, nullptr);
+            c.setProperty ("mon", r.monitorMs, nullptr); c.setProperty ("rec", r.recordMs, nullptr);   // v3.14.1
             t.appendChild (c, nullptr);
         }
     return t;
@@ -2893,6 +2983,7 @@ void EnochSoloProcessor::routesFromTree (const juce::ValueTree& t)
             r.dest = juce::jlimit (0, 4, (int) c.getProperty ("dest", 0)); r.channel = juce::jlimit (1, 16, (int) c.getProperty ("ch", 1));
             r.profile = c.getProperty ("profile").toString(); r.program = juce::jlimit (-1, 127, (int) c.getProperty ("program", -1));
             r.transpose = juce::jlimit (-48, 48, (int) c.getProperty ("transpose", 0)); r.port = c.getProperty ("port").toString();
+            r.monitorMs = juce::jlimit (-1000.0, 200.0, (double) c.getProperty ("mon", 0.0)); r.recordMs = juce::jlimit (-1000.0, 200.0, (double) c.getProperty ("rec", 0.0));
         }
     }
     routesChanged = true; ++routeVersion;
@@ -2909,4 +3000,106 @@ bool EnochSoloProcessor::saveProfile (const enochsolo::Library& l, juce::String&
     loadLibraries();
     message = "Saved " + file.getFileName();
     return true;
+}
+
+//==============================================================================
+// v3.14.1 live timing: Measure (side-chain) and by-ear alignment
+juce::String EnochSoloProcessor::hostName() const { return juce::PluginHostType().getHostDescription(); }
+
+void EnochSoloProcessor::startMeasure (int part, bool byEar)
+{
+    part = juce::jlimit (0, kParts - 1, part);
+    const auto r = getRoute (curSlot(), part);
+    measChannel = juce::jlimit (1, 16, r.channel);
+    // a plain, sharp note the instrument really plays: inside the profile's range, clear of every key-switch
+    int lo = 36, hi = 84;
+    if (auto L = r.profile.isNotEmpty() ? libraryByName (juce::jmin (curSlot(), (int) enochsolo::I_Count - 1), r.profile) : nullptr)
+    { lo = L->lo; hi = L->hi; enochsolo::libSafeRange (*L, lo, hi); }
+    if (hi < lo) { lo = 36; hi = 84; }
+    measPitch = juce::jlimit (lo, hi, lo + juce::jmin (12, (hi - lo) / 3));
+    measPart.store (part);
+    measActive = false;
+    measStatus.store (byEar ? 4 : 1);
+    measMode.store (byEar ? 2 : 1);
+}
+
+void EnochSoloProcessor::runMeasure (juce::AudioBuffer<float>& out, juce::MidiBuffer& gen, int n)
+{
+    const int mode = measMode.load();
+    const int64_t t0 = measClock, t1 = measClock + n;
+    if (mode == 0)
+    {
+        if (measActive && measOffAt >= 0) { gen.addEvent (juce::MidiMessage::noteOff (measChannel, measPitch), 0); }   // stopped mid-note
+        measActive = false; measOffAt = -1; clickPos = -1;
+        if (measStatus.load() == 4) measStatus.store (0);
+        measClock = t1; return;
+    }
+    const double srate = juce::jmax (8000.0, sr);
+    const bool byEar = mode == 2;
+    int64_t gapS = (int64_t) ((byEar ? 0.75 : 0.7) * srate);
+    // by ear: the click sounds at measNext, the MIDI goes out by the route's Live Monitor Offset (early when negative)
+    int64_t offS = 0;
+    if (byEar)
+    {
+        const auto& r = audioRoutes[(size_t) curSlot()][(size_t) juce::jlimit (0, kParts - 1, measPart.load())];
+        offS = (int64_t) std::llround ((r.monitorMs + (double) getF (apvts, "timingOffsetMs")) * srate / 1000.0);
+        gapS = std::max (gapS, std::abs (offS) + (int64_t) (0.35 * srate));     // the next MIDI never falls before the current click
+    }
+    if (! measActive)
+    {
+        measActive = true; measWaiting = false; measTries = 0; measFoundN = 0; measOffAt = -1; measNoise = 0.f; clickPos = -1;
+        measNext = t0 + (int64_t) (0.3 * srate) + std::max<int64_t> (0, -offS);
+    }
+    const int64_t midiAt = measNext + offS;
+    if (midiAt >= t0 && midiAt < t1)
+    {
+        gen.addEvent (juce::MidiMessage::noteOn (measChannel, measPitch, (juce::uint8) 112), (int) (midiAt - t0));
+        measOffAt = midiAt + (int64_t) (0.12 * srate);
+        if (! byEar) { measWaiting = true; measWaitStart = midiAt; measThr = juce::jmax (0.004f, measNoise * 8.f); }
+    }
+    if (measOffAt >= t0 && measOffAt < t1) { gen.addEvent (juce::MidiMessage::noteOff (measChannel, measPitch), (int) (measOffAt - t0)); measOffAt = -1; }
+    if (byEar)
+    {
+        {
+            const int len = (int) (0.012 * srate);
+            for (int i = 0; i < n; ++i)
+            {
+                const int k = (int) (t0 + i - measNext);
+                if (k < 0 || k >= len) continue;
+                const float v = 0.35f * std::sin ((float) (2.0 * juce::MathConstants<double>::pi * 1600.0 * k / srate)) * (1.f - (float) k / (float) len);
+                for (int ch = 0; ch < out.getNumChannels(); ++ch) out.addSample (ch, i, v);
+            }
+        }
+        if (measNext + (int64_t) (0.012 * srate) < t1 && midiAt < t1) measNext += gapS;   // next pair
+        measClock = t1; return;
+    }
+    // side-chain: find each test note's attack
+    const float* x = scBuf.getReadPointer (0);
+    for (int i = 0; i < n && n <= scBuf.getNumSamples(); ++i)
+    {
+        const int64_t g = t0 + i;
+        const float a = std::abs (x[i]);
+        if (! measWaiting || g < measWaitStart) { measNoise = measNoise * 0.995f + a * 0.005f; continue; }
+        if (a > measThr && a > 0.002f)
+        {
+            if (measFoundN < (int) measFound.size()) measFound[(size_t) measFoundN++] = (double) (g - measWaitStart) * 1000.0 / srate;
+            measWaiting = false; ++measTries; measNext = measWaitStart + gapS;
+        }
+        else if (g - measWaitStart > (int64_t) (0.6 * srate)) { measWaiting = false; ++measTries; measNext = measWaitStart + gapS; }
+    }
+    if (measFoundN >= 8 || measTries >= 12)
+    {
+        if (measFoundN >= 4)
+        {
+            std::array<double, 16> v = measFound; std::sort (v.begin(), v.begin() + measFoundN);
+            measResult.store ((float) v[(size_t) measFoundN / 2]);
+            measSpread.store ((float) (v[(size_t) (measFoundN * 3) / 4] - v[(size_t) measFoundN / 4]));
+            measStatus.store (2);
+        }
+        else measStatus.store (3);
+        measHits.store (measFoundN);
+        measMode.store (0); measActive = false;
+        if (measOffAt >= 0) { gen.addEvent (juce::MidiMessage::noteOff (measChannel, measPitch), n - 1); measOffAt = -1; }
+    }
+    measClock = t1;
 }

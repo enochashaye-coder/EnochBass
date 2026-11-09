@@ -210,6 +210,8 @@ inline void apply (std::vector<MidiEv>& ev, const std::array<RouteSpec, 3>& rout
                 {
                     auto& cur = t[(size_t) line[k]];
                     if (cur.manualKs) continue;                          // v3.12: keys you edit by hand
+                    // v3.14.1: a note with its own effect (a fall, rise, bend, scoop...) is played as a real note, never as a repeat
+                    if (const LibArt* fx = libFind (*L, libResolve (*L, cur.art)); fx && fx->when != KW_Before) { alt = false; continue; }
                     const auto& prv = t[(size_t) line[k - 1]];
                     const bool fastRepeat = cur.a == prv.a && cur.t - prv.t < (r.repMode == 2 ? 1.01 : 0.51 * std::min (2.0f, r.repAmt));
                     alt = fastRepeat ? (r.repMode == 2 ? true : ! alt) : false;

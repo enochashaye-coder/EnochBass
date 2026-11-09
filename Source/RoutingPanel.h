@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 #include "EnochLook.h"
 #include "FolderMemory.h"
+#include "TimingPanel.h"     // v3.14.1
 #include <set>
 
 class RoutingPanel : public juce::Component, private juce::Timer
@@ -52,9 +53,14 @@ public:
             for (juce::ComboBox* c : { &r->dest, &r->ch, &r->prof, &r->prog, &r->tr, &r->port }) c->onChange = [this, idx] { if (! updating) store (idx); };
             r->edit.onClick = [this, idx] { openEditor (idx); };
             r->test.onClick = [this, idx] { testRoute (idx); };
+            r->timing.setTooltip ("TIMING of this route: Live Monitor Offset (sends this instrument's live MIDI early so a monitored track lines up), "
+                                  "Recording Offset, Measure and by-ear alignment. The dragged MIDI never moves.");
+            r->timing.onClick = [this, idx] { showTiming (idx); };
             for (juce::Component* c : { (juce::Component*) &r->name, (juce::Component*) &r->dest, (juce::Component*) &r->ch, (juce::Component*) &r->prof, (juce::Component*) &r->prog,
-                                        (juce::Component*) &r->tr, (juce::Component*) &r->port, (juce::Component*) &r->edit, (juce::Component*) &r->test }) addAndMakeVisible (c);
+                                        (juce::Component*) &r->tr, (juce::Component*) &r->port, (juce::Component*) &r->edit, (juce::Component*) &r->test, (juce::Component*) &r->timing }) addAndMakeVisible (c);
         }
+        addChildComponent (timingPage);                     // v3.14.1
+        timingPage.onBack = [this] { showTiming (-1); };
         saveRig.onClick = [this] { saveRigFile(); };
         loadRig.onClick = [this] { loadRigFile(); };
         saveRig.setTooltip ("Save the routing of every instrument as a rig file (e.g. 'My Studio One rig')");
@@ -65,15 +71,16 @@ public:
         quickBox.onChange = [this] { if (! updating && quickBox.getSelectedId() > 0) { applyQuick (quickBox.getSelectedId()); } };
         addAndMakeVisible (quickBox);
         // v3.3 / v2.3: MIDI Delay for external instruments (parameter midiDelayMs, 0.1 ms steps)
-        delayLbl.setText ("MIDI DELAY", juce::dontSendNotification); delayLbl.setFont (EnochLookAndFeel::fnt (11.f, "Bold", 0.06f));
+        delayLbl.setText ("MIDI TIMING", juce::dontSendNotification); delayLbl.setFont (EnochLookAndFeel::fnt (11.f, "Bold", 0.06f));
         delayLbl.setColour (juce::Label::textColourId, EnochLookAndFeel::dim()); addAndMakeVisible (delayLbl);
-        delaySlider.setRange (-200.0, 200.0, 0.1);    // v3.7: below 0 sends the MIDI early delaySlider.setSliderStyle (juce::Slider::LinearHorizontal);
+        delaySlider.setRange (-100.0, 100.0, 0.1);    // v3.7: below 0 sends the MIDI early delaySlider.setSliderStyle (juce::Slider::LinearHorizontal);
         delaySlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         delayVal.setFont (EnochLookAndFeel::fnt (12.f, "SemiBold")); delayVal.setJustificationType (juce::Justification::centredRight);
         delayVal.setColour (juce::Label::textColourId, juce::Colours::white); addAndMakeVisible (delayVal);
         delaySlider.onValueChange = [this] { const double v = delaySlider.getValue(); delayVal.setText (v < 0.0 ? juce::String::formatted ("%.1f ms early", -v) : juce::String::formatted ("%.1f ms", v), juce::dontSendNotification); };
-        delaySlider.setTooltip ("MIDI DELAY: moves the MIDI sent to your external instruments. Right of 0 = later. Left of 0 = EARLY, for an instrument the DAW plays late while you monitor it live (EZbass with Monitor on). Double-click = 0");
-        delayAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "midiDelayMs", delaySlider);
+        delaySlider.setTooltip ("MIDI TIMING OFFSET: every live note early (-) or late (+), for feel. It moves the dragged MIDI only with 'Apply to dragged MIDI' "
+                                "(TIMING page). For a monitored instrument that sounds late, use that route's TIMING button instead. Double-click = 0");
+        delayAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, "timingOffsetMs", delaySlider);
         addAndMakeVisible (delaySlider);
         // v3.3 / v2.3 Built-in Delay: holds the built-in sounds back to line them up with a late external instrument (parameter internalDelayMs)
         internalLbl.setText ("BUILT-IN DELAY", juce::dontSendNotification); internalLbl.setFont (EnochLookAndFeel::fnt (11.f, "Bold", 0.06f));
@@ -180,6 +187,7 @@ public:
             auto* r = rows[i];
             const auto rt = proc.getRoute (slot, i);
             r->dest.setSelectedId (rt.dest + 1, juce::dontSendNotification);
+            r->timing.setButtonText (std::abs (rt.monitorMs) < 0.05 ? juce::String ("Timing 0 ms") : "Timing " + juce::String (rt.monitorMs, rt.monitorMs == std::round (rt.monitorMs) ? 0 : 1) + " ms");
             r->ch.setSelectedId (rt.channel, juce::dontSendNotification);
             r->prof.clear (juce::dontSendNotification);
             r->prof.addItem (i == 0 ? "Instrument of choice (main panel)" : "Plain notes", 1);
@@ -240,7 +248,8 @@ public:
             auto hdr = rr.removeFromTop (16);
             const int w[] = { 200, 160, 64, 290, 74, 92, 170 };
             juce::Label* hs[] = { &hPart, &hDest, &hCh, &hProf, &hProg, &hTr, &hPort };
-            const double k = std::min (1.0, (rr.getWidth() - 132) / 1050.0);
+            const double k = std::min (1.0, (rr.getWidth() - 228) / 1050.0);
+            timingPage.setBounds (r);
             auto cols = [&] (juce::Rectangle<int> line, std::function<void (int, juce::Rectangle<int>)> fn) { for (int c = 0; c < 7; ++c) fn (c, line.removeFromLeft ((int) (w[c] * k))); return line; };
             cols (hdr, [&] (int c, juce::Rectangle<int> b) { hs[c]->setBounds (b); });
             for (auto* row : rows)
@@ -253,6 +262,7 @@ public:
                 });
                 row->edit.setBounds (rest.removeFromLeft (62).reduced (2, 0));
                 row->test.setBounds (rest.removeFromLeft (62).reduced (2, 0));
+                row->timing.setBounds (rest.removeFromLeft (92).reduced (2, 0));
             }
         }
         // editor page
@@ -286,7 +296,7 @@ public:
     }
 
 private:
-    struct Row { juce::Label name; StepCombo dest, ch, prof, prog, tr, port; juce::TextButton edit { "Edit" }, test { "Test" }; };
+    struct Row { juce::Label name; StepCombo dest, ch, prof, prog, tr, port; juce::TextButton edit { "Edit" }, test { "Test" }, timing { "0 ms" }; };
     struct ArtRow
     {
         int art = 0; bool shown = true, custom = false;
@@ -434,11 +444,31 @@ private:
             if (editing && ! pasting && a->custom) a->remove.setVisible (true);
         }
     }
+    // v3.14.1: the TIMING page of one route (in place of the routing rows)
+    void showTiming (int part)
+    {
+        if (editing) return;
+        timingOn = part >= 0;
+        for (auto* r : rows) for (juce::Component* c : { (juce::Component*) &r->name, (juce::Component*) &r->dest, (juce::Component*) &r->ch, (juce::Component*) &r->prof, (juce::Component*) &r->prog,
+                                                         (juce::Component*) &r->tr, (juce::Component*) &r->port, (juce::Component*) &r->edit, (juce::Component*) &r->test, (juce::Component*) &r->timing }) c->setVisible (! timingOn);
+        for (auto* h : { &hPart, &hDest, &hCh, &hProf, &hProg, &hTr, &hPort, &hint }) h->setVisible (! timingOn);
+        saveRig.setVisible (! timingOn); loadRig.setVisible (! timingOn); quickBox.setVisible (! timingOn);
+        if (timingOn) timingPage.setPart (part);
+        timingPage.setVisible (timingOn);
+        if (! timingOn) refresh();
+        if (onEditorToggled) onEditorToggled();          // the drawer grows for the TIMING page, like the profile editor
+    }
+public:
+    bool timingShown() const { return timingOn; }
+    TimingPanel& timing() { return timingPage; }
+    void openTiming (int part) { showTiming (part); }
+private:
     void showEditor (bool on)
     {
         editing = on; pasting = false;
+        if (on && timingOn) showTiming (-1);
         for (auto* r : rows) for (juce::Component* c : { (juce::Component*) &r->name, (juce::Component*) &r->dest, (juce::Component*) &r->ch, (juce::Component*) &r->prof, (juce::Component*) &r->prog,
-                                                         (juce::Component*) &r->tr, (juce::Component*) &r->port, (juce::Component*) &r->edit, (juce::Component*) &r->test }) c->setVisible (! on);
+                                                         (juce::Component*) &r->tr, (juce::Component*) &r->port, (juce::Component*) &r->edit, (juce::Component*) &r->test, (juce::Component*) &r->timing }) c->setVisible (! on);
         for (auto* h : { &hPart, &hDest, &hCh, &hProf, &hProg, &hTr, &hPort, &hint, &status }) h->setVisible (! on);
         saveRig.setVisible (! on); loadRig.setVisible (! on); quickBox.setVisible (! on);
         for (juce::Component* c : { (juce::Component*) &edTitle, (juce::Component*) &edName, (juce::Component*) &edTr, (juce::Component*) &edOverlap, (juce::Component*) &edRep,
@@ -913,7 +943,8 @@ private:
         status.setText ("Quick setup: " + q.label + ". Set each instrument track's Input to Enoch and the channel shown.", juce::dontSendNotification);
     }
     juce::Array<juce::MidiDeviceInfo> portIds;
-    bool updating = false, editing = false; int shownSlot = -1;
+    bool updating = false, editing = false, timingOn = false; int shownSlot = -1;
+    TimingPanel timingPage { proc };
     // editor
     enochsolo::Library base;
     juce::Label edTitle, edStatus, lTr, lOv, lMode;

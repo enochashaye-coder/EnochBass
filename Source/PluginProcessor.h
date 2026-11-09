@@ -193,7 +193,9 @@ public:
     juce::String nowPlayingText (bool& matches, bool& warning) const;
     // ---- v3.0 external instrument driver: one route per part, per instrument
     enum RouteDest { RD_Builtin = 0, RD_External, RD_Both, RD_Hardware, RD_Off };
-    struct PartRoute { int dest = RD_Builtin; int channel = 1; juce::String profile; int program = -1; int transpose = 0; juce::String port; };
+    // v3.14.1: monitorMs = Live Monitor Offset, recordMs = Recording Offset (ms, negative = the live MIDI goes out early). Neither ever moves
+    // the take or the MIDI you drag: they only time what Enoch sends live to this part's instrument.
+    struct PartRoute { int dest = RD_Builtin; int channel = 1; juce::String profile; int program = -1; int transpose = 0; juce::String port; double monitorMs = 0, recordMs = 0; };
     static constexpr int kParts = 3;
     using RouteTable = std::array<std::array<PartRoute, kParts>, TestPlayer::kSlots>;
     static bool routedIn (const RouteTable& rs, int slot);      // v3.5: routing on for an instrument (no lock: works on a copy)
@@ -292,6 +294,21 @@ public:
     int getHostNum() const { return hostNum.load(); }
     int getHostDen() const { return hostDen.load(); }
     bool hostIsPlaying() const { return hostPlaying.load(); }
+    // ---- v3.14.1 live timing (TIMING page)
+    bool hostIsRecording() const { return hostRecording.load(); }
+    /** Measure: 0 = the side-chain (an external instrument's audio routed into Enoch's side-chain input), 1 = by ear (a click and the
+        external note alternately, you move the offset until they are one sound). Stops by itself (side-chain) or with stopMeasure(). */
+    void startMeasure (int part, bool byEar);
+    void stopMeasure() { measMode.store (0); }
+    int measureState() const { return measStatus.load(); }           // 0 idle, 1 measuring, 2 done, 3 no audio came back, 4 by ear running
+    float measuredMs() const { return measResult.load(); }
+    float measuredSpreadMs() const { return measSpread.load(); }
+    int measuredHits() const { return measHits.load(); }
+    int measuringPart() const { return measPart.load(); }
+    bool sideChainConnected() const { return scSeen.load(); }
+    int lateEventsThisPlay() const { return lateEvents.load(); }
+    int blockSizeNow() const { return lastBlock.load(); }
+    juce::String hostName() const;
 
     enochsolo::Settings currentSettings() const;
     static int tsNumFor (int choice, int hostN);
@@ -394,6 +411,15 @@ private:
     std::atomic<double> hostBpm { 120.0 };
     std::atomic<int> hostNum { 4 }, hostDen { 4 };
     std::atomic<bool> hostPlaying { false }, internalPlaying { false };
+    // v3.14.1 live timing: measurement state (audio thread) and what the TIMING page shows
+    std::atomic<bool> hostRecording { false }, scSeen { false };
+    std::atomic<int> measMode { 0 }, measStatus { 0 }, measPart { 0 }, measHits { 0 }, lateEvents { 0 }, lastBlock { 0 };
+    std::atomic<float> measResult { 0.f }, measSpread { 0.f };
+    int measChannel = 1, measPitch = 48; bool measActive = false, measWaiting = false; int64_t measClock = 0, measNext = 0, measWaitStart = 0, measOffAt = -1;
+    int measTries = 0, measFoundN = 0; std::array<double, 16> measFound {}; float measNoise = 0.f, measThr = 0.f; int clickPos = -1;
+    double liveFloor = -1e9;
+    juce::AudioBuffer<float> scBuf;
+    void runMeasure (juce::AudioBuffer<float>& out, juce::MidiBuffer& gen, int n);
     std::atomic<double> playBeat { -1.0 };
     std::atomic<double> seekBeat { -1.0 };
     juce::MidiKeyboardState auditionState;

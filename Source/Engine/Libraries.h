@@ -68,6 +68,7 @@ struct Library
     double preRollMs = 20;        // how long before its note a key-switch goes down (never on the note's own tick)
     bool overlapLegato = false;   // the instrument plays any two overlapping notes as legato (EZbass, Efimov auto legato): plain notes
                                   // therefore never overlap the next note; only notes meant to be joined do
+    int breathKey = -1, breathVel = 45;   // v3.14.1: a key whose sound is a breath (VHorns A1), pressed before a phrase that follows a rest
     int detachKey = -1;           // held while notes must sound together without legato (EZbass A-1 "polyphony")
 };
 
@@ -121,6 +122,8 @@ inline std::array<bool, 128> libKeyMask (const Library& l)
     for (auto& p : l.init) mark (p.note);
     for (int k : l.stringKeys) mark (k);
     mark (l.repKey);
+    mark (l.breathKey);     // v3.14.1
+    mark (l.detachKey);
     return m;
 }
 
@@ -264,10 +267,21 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
         add (m);
         Library h; h.name = "VHorns Saxophones (AcousticSamples, UVI Falcon / Workstation)"; h.maker = "AcousticSamples"; h.inst = I_Sax; h.verify = 1;
         // UVI numbering: middle C = C3 = 60, so C1 = 36. The guide names the notes; fall and rise are played together with the note.
-        h.arts = { la (A_Fall, { { 37, 100 } }, true, true), la (A_Doit, { { 39, 100 } }, true, true) };   // C#1 fall, D#1 rise
-        h.ccExpr = 1; h.ccVib = 20;
-        h.note = "Fall = C#1, rise = D#1 (key noise C1, breath A1 are not used). Air flow is the mod wheel (CC1). Set the vibrato dial in the plugin.";
-        h.source = "VHorns Saxophones user guide (key-switch list, air flow = mod wheel by default)";
+        // v3.14.1 from the user guide: no articulation keys (H.A.T.: staccato, legato and double-tonguing come from the air flow and how notes
+        // overlap); effect keys pressed while the note plays: C#1 fall, D#1 rise, F1 / F#1 bend down / up; E1 repeats the current note
+        // (static tonguing); A1 is a breath sound, C1 key noise. Legato = overlapping notes. Vibrato is the plugin's own (Auto): no CC sent,
+        // because in Manual mode that controller bends the pitch around 64.
+        { LibArt f = la (A_Fall, { { 37, 100 } }); f.when = KW_During; f.atFrac = 0.6; f.pressMs = 60; h.arts.push_back (f); }
+        { LibArt d = la (A_Doit, { { 39, 100 } }); d.when = KW_During; d.atFrac = 0.55; d.pressMs = 60; h.arts.push_back (d); }
+        { LibArt b = la (A_Bend, { { 42, 100 } }); b.when = KW_During; b.atFrac = 0.35; b.pressMs = 80; h.arts.push_back (b); }
+        { LibArt c = la (A_Scoop, { { 41, 100 } }); c.when = KW_During; c.atFrac = 0.05; c.pressMs = 50; h.arts.push_back (c); }
+        h.repKey = 40; h.breathKey = 45; h.breathVel = 45;
+        h.overlapLegato = true; h.overlapMs = 30;
+        h.ccExpr = 1; h.ccVib = -1;
+        h.note = "Air flow = mod wheel (CC1), shaped per phrase. Legato by overlapping notes. Fall C#1, rise D#1, bend up F#1, scoop (bend down) F1, "
+                 "repeated notes E1 (static tonguing), a breath (A1) before phrases. Vibrato: leave the plugin on Auto. Keys assume UVI numbering "
+                 "(middle C = C3); if they do not trigger, move them an octave in this profile.";
+        h.source = "VHorns Saxophones user guide (acousticsamples.net, product manual 101): keyswitch list, air flow, legato by overlap, vibrato modes";
         add (h);
     }
     else if (inst == I_Trumpet)
@@ -417,6 +431,7 @@ inline std::vector<std::shared_ptr<const Library>> builtinLibraries (int inst)
       ks = Ghost: 28@100 oneshot replace press=60        (v3.12: the key is the sound; no pitched note is sent)
       custom = FX glissando: 32@100 latch press=40 fx=35-74 (v3.14: a mode key; the next note's key switches it off; fx = the keys with effects)
       preroll_ms = 20   overlap_is_legato = 1   detach_key = 21   (v3.12 performance settings)
+      breath_key = 45@45   vibrato_cc = -1   (v3.14.1: a breath sound before phrases; -1 = no vibrato controller)
     Articulation names are the ones shown in Enoch Bass (Sustain, Legato, Staccato, Marcato, Ghost, PalmMute, HammerOn, PullOff, Slide, Bend, Vibrato,
     Harmonic, Growl, Flutter, Fall, Doit, Scoop, Subtone, Shake, Trill, Tremolo, Pizzicato, Gliss, ColLegno, Arpeggio, Mute, Strum). */
 inline int articulationFromName (std::string s)
@@ -462,7 +477,7 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
             haveInst = true;
         }
         else if (key == "expression_cc") l.ccExpr = std::clamp (std::atoi (val.c_str()), 0, 127);
-        else if (key == "vibrato_cc") l.ccVib = std::clamp (std::atoi (val.c_str()), 0, 127);
+        else if (key == "vibrato_cc") l.ccVib = std::clamp (std::atoi (val.c_str()), -1, 127);     // -1 = no vibrato controller (the instrument makes its own)
         else if (key == "no_keyswitches") l.noKeySwitches = std::atoi (val.c_str()) != 0;
         // ---- v3.0 driver settings
         else if (key == "transpose") l.transpose = std::clamp (std::atoi (val.c_str()), -48, 48);
@@ -472,6 +487,7 @@ inline bool parseLibraryText (const std::string& text, Library& out, std::string
         else if (key == "overlap_is_legato") l.overlapLegato = std::atoi (val.c_str()) != 0;
         else if (key == "detach_key") l.detachKey = std::clamp (std::atoi (val.c_str()), -1, 127);
         else if (key == "repetition_key") l.repKey = std::clamp (std::atoi (val.c_str()), -1, 127);
+        else if (key == "breath_key") { int k = -1, v = 45; std::sscanf (val.c_str(), "%d@%d", &k, &v); l.breathKey = std::clamp (k, -1, 127); l.breathVel = std::clamp (v, 1, 127); }
         else if (key == "program") l.program = std::clamp (std::atoi (val.c_str()), -1, 127);
         else if (key == "bank_msb") l.bankMsb = std::clamp (std::atoi (val.c_str()), -1, 127);
         else if (key == "bank_lsb") l.bankLsb = std::clamp (std::atoi (val.c_str()), -1, 127);
@@ -551,6 +567,7 @@ inline std::string libraryToText (const Library& l)
     if (l.overlapLegato) o << "overlap_is_legato = 1\n";
     if (l.detachKey >= 0) o << "detach_key = " << l.detachKey << "\n";
     if (l.repKey >= 0) o << "repetition_key = " << l.repKey << "\n";
+    if (l.breathKey >= 0) o << "breath_key = " << l.breathKey << "@" << l.breathVel << "\n";
     if (l.program >= 0) o << "program = " << l.program << "\n";
     if (l.bankMsb >= 0) o << "bank_msb = " << l.bankMsb << "\n";
     if (l.bankLsb >= 0) o << "bank_lsb = " << l.bankLsb << "\n";

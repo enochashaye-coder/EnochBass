@@ -248,7 +248,7 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
     auto bendVal = [&] (double semis) { return std::clamp ((int) std::lround (8192.0 + semis / range * 8192.0), 0, 16383); };
     auto addCC = [&] (double t, int track, int cc, int val)
     {
-        if (! s.emitCC) return;
+        if (! s.emitCC || cc < 0) return;          // v3.14.1: -1 = this instrument takes no such controller
         MidiEv e; e.t = std::max (0.0, t); e.type = EV_CC; e.a = cc; e.b = std::clamp (val, 0, 127); e.track = track; e.ord = 1; out.push_back (e);
     };
     auto addBend = [&] (double t, int track, int v)
@@ -320,6 +320,28 @@ inline void buildEvents (const Pattern& p, const std::vector<Note>& notes, const
         const Library* LT = (s.routed && track < 3 && s.routes[track].lib && s.routes[track].lib->inst == inst) ? s.routes[track].lib.get() : L;
         if (ksLive && LT && LT->inst == inst && ! LT->standard)
         {
+            // v3.14.1: a library with a breath sound on a key (VHorns A1): a short breath before every phrase that follows a rest of a beat
+            // or more (and before the first note), soft, ending just before the note so it never covers the attack
+            if (LT->breathKey >= 0 && track != 2)
+            {
+                const double bpmsB = std::max (20.0, s.bpm) / 60000.0;
+                double prevEnd = -100.0;
+                for (auto* n : line)
+                {
+                    if (n->start - prevEnd >= 0.75 && ! n->ksManual)
+                    {
+                        const double len = std::min (0.5, 220.0 * bpmsB), t0 = std::max (0.0, n->start - len - 15.0 * bpmsB);
+                        if (n->start - t0 > 30.0 * bpmsB && t0 >= prevEnd + 0.05)
+                        {
+                            MidiEv on; on.t = t0; on.type = EV_ON; on.a = std::clamp (LT->breathKey, 0, 127); on.b = std::clamp (LT->breathVel, 1, 127);
+                            on.track = track; on.ord = 1; on.ks = true; on.noteId = -1;
+                            MidiEv off = on; off.type = EV_OFF; off.b = 0; off.ord = 0; off.t = n->start - 10.0 * bpmsB;
+                            out.push_back (on); out.push_back (off);
+                        }
+                    }
+                    prevEnd = std::max (prevEnd, n->start + n->length);
+                }
+            }
             // instrument of choice: the library's own key-switch table. Each key goes down just before its note (about 20 ms at any
             // tempo) and is held until that note ends, the way a player holds a key-switch (EZbass: hold G0 while the note plays).
             if (! LT->noKeySwitches && ! LT->arts.empty())
