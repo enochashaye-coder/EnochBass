@@ -630,7 +630,7 @@ EnochSoloEditor::EnochSoloEditor (EnochSoloProcessor& p)
     addAndMakeVisible (gridVisSlider); addAndMakeVisible (lGridVis);
     sliderAtt.push_back (std::make_unique<juce::SliderParameterAttachment> (*A.getParameter ("gridVis"), gridVisSlider));
     toggleP (chordPad, "chordTrack", "Also write a block-chord pad track you can drag out with the bass line", true);
-    toggleP (showScaleT, "showScale", "Light the scale's rows in royal blue on the selected bars (all bars while none is selected) and on the piano keys; rows outside the scale are dimmed", true);
+    toggleP (showScaleT, "showScale", "Light the scale's rows in royal blue on the bars you select, and the scale on the piano keys; rows outside the scale are dimmed", true);
     toggleP (sfOnT, "sfOn", "Play the preview through your SoundFont instead of the built-in sounds", false);
     sfLoadBtn.setTooltip ("Load a General MIDI SoundFont (.sf2) so the built-in preview sounds like a real sax, guitar, violin, piano or trumpet. Only the preview changes - the MIDI you export is the same.");
     sfLoadBtn.onClick = [this] { chooseSoundFont(); };

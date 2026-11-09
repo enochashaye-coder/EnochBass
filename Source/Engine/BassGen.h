@@ -470,7 +470,9 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
         const int variant = (intent == IN_Development ? 1 : 0) + (intent == IN_Release ? 2 : 0) + 8 * ((bar / std::max (1, phrase)) / 2);
         Rng rr ((uint64_t) S.seed * 2654435761ULL ^ (uint64_t) std::hash<std::string>() (cell) ^ ((uint64_t) variant * 0x9E3779B97F4A7C15ULL));
         // busy slider: per-bar override or global
-        const double busy = (bar < (int) S.barBusy.size() && S.barBusy[(size_t) bar] >= 0.f) ? S.barBusy[(size_t) bar] : S.busy;
+        // v2.14.1: a bar you did not set by hand follows its song section (sparser intro / outro, busier chorus)
+        const double busy = (bar < (int) S.barBusy.size() && S.barBusy[(size_t) bar] >= 0.f) ? S.barBusy[(size_t) bar]
+                          : std::clamp ((double) S.busy + (S.transAmount > 0.f && transitions::songHasSections (S) ? transitions::sectionBusy (transitions::sectionOf (S, bar)) : 0.0), 0.0, 1.0);
         const double keep = std::clamp ((double) st.density * (0.3 + busy * 1.1) * gi.densMul * (0.7 + 0.5 * S.intensity) - (S.space - 0.5) * 0.4, 0.1, 1.0);
         std::string c2 = cell;
         for (int i = 1; i < steps; ++i)
@@ -560,11 +562,11 @@ inline std::vector<Note> generateBass (const Settings& S, const Style& st, const
         if (c2[0] == '.' && cell[0] != '.') c2[0] = 'R';
         for (auto& ch : chords) if (std::abs (ch.start - b0) < 1e-6) c2[0] = (c2[0] == '.' || c2[0] == 'g') ? 'R' : c2[0];
         // the release bar without a fill: the motif's first half, then space (unless the density is high)
-        if (intent == IN_Release && ! fromRef && steps == 16 && busy < 0.6 && rr.chance (0.5))
+        if (S.transAmount <= 0.f && intent == IN_Release && ! fromRef && steps == 16 && busy < 0.6 && rr.chance (0.5))   // v2.14.1: the planner decides endings
             for (int i = 10; i < steps; ++i) if (c2[(size_t) i] != 'a' && c2[(size_t) i] != 'R') c2[(size_t) i] = '.';
         // fill at the end of a phrase
         bool fill = false;
-        if (phraseEnd && steps >= 16 && bar + 1 <= S.bars && rng.chance (std::clamp ((double) st.density * 0.55 * (0.4 + busy) + 0.12, 0.0, 0.85) * (rv.valid ? 1.0 - S.refAmount * 0.9 : 1.0)))
+        if (S.transAmount <= 0.f && phraseEnd && steps >= 16 && bar + 1 <= S.bars && rng.chance (std::clamp ((double) st.density * 0.55 * (0.4 + busy) + 0.12, 0.0, 0.85) * (rv.valid ? 1.0 - S.refAmount * 0.9 : 1.0)))
         {
             fill = true;
             for (int i = 12; i < steps; ++i) c2[(size_t) i] = '.';

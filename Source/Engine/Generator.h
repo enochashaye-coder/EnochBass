@@ -43,6 +43,16 @@ struct Settings
     int speed = 0;                  // v2.7: 0 normal, 1 double time
     int subdiv = 0;                 // v2.7: 0 auto (style), 1 1/16, 2 1/16 triplets, 3 1/32, 4 1/32 triplets
     std::vector<int> barSpeed;      // v2.7: per-bar speed override (-1 = follow the global speed, 0 normal, 1 double time)
+    // v2.14.1 transitions between bars and song sections (Engine/Transitions.h)
+    float transAmount = 0.5f;       // 0 none .. 1 at every bar line that can take one
+    int transStyle = 0;             // 0 Auto (from the bar's density), 1 Subtle, 2 Moderate, 3 Bold, 4 Virtuosic
+    int transPlace = 0;             // 0 Auto, 1 end of every bar, 2 before chord changes, 3 before section changes, 4 before fills (phrase ends)
+    int transType = 0;              // 0 Auto, 1 + Kind (approach, chromatic, scale, slide, octave, fifth, ghost, dead, anticipation, rest, fill)
+    float transHumanize = 0.3f;     // velocity variation of transition notes
+    int transArt = 0;               // 0 Auto, 1 Plain (no slides / ghosts), 2 Allow slides and hammer-ons in runs
+    std::vector<int> barSection;    // per bar: -1 = carries on (Auto), else a section label (Intro, Verse, Pre-chorus, Chorus, Bridge, Solo, Outro)
+    std::vector<int> transSalt;     // per bar line: "Try another transition" counter
+    bool loopTake = false;          // the take loops: the last bar turns around to bar 1
     // reference recording / MIDI that steers the rhythm, feel and shape of the generated notes (not the notes themselves)
     std::shared_ptr<const RefProfile> refProfile;
     float refAmount = 0.7f;         // 0 = ignore .. 1 = follow closely
@@ -92,6 +102,39 @@ struct Settings
     uint64_t hSeed = 1;
 };
 
+// v2.14.1 song sections (used by the bar engine and the transition planner)
+namespace transitions {
+enum Section { SEC_Auto = -1, SEC_Intro = 0, SEC_Verse, SEC_Pre, SEC_Chorus, SEC_Bridge, SEC_Solo, SEC_Outro, SEC_Count };
+inline const char* sectionName (int s)
+{
+    static const char* n[] = { "Intro", "Verse", "Pre-chorus", "Chorus", "Bridge", "Solo", "Outro" };
+    return (s >= 0 && s < SEC_Count) ? n[s] : "Auto";
+}
+/** the section of a bar: your label, or Auto (one section per 8 bars, verse and chorus taking turns; a song of 8 bars or less is one verse) */
+inline int sectionOf (const Settings& S, int bar)
+{
+    for (int b = std::min (bar, (int) S.barSection.size() - 1); b >= 0; --b)
+        if (S.barSection[(size_t) b] >= 0) return S.barSection[(size_t) b];      // a label holds until the next one
+    if (S.bars <= 8) return SEC_Verse;
+    return (bar / 8) % 2 == 0 ? SEC_Verse : SEC_Chorus;
+}
+/** a song with sections: you labelled some bars, or it is long enough for the automatic verse / chorus (over 8 bars); a short loop
+    without labels is one section and keeps your Note Density exactly */
+inline bool songHasSections (const Settings& S) { for (int v : S.barSection) if (v >= 0) return true; return S.bars > 8; }
+inline bool sectionStartsAt (const Settings& S, int bar) { return bar > 0 && bar < S.bars && sectionOf (S, bar) != sectionOf (S, bar - 1); }
+/** how a section shapes the line when the bar's density is not set by hand */
+inline double sectionBusy (int sec)
+{
+    switch (sec) { case SEC_Intro: return -0.2; case SEC_Verse: return -0.05; case SEC_Pre: return 0.05; case SEC_Chorus: return 0.12;
+                   case SEC_Bridge: return 0.0; case SEC_Solo: return 0.1; case SEC_Outro: return -0.2; default: return 0.0; }
+}
+inline int sectionVel (int sec)
+{
+    switch (sec) { case SEC_Intro: return -8; case SEC_Verse: return -3; case SEC_Pre: return 2; case SEC_Chorus: return 7; case SEC_Outro: return -8; default: return 0; }
+}
+
+} // namespace transitions
+
 struct Note
 {
     double start = 0, length = 0.25;
@@ -107,6 +150,7 @@ struct Note
     bool ksManual = false;   // v3.12: its key-switches were made editable notes in the roll: Enoch writes none of its own for it
     int why = 0;        // v3.11: why the articulation planner chose this note's articulation (artbrain::whyText)
     int role = 0;       // bass: the job of the note (root, fifth, approach...), so a chord change keeps the line musical (see BassGen.h)
+    int trans = -1;     // v2.14.1: the bar this note leads out of when it is part of a transition (Transitions.h), else -1
 };
 
 enum { EV_OFF = 0, EV_ON = 1, EV_CC = 2, EV_BEND = 3, EV_AT = 4, EV_PC = 5 };   // EV_PC: program change (v3.0 routing)
@@ -254,6 +298,7 @@ inline bool isWind (int inst) { return inst == I_Sax || inst == I_Trumpet; }
 inline void applySecondVoice (Pattern& p, const Settings& s, int rangeShift);   // Harmony.h
 namespace detail {
 inline std::vector<Note> generateBass (const Settings&, const Style&, const Meter&, Rng&, const std::vector<ChordSpan>&);   // BassGen.h
+inline int planTransitions (std::vector<Note>&, const Settings&, const Meter&, const std::vector<ChordSpan>&, int lo, int hi, bool allowGhosts);   // Transitions.h (v2.14.1)
 inline void bassReharmonize (Pattern&, const std::vector<ChordSpan>&, const std::vector<char>&, const Settings&);
 }
 
@@ -1498,6 +1543,14 @@ inline Pattern Generator::generate (const Settings& sIn)
     if (s.instrument == I_Bass)
     {
         auto notes = detail::generateBass (s, st, m, rng, p.chords);
+        // v2.14.1: how the line moves from bar to bar, and how sections end (only techniques the routed library plays)
+        {
+            const Library* LT = (s.routed && s.routes[0].lib) ? s.routes[0].lib.get() : s.lib.get();
+            bool ghosts = true;
+            if (LT && ! LT->standard && LT->inst == s.instrument && ! LT->noKeySwitches) ghosts = libFind (*LT, libResolve (*LT, A_Ghost)) != nullptr;
+            const Range R = instRange (I_Bass, 0);
+            detail::planTransitions (notes, s, m, p.chords, R.lo, R.hi, ghosts);
+        }
         p.raw.insert (p.raw.end(), notes.begin(), notes.end());
         p.hasSolo = true;
     }
@@ -1653,3 +1706,4 @@ inline void Generator::rerollRegion (Pattern& p, const Settings& s, int bar0, in
 #include "Expression.h"
 #include "Harmony.h"
 #include "BassGen.h"
+#include "Transitions.h"   // v2.14.1

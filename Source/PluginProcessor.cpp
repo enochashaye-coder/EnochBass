@@ -35,7 +35,7 @@ int getI (const juce::AudioProcessorValueTreeState& a, const char* id) { return 
 bool getB (const juce::AudioProcessorValueTreeState& a, const char* id) { return getF (a, id) > 0.5f; }
 
 // parameters that change the notes (need a full regenerate with the same seed) / only the expression pass
-const char* kGenIds[] = { "artAmount", "artVary", "fa0", "fa1", "fa2", "fa3", "fa4", "fa5", "fa6", "fa7", "fa8", "fa9", "fa10", "fa11", "fl0", "fl1", "fl2", "fl3", "fl4", "fl5", "fl6", "fl7", "fl8", "fl9", "fl10", "fl11", "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift", "speed", "subdiv" };
+const char* kGenIds[] = { "trAmount", "trStyle", "trPlace", "trType", "trHuman", "trArt", "artAmount", "artVary", "fa0", "fa1", "fa2", "fa3", "fa4", "fa5", "fa6", "fa7", "fa8", "fa9", "fa10", "fa11", "fl0", "fl1", "fl2", "fl3", "fl4", "fl5", "fl6", "fl7", "fl8", "fl9", "fl10", "fl11", "inst", "artist", "genre", "key", "scale", "ts", "bars", "intensity", "mode", "octave", "harmony", "space", "repeat", "chordTrack", "busy", "refAmount", "refTempo", "refShift", "voice2", "clave", "grooveAmount", "grooveTempo", "grooveShift", "speed", "subdiv" };
 const char* kFinIds[] = { "library", "humanize", "hTiming", "hVel", "hLength", "hFeel", "feel", "ksBase", "bendRange", "emitKS", "emitBends", "emitCC", "realize", "exportMode" };
 }
 
@@ -66,6 +66,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout EnochSoloProcessor::createLa
     flt ("space", "Space (busy to spacious)", 0.f, 1.f, 0.5f);
     flt ("repeat", "Repeat (new ideas to riffs)", 0.f, 1.f, 0.5f);
     flt ("busy", "Note Density (sparse to dense)", 0.f, 1.f, 0.5f);
+    // v2.14.1 transitions between bars (Engine/Transitions.h)
+    flt ("trAmount", "Transition Amount", 0.f, 100.f, 50.f);
+    l.add (std::make_unique<juce::AudioParameterChoice> (P { "trStyle", 1 }, "Transition Style", juce::StringArray { "Auto", "Subtle", "Moderate", "Bold", "Virtuosic" }, 0));
+    l.add (std::make_unique<juce::AudioParameterChoice> (P { "trPlace", 1 }, "Transition Placement", juce::StringArray { "Auto", "End of every bar", "Before chord changes", "Before section changes", "Before fills (phrase ends)" }, 0));
+    l.add (std::make_unique<juce::AudioParameterChoice> (P { "trType", 1 }, "Transition Type", juce::StringArray { "Auto", "Approach note", "Chromatic", "Scale-wise", "Slide", "Octave", "Fifth", "Ghost note", "Dead note", "Anticipation", "Rest", "Fill" }, 0));
+    flt ("trHuman", "Transition Humanize", 0.f, 100.f, 30.f);
+    l.add (std::make_unique<juce::AudioParameterChoice> (P { "trArt", 1 }, "Transition Articulation", juce::StringArray { "Auto", "Plain", "Allow slides and hammer-ons" }, 0));
     boolean ("chordTrack", "Write Chord Pad Track", false);
     flt ("refAmount", "Reference Influence", 0.f, 1.f, 0.7f);
     choice ("refTempo", "Reference Tempo", juce::StringArray { "As detected", "Twice as fast", "Half as fast" }, 0);
@@ -423,6 +430,10 @@ Settings EnochSoloProcessor::currentSettings() const
     s.chordTrack = getB (apvts, "chordTrack");
     s.busy = getF (apvts, "busy");
     s.barBusy = barBusy;
+    s.transAmount = getF (apvts, "trAmount") / 100.f; s.transStyle = getI (apvts, "trStyle"); s.transPlace = getI (apvts, "trPlace");
+    s.transType = getI (apvts, "trType"); s.transHumanize = getF (apvts, "trHuman") / 100.f; s.transArt = getI (apvts, "trArt");
+    s.barSection = barSection; s.transSalt = transSalt; s.loopTake = getB (apvts, "loop");
+
     s.speed = juce::jlimit (0, 1, getI (apvts, "speed")); s.subdiv = juce::jlimit (0, 7, getI (apvts, "subdiv")); s.barSpeed = barSpeed;
     fillRoutes (s);
     s.refProfile = refProfile;
@@ -587,6 +598,7 @@ Settings EnochSoloProcessor::editSettings() const
     s.tsNum = m.tsNum; s.tsDen = m.tsDen; s.bars = m.bars; s.mode = m.mode; s.octaveShift = m.octaveShift; s.intensity = m.intensity;
     s.harmony = m.harmony; s.chordText = m.chordText; s.space = m.space; s.repeat = m.repeat; s.chordTrack = m.chordTrack;
     s.busy = m.busy; s.barBusy = barBusy;
+    s.barSection = barSection; s.transSalt = transSalt;
     s.speed = m.speed; s.subdiv = m.subdiv; s.barSpeed = barSpeed;
     fillRoutes (s);
     s.refProfile = m.refProfile; s.refAmount = m.refAmount; s.refTempo = m.refTempo; s.refShift = m.refShift;
@@ -2028,6 +2040,10 @@ void EnochSoloProcessor::getStateInformation (juce::MemoryBlock& dest)
         state.setProperty ("barBusy", bb, nullptr);
         juce::String bs; for (int v : barSpeed) bs << v << ',';
         state.setProperty ("barSpeed", bs, nullptr);
+        juce::String sc; for (int v : barSection) sc << v << ',';                   // v2.14.1
+        state.setProperty ("barSection", sc, nullptr);
+        juce::String ts; for (int v : transSalt) ts << v << ',';
+        state.setProperty ("transSalt", ts, nullptr);
         juce::String bc;
         for (auto& b : barChords) bc << (b.set ? 1 : 0) << ':' << b.degree << ':' << (int) b.q << ':' << b.mode << ',';
         state.setProperty ("barChords", bc, nullptr);
@@ -2201,6 +2217,9 @@ void EnochSoloProcessor::setStateInformation (const void* data, int size)
     for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("barBusy").toString(), ",", "")) barBusy.push_back (tok.getFloatValue());
     barSpeed.clear();
     for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("barSpeed").toString(), ",", "")) if (tok.isNotEmpty()) barSpeed.push_back (tok.getIntValue());
+    barSection.clear(); transSalt.clear();                                            // v2.14.1
+    for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("barSection").toString(), ",", "")) if (tok.isNotEmpty()) barSection.push_back (juce::jlimit (-1, 6, tok.getIntValue()));
+    for (auto& tok : juce::StringArray::fromTokens (vt.getProperty ("transSalt").toString(), ",", "")) if (tok.isNotEmpty()) transSalt.push_back (tok.getIntValue());
     scaleLockBars = enochsolo::barlock::loadSet (vt.getProperty ("scaleLockBars").toString().toStdString());
     lockedBars = enochsolo::barlock::loadSaved (vt.getProperty ("lockedBars").toString().toStdString());
     appliedScaleAll = scaleLockAll();
@@ -3102,4 +3121,85 @@ void EnochSoloProcessor::runMeasure (juce::AudioBuffer<float>& out, juce::MidiBu
         if (measOffAt >= 0) { gen.addEvent (juce::MidiMessage::noteOff (measChannel, measPitch), n - 1); measOffAt = -1; }
     }
     measClock = t1;
+}
+
+//==============================================================================
+// v2.14.1 transitions and song sections
+int EnochSoloProcessor::sectionAt (int bar) const
+{
+    Settings s; s.bars = master.bars > 0 ? master.bars : getI (apvts, "bars"); s.barSection = barSection;
+    return enochsolo::transitions::sectionOf (s, bar);
+}
+
+void EnochSoloProcessor::setSection (int bar0, int bar1, int section)
+{
+    const int bars = juce::jmax (1, master.bars);
+    bar0 = juce::jlimit (0, bars - 1, bar0); bar1 = juce::jlimit (bar0, bars - 1, bar1);
+    if ((int) barSection.size() < bars) barSection.resize ((size_t) bars, -1);
+    // a label covers the bars you selected; the bar after them carries on with what it was before
+    const int after = bar1 + 1 < bars ? sectionAt (bar1 + 1) : -1;
+    for (int b = bar0; b <= bar1; ++b) barSection[(size_t) b] = b == bar0 ? section : -1;
+    if (section < 0) for (int b = bar0; b <= bar1; ++b) barSection[(size_t) b] = -1;
+    if (after >= 0 && bar1 + 1 < bars && barSection[(size_t) bar1 + 1] < 0 && sectionAt (bar1 + 1) != after) barSection[(size_t) bar1 + 1] = after;
+    regenerate (false, true);
+}
+
+std::pair<double, double> EnochSoloProcessor::transitionRange (int bar) const
+{
+    const double bb = master.barBeats > 0 ? master.barBeats : 4.0;
+    double a = (bar + 1) * bb, b = (bar + 1) * bb;
+    for (auto& n : master.raw) if (n.trans == bar) { a = std::min (a, n.start); b = std::max (b, n.start + 0.01); }
+    if (a >= (bar + 1) * bb - 1e-6) a = (bar + 1) * bb - bb / std::max (1, master.s.tsNum);   // no transition notes: the last beat
+    return { a, std::max (b, (bar + 1) * bb + 0.02) };
+}
+
+bool EnochSoloProcessor::isTransitionLocked (int bar) const
+{
+    const auto r = transitionRange (bar);
+    return isRangeLocked (r.first, r.second);
+}
+
+void EnochSoloProcessor::setTransitionLocked (int bar, bool lock)
+{
+    const auto r = transitionRange (bar);
+    enochsolo::Phrase ph; ph.r0 = ph.t0 = r.first; ph.r1 = ph.t1 = r.second; ph.bar0 = bar;
+    setPhraseLocked (ph, lock);
+}
+
+void EnochSoloProcessor::rerollTransition (int bar)
+{
+    const double bb = master.barBeats > 0 ? master.barBeats : 4.0;
+    if (bar < 0 || bar >= master.bars) return;
+    pushUndo();
+    if ((int) transSalt.size() < master.bars) transSalt.resize ((size_t) master.bars, 0);
+    // the same take with a new choice at this one bar line: everything outside the last two beats of the bar (and the note it lands on) is kept
+    Settings q = editSettings(); q.barChords = barChords;
+    const auto old = transitionRange (bar);
+    Pattern np;
+    for (int tries = 0; tries < 6; ++tries)
+    {
+        ++transSalt[(size_t) bar];
+        q.transSalt = transSalt; q.humanize = false; q.chordTrack = false;
+        q.transAmount = 1.0f; q.transPlace = 1;   // "try another" always writes one (only this bar line's window is kept)
+        if (q.transType == 0 && tries >= 3) q.transType = 1 + (tries % 10);
+        np = Generator::generate (q);
+        bool differs = false;
+        std::vector<std::pair<long, int>> a, b2;
+        for (auto& n : master.raw) if (n.track == 0 && n.trans == bar) a.push_back ({ std::lround (n.start * 960), n.pitch });
+        for (auto& n : np.raw) if (n.track == 0 && n.trans == bar) b2.push_back ({ std::lround (n.start * 960), n.pitch });
+        differs = a != b2 && ! b2.empty();
+        if (differs) break;
+    }
+    const auto nr = [&] { double x = (bar + 1) * bb, y = (bar + 1) * bb + 0.02; for (auto& n : np.raw) if (n.trans == bar) { x = std::min (x, n.start); y = std::max (y, n.start + 0.01); } return std::pair<double, double> { x, y }; }();
+    const double w0 = std::min (old.first, nr.first), w1 = std::max (old.second, nr.second);
+    std::vector<Note> raw;
+    for (auto& n : master.raw)
+    {
+        if (n.track == 0 && n.start >= w0 - 1e-6 && n.start < w1 - 1e-6) continue;
+        Note k = n;
+        if (k.track == 0 && k.start < w0 && k.start + k.length > w0) k.length = std::max (0.05, w0 - k.start - 0.02);
+        raw.push_back (k);
+    }
+    for (auto n : np.raw) if (n.track == 0 && n.start >= w0 - 1e-6 && n.start < w1 - 1e-6) { n.id = master.nextId++; raw.push_back (n); }
+    commitRaw (std::move (raw));
 }

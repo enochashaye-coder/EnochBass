@@ -5,6 +5,7 @@
 #include "PluginProcessor.h"
 #include "EnochLook.h"
 #include "ArtPanel.h"
+#include "TransitionPanel.h"   // v2.14.1
 #include <map>
 
 class FeelPanel : public juce::Component
@@ -54,9 +55,9 @@ public:
         addAndMakeVisible (resetBtn);
 
         // ---- page 2: modulation matrix + creative effect
-        for (int t = 0; t < 3; ++t)
+        for (int t = 0; t < 4; ++t)
         {
-            auto* b = tabs.add (new juce::TextButton (t == 0 ? "SOUND & FEEL" : (t == 1 ? "MODULATION & FX" : "ARTICULATION")));
+            auto* b = tabs.add (new juce::TextButton (t == 0 ? "SOUND & FEEL" : (t == 1 ? "MODULATION & FX" : (t == 2 ? "ARTICULATION" : "TRANSITIONS"))));
             b->getProperties().set ("seg", true);
             b->setClickingTogglesState (false);
             b->onClick = [this, t] { page = t; showPage(); };
@@ -89,7 +90,8 @@ public:
         fxBox.setTooltip ("Creative effect on the preview: tape wobble, lo-fi, wide, telephone / radio, warm saturation");
         fxLbl.setText ("CREATIVE FX", juce::dontSendNotification); fxLbl.setFont (EnochLookAndFeel::fnt (11.f, "SemiBold", 0.05f));
         addChildComponent (fxBox); addChildComponent (fxLbl);
-        addChildComponent (artPage);          // v3.11 / v2.11: the ARTICULATION page
+        addChildComponent (artPage);
+        addChildComponent (transPage);        // v2.14.1          // v3.11 / v2.11: the ARTICULATION page
         showPage();
     }
 
@@ -110,13 +112,13 @@ public:
         auto r = getLocalBounds().reduced (18, 10);
         auto head = r.removeFromTop (30);
         title.setBounds ({});
-        for (auto* t : tabs) t->setBounds (head.removeFromLeft (150).reduced (2, 2));
+        for (auto* t : tabs) t->setBounds (head.removeFromLeft (140).reduced (2, 2));
         head.removeFromLeft (8);
         resetBtn.setBounds (head.removeFromRight (90).reduced (2, 2));
         humanBtn.setBounds (head.removeFromRight (230).reduced (2, 2));
         hint.setBounds (head);
         r.removeFromTop (10);
-        artPage.setBounds (r);
+        artPage.setBounds (r); transPage.setBounds (r);
         {   // page 2 layout
             auto r2 = r;
             auto right2 = r2.removeFromRight (juce::jmin (380, r2.getWidth() * 2 / 5));
@@ -173,6 +175,7 @@ private:
         humanBtn.setVisible (p1); hint.setVisible (p1); resetBtn.setVisible (p1);
         const bool p2 = page == 1;
         artPage.setVisible (page == 2);
+        transPage.setVisible (page == 3);
         for (auto* row : rows) for (juce::Component* c : { (juce::Component*) &row->num, (juce::Component*) &row->src, (juce::Component*) &row->dst, (juce::Component*) &row->amt }) c->setVisible (p2);
         for (juce::Component* c : { (juce::Component*) &lfo1, (juce::Component*) &lfo2, (juce::Component*) &fxAmtK, (juce::Component*) &lfo1L, (juce::Component*) &lfo2L, (juce::Component*) &fxAmtL, (juce::Component*) &fxBox, (juce::Component*) &fxLbl })
             c->setVisible (p2);
@@ -255,4 +258,5 @@ private:
     juce::TextButton resetBtn { "Reset" };
     std::unique_ptr<juce::ButtonParameterAttachment> btnAtt;
     ArtPanel artPage { proc };
+    TransitionPanel transPage { proc };
 };

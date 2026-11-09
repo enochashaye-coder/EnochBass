@@ -587,6 +587,14 @@ void RollView::paint (juce::Graphics& g)
                 g.setColour (LF::red().interpolatedWith (T.accent, 1.f - busy[(size_t) bar]));
                 g.fillRect (cell.getX() + 4.f, cell.getBottom() - 4.f, (cell.getWidth() - 8.f) * busy[(size_t) bar], 2.f);
             }
+            // v2.14.1: where a song section starts, its name in the corner of the chord cell (right-click a chord > Section)
+            if (P.bars > 1 && (bar == 0 || proc.sectionAt (bar) != proc.sectionAt (bar - 1)) && cell.getWidth() > 50.f)
+            {
+                const juce::String sn = juce::String (enochsolo::transitions::sectionName (proc.sectionAt (bar))).toUpperCase();
+                g.setFont (juce::Font (juce::FontOptions (9.f, juce::Font::bold)));
+                g.setColour (sel ? juce::Colours::black.withAlpha (0.75f) : juce::Colour (0xff6f8ff0));
+                g.drawText (sn, cell.reduced (6.f, 1.f).removeFromTop (10.f), juce::Justification::topLeft);
+            }
         }
     }
 
@@ -726,9 +734,9 @@ void RollView::paint (juce::Graphics& g)
             g.setColour (T.accent.withAlpha (0.10f)); g.fillRect (x0, G.notes.getY(), x1 - x0, G.notes.getHeight());
             g.setColour (T.accent.withAlpha (0.6f)); g.drawVerticalLine ((int) x0, G.notes.getY(), G.notes.getBottom()); g.drawVerticalLine ((int) x1, G.notes.getY(), G.notes.getBottom());
         }
-        // v3.14 / v2.14 Show scale: the scale's rows light up in royal blue on the selected bars (on every bar while none is selected,
+        // v3.14 / v2.14 Show scale: the scale's rows light up in royal blue on the selected bars (v3.14.1: only those;
         // a little softer), the root brightest, so a note can be moved onto the scale at a glance
-        if (showScale)
+        if (showScale && selLo >= 0)          // only the bars you select (the piano keys show the scale always)
         {
             const juce::Colour royal (0xff4169e1);
             const bool any = selLo >= 0;
@@ -1958,6 +1966,18 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
         m.addItem (3100, "Re-roll only this part (" + beatTxt (part.first) + " to " + beatTxt (part.second) + ")");
         m.addItem (3101, proc.isRangeLocked (part.first, part.second) ? "Unlock this part" : "Lock this part (kept by Try another)");
     }
+    // v2.14.1: the transition out of the (last selected) bar, and the song section of these bars
+    {
+        m.addSeparator();
+        const bool tl = proc.isTransitionLocked (b1);
+        m.addItem (3300, "Try another transition into bar " + juce::String (b1 + 2 <= P.bars ? b1 + 2 : 1), ! tl);
+        m.addItem (3301, tl ? "Unlock the transition at the end of bar " + juce::String (b1 + 1) : "Lock the transition at the end of bar " + juce::String (b1 + 1) + " (kept by Try another)");
+        juce::PopupMenu sec;
+        const int cur = proc.sectionLabelAt (b0);
+        sec.addItem (3200, "Auto (continues the section before)", true, cur < 0);
+        for (int k = 0; k < enochsolo::transitions::SEC_Count; ++k) sec.addItem (3201 + k, enochsolo::transitions::sectionName (k), true, cur == k);
+        m.addSubMenu ("Section: " + juce::String (enochsolo::transitions::sectionName (proc.sectionAt (b0))) + (cur < 0 ? " (auto)" : ""), sec);
+    }
     {
         bool cutsHere = false; for (double c : proc.getPhraseCuts()) if (c > b0 * bb + 1e-6 && c < (b1 + 1) * bb - 1e-6) cutsHere = true;
         m.addItem (3102, b0 == b1 ? "Remove the splits in this bar" : "Remove the splits in these bars", cutsHere);
@@ -2012,6 +2032,9 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
                              done();
                          }
                          else if (r == 3102) { pr.removePhraseCutsIn (b0 * bb, (b1 + 1) * bb); done(); }
+                         else if (r == 3300) { pr.rerollTransition (b1); done(); }
+                         else if (r == 3301) { pr.setTransitionLocked (b1, ! pr.isTransitionLocked (b1)); done(); }
+                         else if (r >= 3200 && r <= 3200 + enochsolo::transitions::SEC_Count) { pr.setSection (b0, b1, r == 3200 ? -1 : r - 3201); done(); }
                          else if (r == 7) { pr.rerollBars (b0, bars - 1); done(); }
                          else if (r == 8)
                          {

@@ -244,6 +244,14 @@ public:
     // A main-line note across the cut is split there too. Cutting again on the same line joins the two phrases back.
     void togglePhraseCut (double beat);
     void clearPhraseCuts();
+    // v2.14.1 transitions and song sections
+    void setSection (int bar0, int bar1, int section);           // -1 = Auto (the bars follow the section before them)
+    int sectionLabelAt (int bar) const { return bar >= 0 && bar < (int) barSection.size() ? barSection[(size_t) bar] : -1; }
+    int sectionAt (int bar) const;                                // what the bar really is (label or Auto)
+    void rerollTransition (int bar);                              // a new transition out of this bar; the rest of the take stays
+    bool isTransitionLocked (int bar) const;
+    void setTransitionLocked (int bar, bool lock);
+    std::pair<double, double> transitionRange (int bar) const;    // the beats the transition out of this bar occupies
     void removePhraseCutsIn (double a, double b);     // v3.14.1: the splits inside these beats (one undo step)
     bool isRangeLocked (double a, double b) const;
     const std::vector<double>& getPhraseCuts() const { return phraseCuts; }
@@ -359,6 +367,7 @@ private:
     enochsolo::Pattern master;
     std::vector<enochsolo::BarChord> barChords;
     std::vector<float> barBusy;
+    std::vector<int> barSection, transSalt;          // v2.14.1: section labels per bar (-1 = carries on), Try-another counters per bar line
     std::shared_ptr<const enochsolo::RefProfile> refProfile;
     std::shared_ptr<const enochsolo::RefProfile> grooveProfile;
     enochsolo::LockRanges phraseLocks;
