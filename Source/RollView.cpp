@@ -637,6 +637,14 @@ void RollView::paint (juce::Graphics& g)
                     g.drawText (locked ? "LOCKED" : "phrase " + juce::String ((int) i + 1), r.withTrimmedLeft (16.f), juce::Justification::centredLeft);
             }
         }
+        // v3.14.1: the same splits on the chord lane and, faintly, through the notes
+        for (double c : proc.getPhraseCuts())
+        {
+            const float x = xOf (G, c);
+            if (x < G.chord.getX() || x > G.chord.getRight()) continue;
+            g.setColour (juce::Colours::white.withAlpha (0.9f)); g.fillRect (x - 1.f, G.chord.getY(), 2.f, G.chord.getHeight());
+            g.setColour (juce::Colours::white.withAlpha (0.18f)); g.fillRect (x - 0.5f, G.notes.getY(), 1.f, G.notes.getHeight());
+        }
         // v3.14: your splits: a bright cut line with a little notch
         for (double c : proc.getPhraseCuts())
         {
@@ -1140,7 +1148,8 @@ void RollView::mouseMove (const juce::MouseEvent& e)
             h = tool == Tool::Split ? "Split tool: click = split the phrase here, on the grid (click a split again to join). Then right-click a part = Re-roll only this phrase"
               : hp >= 0 ? "Click = lock / unlock this phrase (a locked phrase is kept when you press Try another)   |   right-click = more (split, re-roll)" : "";
         }
-        else if (g.chord.contains (p)) { hb = barAtX (g, p.x); h = "Click to select this bar and choose its chord (Shift-click / drag = several bars)"; }
+        else if (g.chord.contains (p)) { hb = barAtX (g, p.x); h = tool == Tool::Split ? "Split tool: click = split this bar here, on the grid (click a split again to join). Then right-click a part = Re-roll only this part"
+                                                                         : "Click to select this bar and choose its chord (Shift-click / drag = several bars)  |  right-click = more"; }
         else if (g.ruler.contains (p)) h = "Click to jump the player here  |  double-click = play / stop  |  mouse wheel = zoom";
         else if (g.gutter.contains (p)) h = "Click a key to hear it  |  mouse wheel = zoom pitch";
         else if (g.notes.contains (p))
@@ -1192,6 +1201,20 @@ int RollView::phraseAtX (const Geo& g, float x) const
         if (b >= ph.r0 && b < ph.r1 && d < bd) { bd = d; best = (int) i; }         // in a rest next to it: the nearest block is still easy to hit
     }
     return best;
+}
+
+std::pair<double, double> RollView::partAt (double beat) const
+{
+    auto snap = proc.getSnapshot();
+    const double bb = snap ? snap->pattern.barBeats : 4.0;
+    const int bar = (int) std::floor (std::max (0.0, beat) / bb + 1e-9);
+    double a = bar * bb, b = (bar + 1) * bb;
+    for (double c : proc.getPhraseCuts())
+    {
+        if (c <= beat + 1e-9 && c > a) a = c;
+        if (c > beat + 1e-9 && c < b) b = c;
+    }
+    return { a, b };
 }
 
 double RollView::phraseCutBeat (double beat) const
@@ -1283,6 +1306,9 @@ void RollView::mouseDown (const juce::MouseEvent& e)
     {
         focusChords = true;
         const int bar = barAtX (g, p.x);
+        // v3.14.1: the split tool also splits bars, on the grid (the same splits as the phrase strip: click a split again to join)
+        if (tool == Tool::Split && ! e.mods.isPopupMenu()) { splitPhraseAt (beatAt (g, p.x)); return; }
+        chordMenuBeat = beatAt (g, p.x);
         if (e.mods.isPopupMenu())
         {
             if (barSelFirst() < 0 || bar < barSelFirst() || bar > barSelLast()) { barA = barB = bar; notifyBars(); repaint(); }
@@ -1923,6 +1949,19 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
     m.addItem (21, "Make these bars calmer (-25%)");
     m.addItem (22, "Busy back to automatic", selectionHasExplicitBusy());
     m.addItem (6, "Re-roll the notes of these bars");
+    // v3.14.1: a bar you split: its parts can be re-rolled or locked on their own
+    const auto part = partAt (chordMenuBeat >= 0 ? chordMenuBeat : b0 * bb);
+    const bool isPart = part.second - part.first < bb - 1e-6;
+    if (isPart)
+    {
+        auto beatTxt = [&] (double b) { const int br = (int) std::floor (b / bb + 1e-9); return juce::String (br + 1) + "." + juce::String (b - br * bb + 1.0, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."); };
+        m.addItem (3100, "Re-roll only this part (" + beatTxt (part.first) + " to " + beatTxt (part.second) + ")");
+        m.addItem (3101, proc.isRangeLocked (part.first, part.second) ? "Unlock this part" : "Lock this part (kept by Try another)");
+    }
+    {
+        bool cutsHere = false; for (double c : proc.getPhraseCuts()) if (c > b0 * bb + 1e-6 && c < (b1 + 1) * bb - 1e-6) cutsHere = true;
+        m.addItem (3102, b0 == b1 ? "Remove the splits in this bar" : "Remove the splits in these bars", cutsHere);
+    }
     m.addItem (7, "Re-roll from here to the end");
     m.addItem (8, "Clear the notes of these bars");
     m.addItem (9, "Select the notes of these bars");
@@ -1942,7 +1981,7 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
 
     const int curRoot = (keyRoot + curDeg) % 12; const int bars = P.bars;
     m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (cell)).withMinimumWidth (220),
-                     [safe = juce::Component::SafePointer<RollView> (this), b0, b1, keyRoot, sug, qs, used, curRoot, curQ, bars, bb] (int r)
+                     [safe = juce::Component::SafePointer<RollView> (this), b0, b1, keyRoot, sug, qs, used, curRoot, curQ, bars, bb, part] (int r)
                      {
                          if (safe == nullptr || r == 0) return;
                          auto* s = safe.getComponent(); auto& pr = s->proc;
@@ -1966,6 +2005,13 @@ void RollView::showChordMenu (int anchorBar, juce::Rectangle<int> cell)
                          else if (r == 22) { pr.pushUndo(); s->applyBusyToSelection (-1.f, (uint64_t) juce::Random::getSystemRandom().nextInt64()); }
                          else if (r >= 3000 && r < 3000 + bars) { s->copyBarPlay (r - 3000, b0, b1); }
                          else if (r == 6) { pr.rerollBars (b0, b1); done(); }
+                         else if (r == 3100 || r == 3101)
+                         {
+                             enochsolo::Phrase ph; ph.r0 = ph.t0 = part.first; ph.r1 = ph.t1 = part.second; ph.bar0 = b0;
+                             if (r == 3100) pr.rerollPhrase (ph); else pr.setPhraseLocked (ph, ! pr.isRangeLocked (part.first, part.second));
+                             done();
+                         }
+                         else if (r == 3102) { pr.removePhraseCutsIn (b0 * bb, (b1 + 1) * bb); done(); }
                          else if (r == 7) { pr.rerollBars (b0, bars - 1); done(); }
                          else if (r == 8)
                          {

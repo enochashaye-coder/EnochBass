@@ -210,7 +210,9 @@ private:
     void showPhraseMenu (int index);
     double phraseCutBeat (double beat) const;     // v3.14: the grid line a phrase split goes on
     double phraseMenuBeat = -1.0;
+    double chordMenuBeat = -1.0;                  // v3.14.1: where the chord lane was right-clicked (for a split bar's parts)
 public:
+    std::pair<double, double> partAt (double beat) const;   // the part of a bar between its splits (or the whole bar)
     void splitPhraseAt (double beat) { proc.togglePhraseCut (phraseCutBeat (beat)); refresh (true); repaint(); if (onPhrasesChanged) onPhrasesChanged(); }
 private:
     int phraseAtX (const Geo&, float x) const;

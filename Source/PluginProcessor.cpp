@@ -613,6 +613,7 @@ void EnochSoloProcessor::undo()
     redoStack.push_back ({ master, barChords, barBusy });
     master = std::move (undoStack.back().p); barChords = std::move (undoStack.back().bc); barBusy = std::move (undoStack.back().busy);
     undoStack.pop_back();
+    phraseCuts = master.phraseCuts;              // v3.14.1: your phrase / bar splits come back with the notes
     refreshLockedBars();
     publishMaster();
 }
@@ -623,6 +624,7 @@ void EnochSoloProcessor::redo()
     undoStack.push_back ({ master, barChords, barBusy });
     master = std::move (redoStack.back().p); barChords = std::move (redoStack.back().bc); barBusy = std::move (redoStack.back().busy);
     redoStack.pop_back();
+    phraseCuts = master.phraseCuts;              // v3.14.1: your phrase / bar splits come back with the notes
     refreshLockedBars();
     publishMaster();
 }
@@ -838,7 +840,7 @@ void EnochSoloProcessor::togglePhraseCut (double beat)
 {
     beat = std::max (0.0, beat);
     for (auto it = phraseCuts.begin(); it != phraseCuts.end(); ++it)
-        if (std::abs (*it - beat) < 1e-3) { phraseCuts.erase (it); publishMaster(); return; }     // the same line again: join
+        if (std::abs (*it - beat) < 1e-3) { pushUndo(); phraseCuts.erase (it); publishMaster(); return; }     // the same line again: join (Ctrl+Z splits again)
     if (beat <= 1e-6 || beat >= master.lengthBeats - 1e-6) return;
     pushUndo();
     std::vector<Note> add, raw = master.raw;
@@ -856,7 +858,20 @@ void EnochSoloProcessor::togglePhraseCut (double beat)
     commitRaw (std::move (raw));
 }
 
-void EnochSoloProcessor::clearPhraseCuts() { phraseCuts.clear(); publishMaster(); }
+void EnochSoloProcessor::removePhraseCutsIn (double a, double b)
+{
+    std::vector<double> keep; for (double c : phraseCuts) if (c <= a + 1e-6 || c >= b - 1e-6) keep.push_back (c);
+    if (keep.size() == phraseCuts.size()) return;
+    pushUndo(); phraseCuts = keep; publishMaster();
+}
+
+bool EnochSoloProcessor::isRangeLocked (double a, double b) const
+{
+    for (auto& r : phraseLocks) if (r.first <= a + 1e-6 && r.second >= b - 1e-6) return true;
+    return false;
+}
+
+void EnochSoloProcessor::clearPhraseCuts() { if (phraseCuts.empty()) return; pushUndo(); phraseCuts.clear(); publishMaster(); }
 
 void EnochSoloProcessor::rerollPhrase (const Phrase& ph)
 {

@@ -242,6 +242,8 @@ public:
     // A main-line note across the cut is split there too. Cutting again on the same line joins the two phrases back.
     void togglePhraseCut (double beat);
     void clearPhraseCuts();
+    void removePhraseCutsIn (double a, double b);     // v3.14.1: the splits inside these beats (one undo step)
+    bool isRangeLocked (double a, double b) const;
     const std::vector<double>& getPhraseCuts() const { return phraseCuts; }
     int  numLockedPhrases() const;
 
