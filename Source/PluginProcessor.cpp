@@ -1402,7 +1402,7 @@ juce::File EnochSoloProcessor::writeProblemReport (const juce::String& whatHappe
 
     // the last part of Enoch's own log (what each instance did when it was created, opened, closed, removed)
     {
-        juce::File lf (juce::String (enochlog::filePath()));
+        const juce::File lf { juce::String (enochlog::filePath()) };
         if (lf.existsAsFile())
         {
             juce::StringArray lines; lf.readLines (lines);
